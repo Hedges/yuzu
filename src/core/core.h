@@ -84,8 +84,8 @@ public:
 
     /**
      * Invalidate the CPU instruction caches
-     * This function should only be used by GDBStub which is supposed to keep things
-     * synch'ed to its internal instruction cache validity flag.
+     * This function should only be used by GDB Stub to support breakpoints, memory updates and
+     * step/continue commands.
      */
     void InvalidateCpuInstructionCaches() {
         for (auto& cpu : cpu_cores) {
