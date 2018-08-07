@@ -254,6 +254,32 @@ static void RegWrite(std::size_t id, u64 val, Kernel::Thread* thread = nullptr) 
     }
 }
 
+static u128 FpuRead(std::size_t id, Kernel::Thread* thread = nullptr) {
+    if (!thread) {
+        return u128{0};
+    }
+
+    if (id >= UC_ARM64_REG_Q0 && id < FPSCR_REGISTER) {
+        return thread->context.fpu_registers[id - UC_ARM64_REG_Q0];
+    } else if (id == FPSCR_REGISTER) {
+        return u128{thread->context.fpscr, 0};
+    } else {
+        return u128{0};
+    }
+}
+
+static void FpuWrite(std::size_t id, u128 val, Kernel::Thread* thread = nullptr) {
+    if (!thread) {
+        return;
+    }
+
+    if (id >= UC_ARM64_REG_Q0 && id < FPSCR_REGISTER) {
+        thread->context.fpu_registers[id - UC_ARM64_REG_Q0] = val;
+    } else if (id == FPSCR_REGISTER) {
+        thread->context.fpscr = val[0];
+    }
+}
+
 /**
  * Turns hex string character into the equivalent byte.
  *
@@ -403,6 +429,27 @@ static u64 GdbHexToLong(const u8* src) {
     return output;
 }
 
+/**
+ * Convert a gdb-formatted hex string into a u128.
+ *
+ * @param src Pointer to hex string.
+ */
+static u128 GdbHexToU128(const u8* src) {
+    u128 output;
+
+    for (int i = 0; i < 16; i += 2) {
+        output[0] = (output[0] << 4) | HexCharToValue(src[15 - i - 1]);
+        output[0] = (output[0] << 4) | HexCharToValue(src[15 - i]);
+    }
+
+    for (int i = 0; i < 16; i += 2) {
+        output[1] = (output[1] << 4) | HexCharToValue(src[16 + 15 - i - 1]);
+        output[1] = (output[1] << 4) | HexCharToValue(src[16 + 15 - i]);
+    }
+
+    return output;
+}
+
 /// Read a byte from the gdb client.
 static u8 ReadByte() {
     u8 c;
@@ -473,43 +520,6 @@ BreakpointAddress GetNextBreakpointFromAddress(VAddr addr, BreakpointType type) 
     }
 
     return breakpoint;
-}
-
-bool CheckBreakpoint(VAddr addr, BreakpointType type) {
-    if (!IsConnected()) {
-        return false;
-    }
-
-    const BreakpointMap& p = GetBreakpointMap(type);
-    const auto bp = p.find(addr);
-
-    if (bp == p.end()) {
-        return false;
-    }
-
-    u64 len = bp->second.len;
-
-    // IDA Pro defaults to 4-byte breakpoints for all non-hardware breakpoints
-    // no matter if it's a 4-byte or 2-byte instruction. When you execute a
-    // Thumb instruction with a 4-byte breakpoint set, it will set a breakpoint on
-    // two instructions instead of the single instruction you placed the breakpoint
-    // on. So, as a way to make sure that execution breakpoints are only breaking
-    // on the instruction that was specified, set the length of an execution
-    // breakpoint to 1. This should be fine since the CPU should never begin executing
-    // an instruction anywhere except the beginning of the instruction.
-    if (type == BreakpointType::Execute) {
-        len = 1;
-    }
-
-    if (bp->second.active && (addr >= bp->second.addr && addr < bp->second.addr + len)) {
-        LOG_DEBUG(Debug_GDBStub,
-                  "Found breakpoint type {} @ {:016X}, range: {:016X}"
-                  " - {:016X} ({:X} bytes)",
-                  static_cast<int>(type), addr, bp->second.addr, bp->second.addr + len, len);
-        return true;
-    }
-
-    return false;
 }
 
 /**
@@ -784,11 +794,15 @@ static void ReadRegister() {
     } else if (id == CPSR_REGISTER) {
         IntToGdbHex(reply, (u32)RegRead(id, current_thread));
     } else if (id >= UC_ARM64_REG_Q0 && id < FPSCR_REGISTER) {
-        LongToGdbHex(reply, RegRead(id, current_thread));
+        u128 r = FpuRead(id, current_thread);
+        LongToGdbHex(reply, r[0]);
+        LongToGdbHex(reply + 16, r[1]);
     } else if (id == FPSCR_REGISTER) {
-        LongToGdbHex(reply, RegRead(TODO_DUMMY_REG_998, current_thread));
-    } else {
-        LongToGdbHex(reply, RegRead(TODO_DUMMY_REG_997, current_thread));
+        u128 r = FpuRead(id, current_thread);
+        IntToGdbHex(reply, (u32)r[0]);
+    } else if (id == FPSCR_REGISTER + 1) {
+        u128 r = FpuRead(id, current_thread);
+        IntToGdbHex(reply, (u32)(r[0] >> 32));
     }
 
     SendReply(reinterpret_cast<char*>(reply));
@@ -815,13 +829,18 @@ static void ReadRegisters() {
 
     bufptr += 8;
 
-    for (u32 reg = UC_ARM64_REG_Q0; reg <= UC_ARM64_REG_Q0 + 31; reg++) {
-        LongToGdbHex(bufptr + reg * 16, RegRead(reg, current_thread));
+    u128 r;
+
+    for (u32 reg = UC_ARM64_REG_Q0; reg < FPSCR_REGISTER; reg++) {
+        r = FpuRead(reg, current_thread);
+        LongToGdbHex(bufptr + reg * 32, r[0]);
+        LongToGdbHex(bufptr + reg * 32 + 16, r[1]);
     }
 
     bufptr += 32 * 32;
 
-    LongToGdbHex(bufptr, RegRead(TODO_DUMMY_REG_998, current_thread));
+    r = FpuRead(FPSCR_REGISTER, current_thread);
+    IntToGdbHex(bufptr, (u32)r[0]);
 
     bufptr += 8;
 
@@ -846,14 +865,12 @@ static void WriteRegister() {
     } else if (id == CPSR_REGISTER) {
         RegWrite(id, GdbHexToInt(buffer_ptr), current_thread);
     } else if (id >= UC_ARM64_REG_Q0 && id < FPSCR_REGISTER) {
-        RegWrite(id, GdbHexToLong(buffer_ptr), current_thread);
+        FpuWrite(id, GdbHexToU128(buffer_ptr), current_thread);
     } else if (id == FPSCR_REGISTER) {
-        RegWrite(TODO_DUMMY_REG_998, GdbHexToLong(buffer_ptr), current_thread);
-    } else {
-        RegWrite(TODO_DUMMY_REG_997, GdbHexToLong(buffer_ptr), current_thread);
+    } else if (id == FPSCR_REGISTER + 1) {
     }
 
-    // Update Unicorn context skipping scheduler, no running threads at this point
+    // Update ARM context, skipping scheduler - no running threads at this point
     Core::System::GetInstance().ArmInterface(current_core).LoadContext(current_thread->context);
 
     SendReply("OK");
@@ -866,7 +883,7 @@ static void WriteRegisters() {
     if (command_buffer[0] != 'G')
         return SendReply("E01");
 
-    for (u32 i = 0, reg = 0; reg <= FPSCR_REGISTER; i++, reg++) {
+    for (u32 i = 0, reg = 0; reg <= FPSCR_REGISTER + 1; i++, reg++) {
         if (reg <= SP_REGISTER) {
             RegWrite(reg, GdbHexToLong(buffer_ptr + i * 16), current_thread);
         } else if (reg == PC_REGISTER) {
@@ -876,13 +893,13 @@ static void WriteRegisters() {
         } else if (reg >= UC_ARM64_REG_Q0 && reg < FPSCR_REGISTER) {
             RegWrite(reg, GdbHexToLong(buffer_ptr + i * 16), current_thread);
         } else if (reg == FPSCR_REGISTER) {
-            RegWrite(TODO_DUMMY_REG_998, GdbHexToLong(buffer_ptr + i * 16), current_thread);
-        } else {
-            UNIMPLEMENTED();
+            RegWrite(FPSCR_REGISTER, GdbHexToLong(buffer_ptr + i * 16), current_thread);
+        } else if (reg == FPSCR_REGISTER + 1) {
+            RegWrite(FPSCR_REGISTER, GdbHexToLong(buffer_ptr + i * 16), current_thread);
         }
     }
 
-    // Update Unicorn context skipping scheduler, no running threads at this point
+    // Update ARM context, skipping scheduler - no running threads at this point
     Core::System::GetInstance().ArmInterface(current_core).LoadContext(current_thread->context);
 
     SendReply("OK");
@@ -954,7 +971,7 @@ void Break(bool is_memory_break) {
 static void Step() {
     if (command_length > 1) {
         RegWrite(PC_REGISTER, GdbHexToLong(command_buffer + 1), current_thread);
-        // Update Unicorn context skipping scheduler, no running threads at this point
+        // Update ARM context, skipping scheduler - no running threads at this point
         Core::System::GetInstance().ArmInterface(current_core).LoadContext(current_thread->context);
     }
     step_loop = true;
@@ -995,7 +1012,7 @@ static bool CommitBreakpoint(BreakpointType type, VAddr addr, u64 len) {
     breakpoint.addr = addr;
     breakpoint.len = len;
     Memory::ReadBlock(addr, breakpoint.inst.data(), breakpoint.inst.size());
-    static constexpr std::array<u8, 4> btrap{{0xd4, 0x20, 0x7d, 0x0}};
+    static constexpr std::array<u8, 4> btrap{0xd4, 0x20, 0x7d, 0x00};
     Memory::WriteBlock(addr, btrap.data(), btrap.size());
     Core::System::GetInstance().InvalidateCpuInstructionCaches();
     p.insert({addr, breakpoint});
