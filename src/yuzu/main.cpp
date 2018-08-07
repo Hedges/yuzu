@@ -81,6 +81,8 @@ static void ShowCalloutMessage(const QString& message, CalloutFlag flag) {
 
 void GMainWindow::ShowCallouts() {}
 
+const int GMainWindow::max_recent_files_item;
+
 GMainWindow::GMainWindow() : config(new Config()), emu_thread(nullptr) {
 
     debug_context = Tegra::DebugContext::Construct();
@@ -579,11 +581,11 @@ void GMainWindow::StoreRecentFile(const QString& filename) {
 }
 
 void GMainWindow::UpdateRecentFiles() {
-    unsigned int num_recent_files =
-        std::min(UISettings::values.recent_files.size(), static_cast<int>(max_recent_files_item));
+    const int num_recent_files =
+        std::min(UISettings::values.recent_files.size(), max_recent_files_item);
 
-    for (unsigned int i = 0; i < num_recent_files; i++) {
-        QString text = QString("&%1. %2").arg(i + 1).arg(
+    for (int i = 0; i < num_recent_files; i++) {
+        const QString text = QString("&%1. %2").arg(i + 1).arg(
             QFileInfo(UISettings::values.recent_files[i]).fileName());
         actions_recent_files[i]->setText(text);
         actions_recent_files[i]->setData(UISettings::values.recent_files[i]);
@@ -595,12 +597,8 @@ void GMainWindow::UpdateRecentFiles() {
         actions_recent_files[j]->setVisible(false);
     }
 
-    // Grey out the recent files menu if the list is empty
-    if (num_recent_files == 0) {
-        ui.menu_recent_files->setEnabled(false);
-    } else {
-        ui.menu_recent_files->setEnabled(true);
-    }
+    // Enable the recent files menu if the list isn't empty
+    ui.menu_recent_files->setEnabled(num_recent_files != 0);
 }
 
 void GMainWindow::OnGameListLoadFile(QString game_path) {
@@ -631,9 +629,15 @@ void GMainWindow::OnMenuLoadFile() {
 }
 
 void GMainWindow::OnMenuLoadFolder() {
-    QDir dir = QFileDialog::getExistingDirectory(this, tr("Open Extracted ROM Directory"));
+    const QString dir_path =
+        QFileDialog::getExistingDirectory(this, tr("Open Extracted ROM Directory"));
 
-    QStringList matching_main = dir.entryList(QStringList("main"), QDir::Files);
+    if (dir_path.isNull()) {
+        return;
+    }
+
+    const QDir dir{dir_path};
+    const QStringList matching_main = dir.entryList(QStringList("main"), QDir::Files);
     if (matching_main.size() == 1) {
         BootGame(dir.path() + DIR_SEP + matching_main[0]);
     } else {
@@ -654,9 +658,8 @@ void GMainWindow::OnMenuRecentFile() {
     QAction* action = qobject_cast<QAction*>(sender());
     assert(action);
 
-    QString filename = action->data().toString();
-    QFileInfo file_info(filename);
-    if (file_info.exists()) {
+    const QString filename = action->data().toString();
+    if (QFileInfo::exists(filename)) {
         BootGame(filename);
     } else {
         // Display an error message and remove the file from the list.
@@ -947,15 +950,14 @@ void GMainWindow::UpdateUITheme() {
     QStringList theme_paths(default_theme_paths);
     if (UISettings::values.theme != UISettings::themes[0].second &&
         !UISettings::values.theme.isEmpty()) {
-        QString theme_uri(":" + UISettings::values.theme + "/style.qss");
+        const QString theme_uri(":" + UISettings::values.theme + "/style.qss");
         QFile f(theme_uri);
-        if (!f.exists()) {
-            LOG_ERROR(Frontend, "Unable to set style, stylesheet file not found");
-        } else {
-            f.open(QFile::ReadOnly | QFile::Text);
+        if (f.open(QFile::ReadOnly | QFile::Text)) {
             QTextStream ts(&f);
             qApp->setStyleSheet(ts.readAll());
             GMainWindow::setStyleSheet(ts.readAll());
+        } else {
+            LOG_ERROR(Frontend, "Unable to set style, stylesheet file not found");
         }
         theme_paths.append(QStringList{":/icons/default", ":/icons/" + UISettings::values.theme});
         QIcon::setThemeName(":/icons/" + UISettings::values.theme);
