@@ -69,10 +69,6 @@ constexpr u32 CPSR_REGISTER = 33;
 constexpr u32 UC_ARM64_REG_Q0 = 34;
 constexpr u32 FPSCR_REGISTER = 66;
 
-// TODO/WiP - Used while working on support for FPU
-constexpr u32 TODO_DUMMY_REG_997 = 997;
-constexpr u32 TODO_DUMMY_REG_998 = 998;
-
 // For sample XML files see the GDB source /gdb/features
 // GDB also wants the l character at the start
 // This XML defines what the registers are for this specific ARM device
