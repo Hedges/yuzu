@@ -523,6 +523,11 @@ private:
             // shader.
             ASSERT(stage == Maxwell3D::Regs::ShaderStage::Vertex);
             return "vec4(0, 0, uintBitsToFloat(gl_InstanceID), uintBitsToFloat(gl_VertexID))";
+        case Attribute::Index::Unknown_63:
+            // TODO(bunnei): Figure out what this is used for. Super Mario Odyssey uses this.
+            LOG_CRITICAL(HW_GPU, "Unhandled input attribute Unknown_63");
+            UNREACHABLE();
+            break;
         default:
             const u32 index{static_cast<u32>(attribute) -
                             static_cast<u32>(Attribute::Index::Attribute_0)};
@@ -534,6 +539,8 @@ private:
             LOG_CRITICAL(HW_GPU, "Unhandled input attribute: {}", index);
             UNREACHABLE();
         }
+
+        return "vec4(0, 0, 0, 0)";
     }
 
     /// Generates code representing an output attribute register.
@@ -602,12 +609,12 @@ private:
 
     /// Generates code representing a 19-bit immediate value
     static std::string GetImmediate19(const Instruction& instr) {
-        return std::to_string(instr.alu.GetImm20_19());
+        return fmt::format("uintBitsToFloat({})", instr.alu.GetImm20_19());
     }
 
     /// Generates code representing a 32-bit immediate value
     static std::string GetImmediate32(const Instruction& instr) {
-        return std::to_string(instr.alu.GetImm20_32());
+        return fmt::format("uintBitsToFloat({})", instr.alu.GetImm20_32());
     }
 
     /// Generates code representing a texture sampler.

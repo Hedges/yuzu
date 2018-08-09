@@ -161,7 +161,7 @@ std::pair<u8*, GLintptr> RasterizerOpenGL::SetupVertexArrays(u8* array_ptr,
     // assume every shader uses them all.
     for (unsigned index = 0; index < 16; ++index) {
         auto& attrib = regs.vertex_attrib_format[index];
-        LOG_DEBUG(HW_GPU, "vertex attrib {}, count={}, size={}, type={}, offset={}, normalize={}",
+        LOG_TRACE(HW_GPU, "vertex attrib {}, count={}, size={}, type={}, offset={}, normalize={}",
                   index, attrib.ComponentCount(), attrib.SizeString(), attrib.TypeString(),
                   attrib.offset.Value(), attrib.IsNormalized());
 
@@ -659,7 +659,10 @@ u32 RasterizerOpenGL::SetupConstBuffers(Maxwell::ShaderStage stage, GLuint progr
         auto& buffer_draw_state =
             state.draw.const_buffers[static_cast<size_t>(stage)][used_buffer.GetIndex()];
 
-        ASSERT_MSG(buffer.enabled, "Attempted to upload disabled constbuffer");
+        if (!buffer.enabled) {
+            continue;
+        }
+
         buffer_draw_state.enabled = true;
         buffer_draw_state.bindpoint = current_bindpoint + bindpoint;
 
