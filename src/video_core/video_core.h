@@ -4,20 +4,15 @@
 
 #pragma once
 
-#include <atomic>
 #include <memory>
 
+namespace Core::Frontend {
 class EmuWindow;
+}
 
 namespace VideoCore {
 
 class RendererBase;
-
-enum class Renderer { Software, OpenGL };
-
-// TODO: Wrap these in a user settings struct along with any other graphics settings (often set from
-// qt ui)
-extern std::atomic<bool> g_toggle_framelimit_enabled;
 
 /**
  * Creates a renderer instance.
@@ -25,6 +20,6 @@ extern std::atomic<bool> g_toggle_framelimit_enabled;
  * @note The returned renderer instance is simply allocated. Its Init()
  *       function still needs to be called to fully complete its setup.
  */
-std::unique_ptr<RendererBase> CreateRenderer(EmuWindow& emu_window);
+std::unique_ptr<RendererBase> CreateRenderer(Core::Frontend::EmuWindow& emu_window);
 
 } // namespace VideoCore

@@ -88,7 +88,7 @@ System::ResultStatus System::SingleStep() {
     return RunLoop(false);
 }
 
-System::ResultStatus System::Load(EmuWindow& emu_window, const std::string& filepath) {
+System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::string& filepath) {
     app_loader = Loader::GetLoader(virtual_filesystem->OpenFile(filepath, FileSys::Mode::Read));
 
     if (!app_loader) {
@@ -102,18 +102,8 @@ System::ResultStatus System::Load(EmuWindow& emu_window, const std::string& file
         LOG_CRITICAL(Core, "Failed to determine system mode (Error {})!",
                      static_cast<int>(system_mode.second));
 
-        switch (system_mode.second) {
-        case Loader::ResultStatus::ErrorMissingKeys:
-            return ResultStatus::ErrorLoader_ErrorMissingKeys;
-        case Loader::ResultStatus::ErrorDecrypting:
-            return ResultStatus::ErrorLoader_ErrorDecrypting;
-        case Loader::ResultStatus::ErrorInvalidFormat:
-            return ResultStatus::ErrorLoader_ErrorInvalidFormat;
-        case Loader::ResultStatus::ErrorUnsupportedArch:
-            return ResultStatus::ErrorUnsupportedArch;
-        default:
+        if (system_mode.second != Loader::ResultStatus::Success)
             return ResultStatus::ErrorSystemMode;
-        }
     }
 
     ResultStatus init_result{Init(emu_window)};
@@ -129,17 +119,9 @@ System::ResultStatus System::Load(EmuWindow& emu_window, const std::string& file
         LOG_CRITICAL(Core, "Failed to load ROM (Error {})!", static_cast<int>(load_result));
         System::Shutdown();
 
-        switch (load_result) {
-        case Loader::ResultStatus::ErrorMissingKeys:
-            return ResultStatus::ErrorLoader_ErrorMissingKeys;
-        case Loader::ResultStatus::ErrorDecrypting:
-            return ResultStatus::ErrorLoader_ErrorDecrypting;
-        case Loader::ResultStatus::ErrorInvalidFormat:
-            return ResultStatus::ErrorLoader_ErrorInvalidFormat;
-        case Loader::ResultStatus::ErrorUnsupportedArch:
-            return ResultStatus::ErrorUnsupportedArch;
-        default:
-            return ResultStatus::ErrorLoader;
+        if (load_result != Loader::ResultStatus::Success) {
+            return static_cast<ResultStatus>(static_cast<u32>(ResultStatus::ErrorLoader) +
+                                             static_cast<u32>(load_result));
         }
     }
     status = ResultStatus::Success;
@@ -169,7 +151,7 @@ Cpu& System::CpuCore(size_t core_index) {
     return *cpu_cores[core_index];
 }
 
-System::ResultStatus System::Init(EmuWindow& emu_window) {
+System::ResultStatus System::Init(Frontend::EmuWindow& emu_window) {
     LOG_DEBUG(HW_Memory, "initialized OK");
 
     CoreTiming::Init();

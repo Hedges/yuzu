@@ -141,6 +141,15 @@ private:
                     ExitMethod jmp = Scan(target, end, labels);
                     return exit_method = ParallelExit(no_jmp, jmp);
                 }
+                case OpCode::Id::SSY: {
+                    // The SSY instruction uses a similar encoding as the BRA instruction.
+                    ASSERT_MSG(instr.bra.constant_buffer == 0,
+                               "Constant buffer SSY is not supported");
+                    u32 target = offset + instr.bra.GetBranchTarget();
+                    labels.insert(target);
+                    // Continue scanning for an exit method.
+                    break;
+                }
                 }
             }
         }
@@ -347,9 +356,14 @@ public:
      * @param reg The register to use as the source value.
      */
     void SetOutputAttributeToRegister(Attribute::Index attribute, u64 elem, const Register& reg) {
-        std::string dest = GetOutputAttribute(attribute) + GetSwizzle(elem);
+        std::string dest = GetOutputAttribute(attribute);
         std::string src = GetRegisterAsFloat(reg);
-        shader.AddLine(dest + " = " + src + ';');
+
+        if (!dest.empty()) {
+            // Can happen with unknown/unimplemented output attributes, in which case we ignore the
+            // instruction for now.
+            shader.AddLine(dest + GetSwizzle(elem) + " = " + src + ';');
+        }
     }
 
     /// Generates code representing a uniform (C buffer) register, interpreted as the input type.
@@ -362,6 +376,8 @@ public:
             return value;
         } else if (type == GLSLRegister::Type::Integer) {
             return "floatBitsToInt(" + value + ')';
+        } else if (type == GLSLRegister::Type::UnsignedInteger) {
+            return "floatBitsToUint(" + value + ')';
         } else {
             UNREACHABLE();
         }
@@ -525,20 +541,16 @@ private:
             // shader.
             ASSERT(stage == Maxwell3D::Regs::ShaderStage::Vertex);
             return "vec4(0, 0, uintBitsToFloat(gl_InstanceID), uintBitsToFloat(gl_VertexID))";
-        case Attribute::Index::Unknown_63:
-            // TODO(bunnei): Figure out what this is used for. Super Mario Odyssey uses this.
-            LOG_CRITICAL(HW_GPU, "Unhandled input attribute Unknown_63");
-            UNREACHABLE();
-            break;
         default:
             const u32 index{static_cast<u32>(attribute) -
                             static_cast<u32>(Attribute::Index::Attribute_0)};
-            if (attribute >= Attribute::Index::Attribute_0) {
+            if (attribute >= Attribute::Index::Attribute_0 &&
+                attribute <= Attribute::Index::Attribute_31) {
                 declr_input_attribute.insert(attribute);
                 return "input_attribute_" + std::to_string(index);
             }
 
-            LOG_CRITICAL(HW_GPU, "Unhandled input attribute: {}", index);
+            LOG_CRITICAL(HW_GPU, "Unhandled input attribute: {}", static_cast<u32>(attribute));
             UNREACHABLE();
         }
 
@@ -560,6 +572,7 @@ private:
 
             LOG_CRITICAL(HW_GPU, "Unhandled output attribute: {}", index);
             UNREACHABLE();
+            return {};
         }
     }
 
@@ -828,7 +841,11 @@ private:
         ASSERT_MSG(instr.pred.full_pred != Pred::NeverExecute,
                    "NeverExecute predicate not implemented");
 
-        if (instr.pred.pred_index != static_cast<u64>(Pred::UnusedIndex)) {
+        // Some instructions (like SSY) don't have a predicate field, they are always
+        // unconditionally executed.
+        bool can_be_predicated = OpCode::IsPredicatedInstruction(opcode->GetId());
+
+        if (can_be_predicated && instr.pred.pred_index != static_cast<u64>(Pred::UnusedIndex)) {
             shader.AddLine("if (" +
                            GetPredicateCondition(instr.pred.pred_index, instr.negate_pred != 0) +
                            ')');
@@ -1615,6 +1632,99 @@ private:
             }
             break;
         }
+        case OpCode::Type::Xmad: {
+            ASSERT_MSG(!instr.xmad.sign_a, "Unimplemented");
+            ASSERT_MSG(!instr.xmad.sign_b, "Unimplemented");
+
+            std::string op_a{regs.GetRegisterAsInteger(instr.gpr8, 0, instr.xmad.sign_a)};
+            std::string op_b;
+            std::string op_c;
+
+            // TODO(bunnei): Needs to be fixed once op_a or op_b is signed
+            ASSERT_MSG(instr.xmad.sign_a == instr.xmad.sign_b, "Unimplemented");
+            const bool is_signed{instr.xmad.sign_a == 1};
+
+            bool is_merge{};
+            switch (opcode->GetId()) {
+            case OpCode::Id::XMAD_CR: {
+                is_merge = instr.xmad.merge_56;
+                op_b += regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
+                                        instr.xmad.sign_b ? GLSLRegister::Type::Integer
+                                                          : GLSLRegister::Type::UnsignedInteger);
+                op_c += regs.GetRegisterAsInteger(instr.gpr39, 0, is_signed);
+                break;
+            }
+            case OpCode::Id::XMAD_RR: {
+                is_merge = instr.xmad.merge_37;
+                op_b += regs.GetRegisterAsInteger(instr.gpr20, 0, instr.xmad.sign_b);
+                op_c += regs.GetRegisterAsInteger(instr.gpr39, 0, is_signed);
+                break;
+            }
+            case OpCode::Id::XMAD_RC: {
+                op_b += regs.GetRegisterAsInteger(instr.gpr39, 0, instr.xmad.sign_b);
+                op_c += regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
+                                        is_signed ? GLSLRegister::Type::Integer
+                                                  : GLSLRegister::Type::UnsignedInteger);
+                break;
+            }
+            case OpCode::Id::XMAD_IMM: {
+                is_merge = instr.xmad.merge_37;
+                op_b += std::to_string(instr.xmad.imm20_16);
+                op_c += regs.GetRegisterAsInteger(instr.gpr39, 0, is_signed);
+                break;
+            }
+            default: {
+                LOG_CRITICAL(HW_GPU, "Unhandled XMAD instruction: {}", opcode->GetName());
+                UNREACHABLE();
+            }
+            }
+
+            // TODO(bunnei): Ensure this is right with signed operands
+            if (instr.xmad.high_a) {
+                op_a = "((" + op_a + ") >> 16)";
+            } else {
+                op_a = "((" + op_a + ") & 0xFFFF)";
+            }
+
+            std::string src2 = '(' + op_b + ')'; // Preserve original source 2
+            if (instr.xmad.high_b) {
+                op_b = '(' + src2 + " >> 16)";
+            } else {
+                op_b = '(' + src2 + " & 0xFFFF)";
+            }
+
+            std::string product = '(' + op_a + " * " + op_b + ')';
+            if (instr.xmad.product_shift_left) {
+                product = '(' + product + " << 16)";
+            }
+
+            switch (instr.xmad.mode) {
+            case Tegra::Shader::XmadMode::None:
+                break;
+            case Tegra::Shader::XmadMode::CLo:
+                op_c = "((" + op_c + ") & 0xFFFF)";
+                break;
+            case Tegra::Shader::XmadMode::CHi:
+                op_c = "((" + op_c + ") >> 16)";
+                break;
+            case Tegra::Shader::XmadMode::CBcc:
+                op_c = "((" + op_c + ") + (" + src2 + "<< 16))";
+                break;
+            default: {
+                LOG_CRITICAL(HW_GPU, "Unhandled XMAD mode: {}",
+                             static_cast<u32>(instr.xmad.mode.Value()));
+                UNREACHABLE();
+            }
+            }
+
+            std::string sum{'(' + product + " + " + op_c + ')'};
+            if (is_merge) {
+                sum = "((" + sum + " & 0xFFFF) | (" + src2 + "<< 16))";
+            }
+
+            regs.SetRegisterToInteger(instr.gpr0, is_signed, 0, sum, 1, 1);
+            break;
+        }
         default: {
             switch (opcode->GetId()) {
             case OpCode::Id::EXIT: {
@@ -1652,7 +1762,15 @@ private:
             }
             case OpCode::Id::KIL: {
                 ASSERT(instr.flow.cond == Tegra::Shader::FlowCondition::Always);
+
+                // Enclose "discard" in a conditional, so that GLSL compilation does not complain
+                // about unexecuted instructions that may follow this.
+                shader.AddLine("if (true) {");
+                ++shader.scope;
                 shader.AddLine("discard;");
+                --shader.scope;
+                shader.AddLine("}");
+
                 break;
             }
             case OpCode::Id::BRA: {
@@ -1668,16 +1786,25 @@ private:
                 break;
             }
             case OpCode::Id::SSY: {
-                // The SSY opcode tells the GPU where to re-converge divergent execution paths, we
-                // can ignore this when generating GLSL code.
+                // The SSY opcode tells the GPU where to re-converge divergent execution paths, it
+                // sets the target of the jump that the SYNC instruction will make. The SSY opcode
+                // has a similar structure to the BRA opcode.
+                ASSERT_MSG(instr.bra.constant_buffer == 0, "Constant buffer SSY is not supported");
+
+                u32 target = offset + instr.bra.GetBranchTarget();
+                shader.AddLine("ssy_target = " + std::to_string(target) + "u;");
                 break;
             }
-            case OpCode::Id::SYNC:
+            case OpCode::Id::SYNC: {
+                // The SYNC opcode jumps to the address previously set by the SSY opcode
                 ASSERT(instr.flow.cond == Tegra::Shader::FlowCondition::Always);
+                shader.AddLine("{ jmp_to = ssy_target; break; }");
+                break;
+            }
             case OpCode::Id::DEPBAR: {
-                // TODO(Subv): Find out if we actually have to care about these instructions or if
+                // TODO(Subv): Find out if we actually have to care about this instruction or if
                 // the GLSL compiler takes care of that for us.
-                LOG_WARNING(HW_GPU, "DEPBAR/SYNC instruction is stubbed");
+                LOG_WARNING(HW_GPU, "DEPBAR instruction is stubbed");
                 break;
             }
             default: {
@@ -1691,7 +1818,7 @@ private:
         }
 
         // Close the predicate condition scope.
-        if (instr.pred.pred_index != static_cast<u64>(Pred::UnusedIndex)) {
+        if (can_be_predicated && instr.pred.pred_index != static_cast<u64>(Pred::UnusedIndex)) {
             --shader.scope;
             shader.AddLine('}');
         }
@@ -1742,6 +1869,7 @@ private:
             } else {
                 labels.insert(subroutine.begin);
                 shader.AddLine("uint jmp_to = " + std::to_string(subroutine.begin) + "u;");
+                shader.AddLine("uint ssy_target = 0u;");
                 shader.AddLine("while (true) {");
                 ++shader.scope;
 
@@ -1757,7 +1885,7 @@ private:
                     u32 compile_end = CompileRange(label, next_label);
                     if (compile_end > next_label && compile_end != PROGRAM_END) {
                         // This happens only when there is a label inside a IF/LOOP block
-                        shader.AddLine("{ jmp_to = " + std::to_string(compile_end) + "u; break; }");
+                        shader.AddLine(" jmp_to = " + std::to_string(compile_end) + "u; break; }");
                         labels.emplace(compile_end);
                     }
 

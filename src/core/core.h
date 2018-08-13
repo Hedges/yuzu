@@ -22,8 +22,11 @@
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/gpu.h"
 
-class EmuWindow;
 class ARM_Interface;
+
+namespace Core::Frontend {
+class EmuWindow;
+}
 
 namespace Service::SM {
 class ServiceManager;
@@ -49,21 +52,15 @@ public:
 
     /// Enumeration representing the return values of the System Initialize and Load process.
     enum class ResultStatus : u32 {
-        Success,                      ///< Succeeded
-        ErrorNotInitialized,          ///< Error trying to use core prior to initialization
-        ErrorGetLoader,               ///< Error finding the correct application loader
-        ErrorSystemMode,              ///< Error determining the system mode
-        ErrorLoader,                  ///< Error loading the specified application
-        ErrorLoader_ErrorMissingKeys, ///< Error because the key/keys needed to run could not be
-                                      ///< found.
-        ErrorLoader_ErrorDecrypting,  ///< Error loading the specified application due to encryption
-        ErrorLoader_ErrorInvalidFormat, ///< Error loading the specified application due to an
-                                        /// invalid format
-        ErrorSystemFiles,               ///< Error in finding system files
-        ErrorSharedFont,                ///< Error in finding shared font
-        ErrorVideoCore,                 ///< Error in the video core
-        ErrorUnsupportedArch,           ///< Unsupported Architecture (32-Bit ROMs)
-        ErrorUnknown                    ///< Any other error
+        Success,             ///< Succeeded
+        ErrorNotInitialized, ///< Error trying to use core prior to initialization
+        ErrorGetLoader,      ///< Error finding the correct application loader
+        ErrorSystemMode,     ///< Error determining the system mode
+        ErrorSystemFiles,    ///< Error in finding system files
+        ErrorSharedFont,     ///< Error in finding shared font
+        ErrorVideoCore,      ///< Error in the video core
+        ErrorUnknown,        ///< Any other error
+        ErrorLoader,         ///< The base for loader errors (too many to repeat)
     };
 
     /**
@@ -105,7 +102,7 @@ public:
      * @param filepath String path to the executable application to load on the host file system.
      * @returns ResultStatus code, indicating if the operation succeeded.
      */
-    ResultStatus Load(EmuWindow& emu_window, const std::string& filepath);
+    ResultStatus Load(Frontend::EmuWindow& emu_window, const std::string& filepath);
 
     /**
      * Indicates if the emulated system is powered on (all subsystems initialized and able to run an
@@ -233,7 +230,7 @@ private:
      *                   input.
      * @return ResultStatus code, indicating if the operation succeeded.
      */
-    ResultStatus Init(EmuWindow& emu_window);
+    ResultStatus Init(Frontend::EmuWindow& emu_window);
 
     /// RealVfsFilesystem instance
     FileSys::VirtualFilesystem virtual_filesystem;
