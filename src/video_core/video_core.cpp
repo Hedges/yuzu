@@ -9,9 +9,7 @@
 
 namespace VideoCore {
 
-std::atomic<bool> g_toggle_framelimit_enabled;
-
-std::unique_ptr<RendererBase> CreateRenderer(EmuWindow& emu_window) {
+std::unique_ptr<RendererBase> CreateRenderer(Core::Frontend::EmuWindow& emu_window) {
     return std::make_unique<RendererOpenGL>(emu_window);
 }
 

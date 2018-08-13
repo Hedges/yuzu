@@ -6,6 +6,7 @@
 
 #include <vector>
 #include <boost/optional.hpp>
+#include "common/common_funcs.h"
 #include "common/math_util.h"
 #include "common/swap.h"
 #include "core/hle/kernel/event.h"
@@ -72,7 +73,7 @@ public:
         MathUtil::Rectangle<int> crop_rect;
     };
 
-    void SetPreallocatedBuffer(u32 slot, IGBPBuffer& buffer);
+    void SetPreallocatedBuffer(u32 slot, const IGBPBuffer& igbp_buffer);
     boost::optional<u32> DequeueBuffer(u32 width, u32 height);
     const IGBPBuffer& RequestBuffer(u32 slot) const;
     void QueueBuffer(u32 slot, BufferTransformFlags transform,

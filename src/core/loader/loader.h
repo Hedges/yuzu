@@ -43,14 +43,6 @@ enum class FileType {
 FileType IdentifyFile(FileSys::VirtualFile file);
 
 /**
- * Identifies the type of a bootable file based on the magic value in its header.
- * @param file_name path to file
- * @return FileType of file. Note: this will return FileType::Unknown if it is unable to determine
- * a filetype, and will never return FileType::Error.
- */
-FileType IdentifyFile(const std::string& file_name);
-
-/**
  * Guess the type of a bootable file from its name
  * @param name String name of bootable file
  * @return FileType of file. Note: this will return FileType::Unknown if it is unable to determine
@@ -64,19 +56,47 @@ FileType GuessFromFilename(const std::string& name);
 std::string GetFileTypeString(FileType type);
 
 /// Return type for functions in Loader namespace
-enum class ResultStatus {
+enum class ResultStatus : u16 {
     Success,
-    Error,
-    ErrorInvalidFormat,
-    ErrorNotImplemented,
-    ErrorNotLoaded,
-    ErrorNotUsed,
     ErrorAlreadyLoaded,
-    ErrorMemoryAllocationFailed,
-    ErrorMissingKeys,
-    ErrorDecrypting,
-    ErrorUnsupportedArch,
+    ErrorNotImplemented,
+    ErrorNotInitialized,
+    ErrorBadNPDMHeader,
+    ErrorBadACIDHeader,
+    ErrorBadACIHeader,
+    ErrorBadFileAccessControl,
+    ErrorBadFileAccessHeader,
+    ErrorBadPFSHeader,
+    ErrorIncorrectPFSFileSize,
+    ErrorBadNCAHeader,
+    ErrorMissingProductionKeyFile,
+    ErrorMissingHeaderKey,
+    ErrorIncorrectHeaderKey,
+    ErrorNCA2,
+    ErrorNCA0,
+    ErrorMissingTitlekey,
+    ErrorMissingTitlekek,
+    ErrorInvalidRightsID,
+    ErrorMissingKeyAreaKey,
+    ErrorIncorrectKeyAreaKey,
+    ErrorIncorrectTitlekeyOrTitlekek,
+    ErrorXCIMissingProgramNCA,
+    ErrorNCANotProgram,
+    ErrorNoExeFS,
+    ErrorBadXCIHeader,
+    ErrorXCIMissingPartition,
+    ErrorNullFile,
+    ErrorMissingNPDM,
+    Error32BitISA,
+    ErrorNoRomFS,
+    ErrorIncorrectELFFileSize,
+    ErrorLoadingNRO,
+    ErrorNoIcon,
+    ErrorNoControl,
 };
+
+std::string GetMessageForResultStatus(ResultStatus status);
+std::string GetMessageForResultStatus(u16 status);
 
 /// Interface for loading an application
 class AppLoader : NonCopyable {

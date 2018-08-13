@@ -6,7 +6,6 @@
 
 #include <memory>
 #include <unordered_map>
-#include <vector>
 #include "common/common_types.h"
 #include "core/hle/service/nvflinger/buffer_queue.h"
 #include "video_core/memory_manager.h"
@@ -21,12 +20,14 @@ enum class RenderTargetFormat : u32 {
     NONE = 0x0,
     RGBA32_FLOAT = 0xC0,
     RGBA32_UINT = 0xC2,
+    RGBA16_UINT = 0xC9,
     RGBA16_FLOAT = 0xCA,
     RG32_FLOAT = 0xCB,
     BGRA8_UNORM = 0xCF,
     RGB10_A2_UNORM = 0xD1,
     RGBA8_UNORM = 0xD5,
     RGBA8_SRGB = 0xD6,
+    RGBA8_SNORM = 0xD7,
     RG16_UNORM = 0xDA,
     RG16_SNORM = 0xDB,
     RG16_SINT = 0xDC,
@@ -35,8 +36,15 @@ enum class RenderTargetFormat : u32 {
     R11G11B10_FLOAT = 0xE0,
     R32_FLOAT = 0xE5,
     B5G6R5_UNORM = 0xE8,
+    RG8_UNORM = 0xEA,
+    RG8_SNORM = 0xEB,
+    R16_UNORM = 0xEE,
+    R16_SNORM = 0xEF,
+    R16_SINT = 0xF0,
+    R16_UINT = 0xF1,
     R16_FLOAT = 0xF2,
     R8_UNORM = 0xF3,
+    R8_UINT = 0xF6,
 };
 
 enum class DepthFormat : u32 {
@@ -52,6 +60,9 @@ enum class DepthFormat : u32 {
 /// Returns the number of bytes per pixel of each rendertarget format.
 u32 RenderTargetBytesPerPixel(RenderTargetFormat format);
 
+/// Returns the number of bytes per pixel of each depth format.
+u32 DepthFormatBytesPerPixel(DepthFormat format);
+
 class DebugContext;
 
 /**
@@ -65,14 +76,7 @@ struct FramebufferConfig {
     /**
      * Returns the number of bytes per pixel.
      */
-    static u32 BytesPerPixel(PixelFormat format) {
-        switch (format) {
-        case PixelFormat::ABGR8:
-            return 4;
-        }
-
-        UNREACHABLE();
-    }
+    static u32 BytesPerPixel(PixelFormat format);
 
     VAddr address;
     u32 offset;

@@ -93,6 +93,7 @@ public:
 
         struct VertexAttribute {
             enum class Size : u32 {
+                Invalid = 0x0,
                 Size_32_32_32_32 = 0x01,
                 Size_32_32_32 = 0x02,
                 Size_16_16_16_16 = 0x03,
@@ -257,6 +258,10 @@ public:
             bool IsNormalized() const {
                 return (type == Type::SignedNorm) || (type == Type::UnsignedNorm);
             }
+
+            bool IsValid() const {
+                return size != Size::Invalid;
+            }
         };
 
         enum class PrimitiveTopology : u32 {
@@ -352,6 +357,27 @@ public:
                 OneMinusConstantColor = 0x62,
                 ConstantAlpha = 0x63,
                 OneMinusConstantAlpha = 0x64,
+
+                // These values are used by Nouveau and some games.
+                ZeroGL = 0x4000,
+                OneGL = 0x4001,
+                SourceColorGL = 0x4300,
+                OneMinusSourceColorGL = 0x4301,
+                SourceAlphaGL = 0x4302,
+                OneMinusSourceAlphaGL = 0x4303,
+                DestAlphaGL = 0x4304,
+                OneMinusDestAlphaGL = 0x4305,
+                DestColorGL = 0x4306,
+                OneMinusDestColorGL = 0x4307,
+                SourceAlphaSaturateGL = 0x4308,
+                ConstantColorGL = 0xc001,
+                OneMinusConstantColorGL = 0xc002,
+                ConstantAlphaGL = 0xc003,
+                OneMinusConstantAlphaGL = 0xc004,
+                Source1ColorGL = 0xc900,
+                OneMinusSource1ColorGL = 0xc901,
+                Source1AlphaGL = 0xc902,
+                OneMinusSource1AlphaGL = 0xc903,
             };
 
             u32 separate_alpha;
