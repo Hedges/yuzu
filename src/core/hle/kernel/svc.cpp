@@ -659,6 +659,9 @@ static ResultCode SignalProcessWideKey(VAddr condition_variable_addr, s32 target
         size_t current_core = Core::System::GetInstance().CurrentCoreIndex();
 
         auto& monitor = Core::System::GetInstance().Monitor();
+        if (&monitor == 0) {
+            return RESULT_SUCCESS;
+        }
 
         // Atomically read the value of the mutex.
         u32 mutex_val = 0;
