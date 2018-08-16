@@ -10,7 +10,7 @@
 namespace Service::SM {
 
 void Controller::ConvertSessionToDomain(Kernel::HLERequestContext& ctx) {
-    ASSERT_MSG(!ctx.Session()->IsDomain(), "session is alread a domain");
+    ASSERT_MSG(ctx.Session()->IsSession(), "Session is already a domain");
     ctx.Session()->ConvertToDomain();
 
     IPC::ResponseBuilder rb{ctx, 3};
@@ -41,7 +41,7 @@ void Controller::DuplicateSessionEx(Kernel::HLERequestContext& ctx) {
 void Controller::QueryPointerBufferSize(Kernel::HLERequestContext& ctx) {
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(RESULT_SUCCESS);
-    rb.Push<u32>(0x500);
+    rb.Push<u16>(0x500);
 
     LOG_WARNING(Service, "(STUBBED) called");
 }
