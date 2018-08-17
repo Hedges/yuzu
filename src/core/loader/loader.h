@@ -5,7 +5,7 @@
 #pragma once
 
 #include <algorithm>
-#include <initializer_list>
+#include <iosfwd>
 #include <memory>
 #include <string>
 #include <utility>
@@ -95,8 +95,7 @@ enum class ResultStatus : u16 {
     ErrorNoControl,
 };
 
-std::string GetMessageForResultStatus(ResultStatus status);
-std::string GetMessageForResultStatus(u16 status);
+std::ostream& operator<<(std::ostream& os, ResultStatus status);
 
 /// Interface for loading an application
 class AppLoader : NonCopyable {
@@ -206,12 +205,6 @@ protected:
     FileSys::VirtualFile file;
     bool is_loaded = false;
 };
-
-/**
- * Common address mappings found in most games, used for binary formats that don't have this
- * information.
- */
-extern const std::initializer_list<Kernel::AddressMapping> default_address_mappings;
 
 /**
  * Identifies a bootable file and return a suitable loader

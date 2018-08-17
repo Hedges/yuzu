@@ -367,31 +367,32 @@ public:
     }
 
     /// Generates code representing a uniform (C buffer) register, interpreted as the input type.
-    std::string GetUniform(u64 index, u64 offset, GLSLRegister::Type type) {
+    std::string GetUniform(u64 index, u64 offset, GLSLRegister::Type type,
+                           Register::Size size = Register::Size::Word) {
         declr_const_buffers[index].MarkAsUsed(index, offset, stage);
         std::string value = 'c' + std::to_string(index) + '[' + std::to_string(offset / 4) + "][" +
                             std::to_string(offset % 4) + ']';
 
         if (type == GLSLRegister::Type::Float) {
-            return value;
+            // Do nothing, default
         } else if (type == GLSLRegister::Type::Integer) {
-            return "floatBitsToInt(" + value + ')';
+            value = "floatBitsToInt(" + value + ')';
         } else if (type == GLSLRegister::Type::UnsignedInteger) {
-            return "floatBitsToUint(" + value + ')';
+            value = "floatBitsToUint(" + value + ')';
         } else {
             UNREACHABLE();
         }
+
+        return ConvertIntegerSize(value, size);
     }
 
-    std::string GetUniformIndirect(u64 index, s64 offset, const Register& index_reg,
+    std::string GetUniformIndirect(u64 cbuf_index, s64 offset, const std::string& index_str,
                                    GLSLRegister::Type type) {
-        declr_const_buffers[index].MarkAsUsedIndirect(index, stage);
+        declr_const_buffers[cbuf_index].MarkAsUsedIndirect(cbuf_index, stage);
 
-        std::string final_offset = "((floatBitsToInt(" + GetRegister(index_reg, 0) + ") + " +
-                                   std::to_string(offset) + ") / 4)";
-
-        std::string value =
-            'c' + std::to_string(index) + '[' + final_offset + " / 4][" + final_offset + " % 4]";
+        std::string final_offset = fmt::format("({} + {})", index_str, offset / 4);
+        std::string value = 'c' + std::to_string(cbuf_index) + '[' + final_offset + " / 4][" +
+                            final_offset + " % 4]";
 
         if (type == GLSLRegister::Type::Float) {
             return value;
@@ -540,7 +541,7 @@ private:
             // vertex shader, and what's the value of the fourth element when inside a Tess Eval
             // shader.
             ASSERT(stage == Maxwell3D::Regs::ShaderStage::Vertex);
-            return "vec4(0, 0, uintBitsToFloat(gl_InstanceID), uintBitsToFloat(gl_VertexID))";
+            return "vec4(0, 0, uintBitsToFloat(instance_id.x), uintBitsToFloat(gl_VertexID))";
         default:
             const u32 index{static_cast<u32>(attribute) -
                             static_cast<u32>(Attribute::Index::Attribute_0)};
@@ -1249,18 +1250,39 @@ private:
                     op_a = "abs(" + op_a + ')';
                 }
 
+                if (instr.conversion.negate_a) {
+                    op_a = "-(" + op_a + ')';
+                }
+
                 regs.SetRegisterToInteger(instr.gpr0, instr.conversion.is_output_signed, 0, op_a, 1,
                                           1, instr.alu.saturate_d, 0, instr.conversion.dest_size);
                 break;
             }
-            case OpCode::Id::I2F_R: {
+            case OpCode::Id::I2F_R:
+            case OpCode::Id::I2F_C: {
                 ASSERT_MSG(instr.conversion.dest_size == Register::Size::Word, "Unimplemented");
                 ASSERT_MSG(!instr.conversion.selector, "Unimplemented");
-                std::string op_a = regs.GetRegisterAsInteger(
-                    instr.gpr20, 0, instr.conversion.is_input_signed, instr.conversion.src_size);
+
+                std::string op_a{};
+
+                if (instr.is_b_gpr) {
+                    op_a =
+                        regs.GetRegisterAsInteger(instr.gpr20, 0, instr.conversion.is_input_signed,
+                                                  instr.conversion.src_size);
+                } else {
+                    op_a = regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
+                                           instr.conversion.is_input_signed
+                                               ? GLSLRegister::Type::Integer
+                                               : GLSLRegister::Type::UnsignedInteger,
+                                           instr.conversion.src_size);
+                }
 
                 if (instr.conversion.abs_a) {
                     op_a = "abs(" + op_a + ')';
+                }
+
+                if (instr.conversion.negate_a) {
+                    op_a = "-(" + op_a + ')';
                 }
 
                 regs.SetRegisterToFloat(instr.gpr0, 0, op_a, 1, 1);
@@ -1270,6 +1292,14 @@ private:
                 ASSERT_MSG(instr.conversion.dest_size == Register::Size::Word, "Unimplemented");
                 ASSERT_MSG(instr.conversion.src_size == Register::Size::Word, "Unimplemented");
                 std::string op_a = regs.GetRegisterAsFloat(instr.gpr20);
+
+                if (instr.conversion.abs_a) {
+                    op_a = "abs(" + op_a + ')';
+                }
+
+                if (instr.conversion.negate_a) {
+                    op_a = "-(" + op_a + ')';
+                }
 
                 switch (instr.conversion.f2f.rounding) {
                 case Tegra::Shader::F2fRoundingOp::None:
@@ -1293,19 +1323,27 @@ private:
                     break;
                 }
 
+                regs.SetRegisterToFloat(instr.gpr0, 0, op_a, 1, 1, instr.alu.saturate_d);
+                break;
+            }
+            case OpCode::Id::F2I_R:
+            case OpCode::Id::F2I_C: {
+                ASSERT_MSG(instr.conversion.src_size == Register::Size::Word, "Unimplemented");
+                std::string op_a{};
+
+                if (instr.is_b_gpr) {
+                    op_a = regs.GetRegisterAsFloat(instr.gpr20);
+                } else {
+                    op_a = regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
+                                           GLSLRegister::Type::Float);
+                }
+
                 if (instr.conversion.abs_a) {
                     op_a = "abs(" + op_a + ')';
                 }
 
-                regs.SetRegisterToFloat(instr.gpr0, 0, op_a, 1, 1, instr.alu.saturate_d);
-                break;
-            }
-            case OpCode::Id::F2I_R: {
-                ASSERT_MSG(instr.conversion.src_size == Register::Size::Word, "Unimplemented");
-                std::string op_a = regs.GetRegisterAsFloat(instr.gpr20);
-
-                if (instr.conversion.abs_a) {
-                    op_a = "abs(" + op_a + ')';
+                if (instr.conversion.negate_a) {
+                    op_a = "-(" + op_a + ')';
                 }
 
                 switch (instr.conversion.f2i.rounding) {
@@ -1355,11 +1393,16 @@ private:
             case OpCode::Id::LD_C: {
                 ASSERT_MSG(instr.ld_c.unknown == 0, "Unimplemented");
 
+                // Add an extra scope and declare the index register inside to prevent
+                // overwriting it in case it is used as an output of the LD instruction.
+                shader.AddLine("{");
+                ++shader.scope;
+
+                shader.AddLine("uint index = (" + regs.GetRegisterAsInteger(instr.gpr8, 0, false) +
+                               " / 4) & (MAX_CONSTBUFFER_ELEMENTS - 1);");
+
                 std::string op_a =
-                    regs.GetUniformIndirect(instr.cbuf36.index, instr.cbuf36.offset + 0, instr.gpr8,
-                                            GLSLRegister::Type::Float);
-                std::string op_b =
-                    regs.GetUniformIndirect(instr.cbuf36.index, instr.cbuf36.offset + 4, instr.gpr8,
+                    regs.GetUniformIndirect(instr.cbuf36.index, instr.cbuf36.offset + 0, "index",
                                             GLSLRegister::Type::Float);
 
                 switch (instr.ld_c.type.Value()) {
@@ -1367,16 +1410,22 @@ private:
                     regs.SetRegisterToFloat(instr.gpr0, 0, op_a, 1, 1);
                     break;
 
-                case Tegra::Shader::UniformType::Double:
+                case Tegra::Shader::UniformType::Double: {
+                    std::string op_b =
+                        regs.GetUniformIndirect(instr.cbuf36.index, instr.cbuf36.offset + 4,
+                                                "index", GLSLRegister::Type::Float);
                     regs.SetRegisterToFloat(instr.gpr0, 0, op_a, 1, 1);
                     regs.SetRegisterToFloat(instr.gpr0.Value() + 1, 0, op_b, 1, 1);
                     break;
-
+                }
                 default:
                     LOG_CRITICAL(HW_GPU, "Unhandled type: {}",
                                  static_cast<unsigned>(instr.ld_c.type.Value()));
                     UNREACHABLE();
                 }
+
+                --shader.scope;
+                shader.AddLine("}");
                 break;
             }
             case OpCode::Id::ST_A: {

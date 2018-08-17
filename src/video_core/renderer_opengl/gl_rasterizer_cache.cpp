@@ -94,11 +94,11 @@ struct FormatTuple {
 static constexpr std::array<FormatTuple, SurfaceParams::MaxPixelFormat> tex_format_tuples = {{
     {GL_RGBA8, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, ComponentType::UNorm, false}, // ABGR8U
     {GL_RGBA8, GL_RGBA, GL_BYTE, ComponentType::SNorm, false},                     // ABGR8S
-    {GL_RGB, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV, ComponentType::UNorm, false},    // B5G6R5
+    {GL_RGB, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV, ComponentType::UNorm, false},    // B5G6R5U
     {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, ComponentType::UNorm,
-     false}, // A2B10G10R10
-    {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, ComponentType::UNorm, false}, // A1B5G5R5
-    {GL_R8, GL_RED, GL_UNSIGNED_BYTE, ComponentType::UNorm, false},                    // R8
+     false}, // A2B10G10R10U
+    {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, ComponentType::UNorm, false}, // A1B5G5R5U
+    {GL_R8, GL_RED, GL_UNSIGNED_BYTE, ComponentType::UNorm, false},                    // R8U
     {GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, ComponentType::UInt, false},           // R8UI
     {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT, ComponentType::Float, false},                 // RGBA16F
     {GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT, ComponentType::UNorm, false},              // RGBA16U
@@ -119,13 +119,14 @@ static constexpr std::array<FormatTuple, SurfaceParams::MaxPixelFormat> tex_form
     {GL_COMPRESSED_RGBA_BPTC_UNORM_ARB, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8, ComponentType::UNorm,
      true},                                                                    // BC7U
     {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, ComponentType::UNorm, false},        // ASTC_2D_4X4
-    {GL_RG8, GL_RG, GL_UNSIGNED_BYTE, ComponentType::UNorm, false},            // G8R8
+    {GL_RG8, GL_RG, GL_UNSIGNED_BYTE, ComponentType::UNorm, false},            // G8R8U
+    {GL_RG8, GL_RG, GL_BYTE, ComponentType::SNorm, false},                     // G8R8S
     {GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE, ComponentType::UNorm, false},        // BGRA8
     {GL_RGBA32F, GL_RGBA, GL_FLOAT, ComponentType::Float, false},              // RGBA32F
     {GL_RG32F, GL_RG, GL_FLOAT, ComponentType::Float, false},                  // RG32F
     {GL_R32F, GL_RED, GL_FLOAT, ComponentType::Float, false},                  // R32F
     {GL_R16F, GL_RED, GL_HALF_FLOAT, ComponentType::Float, false},             // R16F
-    {GL_R16, GL_RED, GL_UNSIGNED_SHORT, ComponentType::UNorm, false},          // R16UNORM
+    {GL_R16, GL_RED, GL_UNSIGNED_SHORT, ComponentType::UNorm, false},          // R16U
     {GL_R16_SNORM, GL_RED, GL_SHORT, ComponentType::SNorm, false},             // R16S
     {GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT, ComponentType::UInt, false}, // R16UI
     {GL_R16I, GL_RED_INTEGER, GL_SHORT, ComponentType::SInt, false},           // R16I
@@ -141,14 +142,16 @@ static constexpr std::array<FormatTuple, SurfaceParams::MaxPixelFormat> tex_form
     {GL_RG32UI, GL_RG_INTEGER, GL_UNSIGNED_INT, ComponentType::UInt, false},              // RG32UI
     {GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, ComponentType::UInt, false},              // R32UI
 
+    // Depth formats
+    {GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT, ComponentType::Float, false}, // Z32F
+    {GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, ComponentType::UNorm,
+     false}, // Z16
+
     // DepthStencil formats
     {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, ComponentType::UNorm,
      false}, // Z24S8
     {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, ComponentType::UNorm,
-     false},                                                                            // S8Z24
-    {GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT, ComponentType::Float, false}, // Z32F
-    {GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, ComponentType::UNorm,
-     false}, // Z16
+     false}, // S8Z24
     {GL_DEPTH32F_STENCIL8, GL_DEPTH_STENCIL, GL_FLOAT_32_UNSIGNED_INT_24_8_REV,
      ComponentType::Float, false}, // Z32FS8
 }};
@@ -242,10 +245,10 @@ static constexpr std::array<void (*)(u32, u32, u32, std::vector<u8>&, Tegra::GPU
         // clang-format off
         MortonCopy<true, PixelFormat::ABGR8U>,
         MortonCopy<true, PixelFormat::ABGR8S>,
-        MortonCopy<true, PixelFormat::B5G6R5>,
-        MortonCopy<true, PixelFormat::A2B10G10R10>,
-        MortonCopy<true, PixelFormat::A1B5G5R5>,
-        MortonCopy<true, PixelFormat::R8>,
+        MortonCopy<true, PixelFormat::B5G6R5U>,
+        MortonCopy<true, PixelFormat::A2B10G10R10U>,
+        MortonCopy<true, PixelFormat::A1B5G5R5U>,
+        MortonCopy<true, PixelFormat::R8U>,
         MortonCopy<true, PixelFormat::R8UI>,
         MortonCopy<true, PixelFormat::RGBA16F>,
         MortonCopy<true, PixelFormat::RGBA16U>,
@@ -260,13 +263,14 @@ static constexpr std::array<void (*)(u32, u32, u32, std::vector<u8>&, Tegra::GPU
         MortonCopy<true, PixelFormat::DXN2SNORM>,
         MortonCopy<true, PixelFormat::BC7U>,
         MortonCopy<true, PixelFormat::ASTC_2D_4X4>,
-        MortonCopy<true, PixelFormat::G8R8>,
+        MortonCopy<true, PixelFormat::G8R8U>,
+        MortonCopy<true, PixelFormat::G8R8S>,
         MortonCopy<true, PixelFormat::BGRA8>,
         MortonCopy<true, PixelFormat::RGBA32F>,
         MortonCopy<true, PixelFormat::RG32F>,
         MortonCopy<true, PixelFormat::R32F>,
         MortonCopy<true, PixelFormat::R16F>,
-        MortonCopy<true, PixelFormat::R16UNORM>,
+        MortonCopy<true, PixelFormat::R16U>,
         MortonCopy<true, PixelFormat::R16S>,
         MortonCopy<true, PixelFormat::R16UI>,
         MortonCopy<true, PixelFormat::R16I>,
@@ -281,10 +285,10 @@ static constexpr std::array<void (*)(u32, u32, u32, std::vector<u8>&, Tegra::GPU
         MortonCopy<true, PixelFormat::RG8S>,
         MortonCopy<true, PixelFormat::RG32UI>,
         MortonCopy<true, PixelFormat::R32UI>,
-        MortonCopy<true, PixelFormat::Z24S8>,
-        MortonCopy<true, PixelFormat::S8Z24>,
         MortonCopy<true, PixelFormat::Z32F>,
         MortonCopy<true, PixelFormat::Z16>,
+        MortonCopy<true, PixelFormat::Z24S8>,
+        MortonCopy<true, PixelFormat::S8Z24>,
         MortonCopy<true, PixelFormat::Z32FS8>,
         // clang-format on
 };
@@ -295,10 +299,10 @@ static constexpr std::array<void (*)(u32, u32, u32, std::vector<u8>&, Tegra::GPU
         // clang-format off
         MortonCopy<false, PixelFormat::ABGR8U>,
         MortonCopy<false, PixelFormat::ABGR8S>,
-        MortonCopy<false, PixelFormat::B5G6R5>,
-        MortonCopy<false, PixelFormat::A2B10G10R10>,
-        MortonCopy<false, PixelFormat::A1B5G5R5>,
-        MortonCopy<false, PixelFormat::R8>,
+        MortonCopy<false, PixelFormat::B5G6R5U>,
+        MortonCopy<false, PixelFormat::A2B10G10R10U>,
+        MortonCopy<false, PixelFormat::A1B5G5R5U>,
+        MortonCopy<false, PixelFormat::R8U>,
         MortonCopy<false, PixelFormat::R8UI>,
         MortonCopy<false, PixelFormat::RGBA16F>,
         MortonCopy<false, PixelFormat::RGBA16U>,
@@ -315,13 +319,14 @@ static constexpr std::array<void (*)(u32, u32, u32, std::vector<u8>&, Tegra::GPU
         nullptr,
         nullptr,
         nullptr,
-        MortonCopy<false, PixelFormat::G8R8>,
+        MortonCopy<false, PixelFormat::G8R8U>,
+        MortonCopy<false, PixelFormat::G8R8S>,
         MortonCopy<false, PixelFormat::BGRA8>,
         MortonCopy<false, PixelFormat::RGBA32F>,
         MortonCopy<false, PixelFormat::RG32F>,
         MortonCopy<false, PixelFormat::R32F>,
         MortonCopy<false, PixelFormat::R16F>,
-        MortonCopy<false, PixelFormat::R16UNORM>,
+        MortonCopy<false, PixelFormat::R16U>,
         MortonCopy<false, PixelFormat::R16S>,
         MortonCopy<false, PixelFormat::R16UI>,
         MortonCopy<false, PixelFormat::R16I>,
@@ -336,10 +341,10 @@ static constexpr std::array<void (*)(u32, u32, u32, std::vector<u8>&, Tegra::GPU
         MortonCopy<false, PixelFormat::RG8S>,
         MortonCopy<false, PixelFormat::RG32UI>,
         MortonCopy<false, PixelFormat::R32UI>,
-        MortonCopy<false, PixelFormat::Z24S8>,
-        MortonCopy<false, PixelFormat::S8Z24>,
         MortonCopy<false, PixelFormat::Z32F>,
         MortonCopy<false, PixelFormat::Z16>,
+        MortonCopy<false, PixelFormat::Z24S8>,
+        MortonCopy<false, PixelFormat::S8Z24>,
         MortonCopy<false, PixelFormat::Z32FS8>,
         // clang-format on
 };
@@ -461,7 +466,7 @@ static void ConvertS8Z24ToZ24S8(std::vector<u8>& data, u32 width, u32 height) {
 }
 
 static void ConvertG8R8ToR8G8(std::vector<u8>& data, u32 width, u32 height) {
-    const auto bpp{CachedSurface::GetGLBytesPerPixel(PixelFormat::G8R8)};
+    const auto bpp{CachedSurface::GetGLBytesPerPixel(PixelFormat::G8R8U)};
     for (size_t y = 0; y < height; ++y) {
         for (size_t x = 0; x < width; ++x) {
             const size_t offset{bpp * (y * width + x)};
@@ -493,7 +498,8 @@ static void ConvertFormatAsNeeded_LoadGLBuffer(std::vector<u8>& data, PixelForma
         ConvertS8Z24ToZ24S8(data, width, height);
         break;
 
-    case PixelFormat::G8R8:
+    case PixelFormat::G8R8U:
+    case PixelFormat::G8R8S:
         // Convert the G8R8 color format to R8G8, as OpenGL does not support G8R8.
         ConvertG8R8ToR8G8(data, width, height);
         break;

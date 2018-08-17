@@ -124,7 +124,7 @@ std::pair<u8*, GLintptr> RasterizerOpenGL::SetupVertexArrays(u8* array_ptr,
         glBindVertexBuffer(index, stream_buffer.GetHandle(), vertex_buffer_offset,
                            vertex_array.stride);
 
-        ASSERT_MSG(vertex_array.divisor == 0, "Vertex buffer divisor unimplemented");
+        ASSERT_MSG(vertex_array.divisor == 0, "Instanced vertex arrays are not supported");
     }
 
     // Use the vertex array as-is, assumes that the data is formatted correctly for OpenGL.
@@ -648,11 +648,11 @@ std::tuple<u8*, GLintptr, u32> RasterizerOpenGL::SetupConstBuffers(
 
         if (used_buffer.IsIndirect()) {
             // Buffer is accessed indirectly, so upload the entire thing
-            size = buffer.size * sizeof(float);
+            size = buffer.size;
 
             if (size > MaxConstbufferSize) {
-                LOG_ERROR(HW_GPU, "indirect constbuffer size {} exceeds maximum {}", size,
-                          MaxConstbufferSize);
+                LOG_CRITICAL(HW_GPU, "indirect constbuffer size {} exceeds maximum {}", size,
+                             MaxConstbufferSize);
                 size = MaxConstbufferSize;
             }
         } else {

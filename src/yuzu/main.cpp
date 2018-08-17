@@ -6,7 +6,10 @@
 #include <clocale>
 #include <memory>
 #include <thread>
+
+#include <fmt/ostream.h>
 #include <glad/glad.h>
+
 #define QT_NO_OPENGL
 #include <QDesktopWidget>
 #include <QFileDialog>
@@ -24,6 +27,7 @@
 #include "common/string_util.h"
 #include "core/core.h"
 #include "core/crypto/key_manager.h"
+#include "core/file_sys/card_image.h"
 #include "core/file_sys/vfs_real.h"
 #include "core/gdbstub/gdbstub.h"
 #include "core/loader/loader.h"
@@ -114,6 +118,9 @@ GMainWindow::GMainWindow()
                        .arg(Common::g_build_name, Common::g_scm_branch, Common::g_scm_desc));
     show();
 
+    // Necessary to load titles from nand in gamelist.
+    Service::FileSystem::RegisterBIS(std::make_unique<FileSys::BISFactory>(vfs->OpenDirectory(
+        FileUtil::GetUserPath(FileUtil::UserPath::NANDDir), FileSys::Mode::ReadWrite)));
     game_list->PopulateAsync(UISettings::values.gamedir, UISettings::values.gamedir_deepscan);
 
     // Show one-time "callout" messages to the user
@@ -309,6 +316,8 @@ void GMainWindow::ConnectMenuEvents() {
     // File
     connect(ui.action_Load_File, &QAction::triggered, this, &GMainWindow::OnMenuLoadFile);
     connect(ui.action_Load_Folder, &QAction::triggered, this, &GMainWindow::OnMenuLoadFolder);
+    connect(ui.action_Install_File_NAND, &QAction::triggered, this,
+            &GMainWindow::OnMenuInstallToNAND);
     connect(ui.action_Select_Game_List_Root, &QAction::triggered, this,
             &GMainWindow::OnMenuSelectGameListRoot);
     connect(ui.action_Exit, &QAction::triggered, this, &QMainWindow::close);
@@ -454,7 +463,7 @@ bool GMainWindow::LoadROM(const QString& filename) {
                         "While attempting to load the ROM requested, an error occured. Please "
                         "refer to the yuzu wiki for more information or the yuzu discord for "
                         "additional help.\n\nError Code: {:04X}-{:04X}\nError Description: {}",
-                        loader_id, error_id, Loader::GetMessageForResultStatus(error_id))));
+                        loader_id, error_id, static_cast<Loader::ResultStatus>(error_id))));
             } else {
                 QMessageBox::critical(
                     this, tr("Error while loading ROM!"),
@@ -609,6 +618,148 @@ void GMainWindow::OnMenuLoadFolder() {
     } else {
         QMessageBox::warning(this, tr("Invalid Directory Selected"),
                              tr("The directory you have selected does not contain a 'main' file."));
+    }
+}
+
+void GMainWindow::OnMenuInstallToNAND() {
+    const QString file_filter =
+        tr("Installable Switch File (*.nca *.xci);;Nintendo Content Archive (*.nca);;NX Cartridge "
+           "Image (*.xci)");
+    QString filename = QFileDialog::getOpenFileName(this, tr("Install File"),
+                                                    UISettings::values.roms_path, file_filter);
+
+    if (filename.isEmpty()) {
+        return;
+    }
+
+    const auto qt_raw_copy = [this](FileSys::VirtualFile src, FileSys::VirtualFile dest) {
+        if (src == nullptr || dest == nullptr)
+            return false;
+        if (!dest->Resize(src->GetSize()))
+            return false;
+
+        std::array<u8, 0x1000> buffer{};
+        const int progress_maximum = static_cast<int>(src->GetSize() / buffer.size());
+
+        QProgressDialog progress(
+            tr("Installing file \"%1\"...").arg(QString::fromStdString(src->GetName())),
+            tr("Cancel"), 0, progress_maximum, this);
+        progress.setWindowModality(Qt::WindowModal);
+
+        for (size_t i = 0; i < src->GetSize(); i += buffer.size()) {
+            if (progress.wasCanceled()) {
+                dest->Resize(0);
+                return false;
+            }
+
+            const int progress_value = static_cast<int>(i / buffer.size());
+            progress.setValue(progress_value);
+
+            const auto read = src->Read(buffer.data(), buffer.size(), i);
+            dest->Write(buffer.data(), read, i);
+        }
+
+        return true;
+    };
+
+    const auto success = [this]() {
+        QMessageBox::information(this, tr("Successfully Installed"),
+                                 tr("The file was successfully installed."));
+        game_list->PopulateAsync(UISettings::values.gamedir, UISettings::values.gamedir_deepscan);
+    };
+
+    const auto failed = [this]() {
+        QMessageBox::warning(
+            this, tr("Failed to Install"),
+            tr("There was an error while attempting to install the provided file. It "
+               "could have an incorrect format or be missing metadata. Please "
+               "double-check your file and try again."));
+    };
+
+    const auto overwrite = [this]() {
+        return QMessageBox::question(this, tr("Failed to Install"),
+                                     tr("The file you are attempting to install already exists "
+                                        "in the cache. Would you like to overwrite it?")) ==
+               QMessageBox::Yes;
+    };
+
+    if (filename.endsWith("xci", Qt::CaseInsensitive)) {
+        const auto xci = std::make_shared<FileSys::XCI>(
+            vfs->OpenFile(filename.toStdString(), FileSys::Mode::Read));
+        if (xci->GetStatus() != Loader::ResultStatus::Success) {
+            failed();
+            return;
+        }
+        const auto res =
+            Service::FileSystem::GetUserNANDContents()->InstallEntry(xci, false, qt_raw_copy);
+        if (res == FileSys::InstallResult::Success) {
+            success();
+        } else {
+            if (res == FileSys::InstallResult::ErrorAlreadyExists) {
+                if (overwrite()) {
+                    const auto res2 = Service::FileSystem::GetUserNANDContents()->InstallEntry(
+                        xci, true, qt_raw_copy);
+                    if (res2 == FileSys::InstallResult::Success) {
+                        success();
+                    } else {
+                        failed();
+                    }
+                }
+            } else {
+                failed();
+            }
+        }
+    } else {
+        const auto nca = std::make_shared<FileSys::NCA>(
+            vfs->OpenFile(filename.toStdString(), FileSys::Mode::Read));
+        if (nca->GetStatus() != Loader::ResultStatus::Success) {
+            failed();
+            return;
+        }
+
+        const QStringList tt_options{tr("System Application"),
+                                     tr("System Archive"),
+                                     tr("System Application Update"),
+                                     tr("Firmware Package (Type A)"),
+                                     tr("Firmware Package (Type B)"),
+                                     tr("Game"),
+                                     tr("Game Update"),
+                                     tr("Game DLC"),
+                                     tr("Delta Title")};
+        bool ok;
+        const auto item = QInputDialog::getItem(
+            this, tr("Select NCA Install Type..."),
+            tr("Please select the type of title you would like to install this NCA as:\n(In "
+               "most instances, the default 'Game' is fine.)"),
+            tt_options, 5, false, &ok);
+
+        auto index = tt_options.indexOf(item);
+        if (!ok || index == -1) {
+            QMessageBox::warning(this, tr("Failed to Install"),
+                                 tr("The title type you selected for the NCA is invalid."));
+            return;
+        }
+
+        if (index >= 5)
+            index += 0x7B;
+
+        const auto res = Service::FileSystem::GetUserNANDContents()->InstallEntry(
+            nca, static_cast<FileSys::TitleType>(index), false, qt_raw_copy);
+        if (res == FileSys::InstallResult::Success) {
+            success();
+        } else if (res == FileSys::InstallResult::ErrorAlreadyExists) {
+            if (overwrite()) {
+                const auto res2 = Service::FileSystem::GetUserNANDContents()->InstallEntry(
+                    nca, static_cast<FileSys::TitleType>(index), true, qt_raw_copy);
+                if (res2 == FileSys::InstallResult::Success) {
+                    success();
+                } else {
+                    failed();
+                }
+            }
+        } else {
+            failed();
+        }
     }
 }
 
