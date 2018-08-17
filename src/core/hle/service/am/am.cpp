@@ -145,8 +145,8 @@ ISelfController::ISelfController(std::shared_ptr<NVFlinger::NVFlinger> nvflinger
         {51, nullptr, "ApproveToDisplay"},
         {60, nullptr, "OverrideAutoSleepTimeAndDimmingTime"},
         {61, nullptr, "SetMediaPlaybackState"},
-        {62, nullptr, "SetIdleTimeDetectionExtension"},
-        {63, nullptr, "GetIdleTimeDetectionExtension"},
+        {62, &ISelfController::SetIdleTimeDetectionExtension, "SetIdleTimeDetectionExtension"},
+        {63, &ISelfController::GetIdleTimeDetectionExtension, "GetIdleTimeDetectionExtension"},
         {64, nullptr, "SetInputDetectionSourceSet"},
         {65, nullptr, "ReportUserIsActive"},
         {66, nullptr, "GetCurrentIlluminance"},
@@ -281,6 +281,23 @@ void ISelfController::SetHandlesRequestToDisplay(Kernel::HLERequestContext& ctx)
     LOG_WARNING(Service_AM, "(STUBBED) called");
 }
 
+void ISelfController::SetIdleTimeDetectionExtension(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    idle_time_detection_extension = rp.Pop<u32>();
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+}
+
+void ISelfController::GetIdleTimeDetectionExtension(Kernel::HLERequestContext& ctx) {
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(RESULT_SUCCESS);
+    rb.Push<u32>(idle_time_detection_extension);
+
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+}
+
 ICommonStateGetter::ICommonStateGetter() : ServiceFramework("ICommonStateGetter") {
     static const FunctionInfo functions[] = {
         {0, &ICommonStateGetter::GetEventHandle, "GetEventHandle"},
@@ -306,7 +323,8 @@ ICommonStateGetter::ICommonStateGetter() : ServiceFramework("ICommonStateGetter"
         {52, nullptr, "SwitchLcdBacklight"},
         {55, nullptr, "IsInControllerFirmwareUpdateSection"},
         {60, nullptr, "GetDefaultDisplayResolution"},
-        {61, nullptr, "GetDefaultDisplayResolutionChangeEvent"},
+        {61, &ICommonStateGetter::GetDefaultDisplayResolutionChangeEvent,
+         "GetDefaultDisplayResolutionChangeEvent"},
         {62, nullptr, "GetHdcpAuthenticationState"},
         {63, nullptr, "GetHdcpAuthenticationStateChangeEvent"},
     };
@@ -337,6 +355,16 @@ void ICommonStateGetter::GetCurrentFocusState(Kernel::HLERequestContext& ctx) {
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(RESULT_SUCCESS);
     rb.Push(static_cast<u8>(FocusState::InFocus));
+
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+}
+
+void ICommonStateGetter::GetDefaultDisplayResolutionChangeEvent(Kernel::HLERequestContext& ctx) {
+    event->Signal();
+
+    IPC::ResponseBuilder rb{ctx, 2, 1};
+    rb.Push(RESULT_SUCCESS);
+    rb.PushCopyObjects(event);
 
     LOG_WARNING(Service_AM, "(STUBBED) called");
 }
