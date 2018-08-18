@@ -598,8 +598,7 @@ static void HandleQuery() {
         for (u32 core = 0; core < Core::NUM_CPU_CORES; core++) {
             const auto& threads = Core::System::GetInstance().Scheduler(core)->GetThreadList();
             for (const auto& thread : threads) {
-                val += fmt::format("{:x}", thread->GetThreadId());
-                val += ",";
+                val += fmt::format("{:x},", thread->GetThreadId());
             }
         }
         val.pop_back();
@@ -1319,13 +1318,15 @@ void SetCpuStepFlag(bool is_step) {
 }
 
 void SendTrap(Kernel::Thread* thread, int trap) {
-    if (send_trap) {
-        if (!halt_loop || current_thread == thread) {
-            current_thread = thread;
-            SendSignal(thread, trap);
-        }
-        halt_loop = true;
-        send_trap = false;
+    if (!send_trap) {
+        return;
     }
+
+    if (!halt_loop || current_thread == thread) {
+        current_thread = thread;
+        SendSignal(thread, trap);
+    }
+    halt_loop = true;
+    send_trap = false;
 }
 }; // namespace GDBStub
