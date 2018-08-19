@@ -542,6 +542,10 @@ private:
             // shader.
             ASSERT(stage == Maxwell3D::Regs::ShaderStage::Vertex);
             return "vec4(0, 0, uintBitsToFloat(instance_id.x), uintBitsToFloat(gl_VertexID))";
+        case Attribute::Index::FrontFacing:
+            // TODO(Subv): Find out what the values are for the other elements.
+            ASSERT(stage == Maxwell3D::Regs::ShaderStage::Fragment);
+            return "vec4(0, 0, 0, uintBitsToFloat(gl_FrontFacing ? 1 : 0))";
         default:
             const u32 index{static_cast<u32>(attribute) -
                             static_cast<u32>(Attribute::Index::Attribute_0)};
@@ -743,6 +747,30 @@ private:
         return op->second;
     }
 
+    /**
+     * Transforms the input string GLSL operand into one that applies the abs() function and negates
+     * the output if necessary. When both abs and neg are true, the negation will be applied after
+     * taking the absolute value.
+     * @param operand The input operand to take the abs() of, negate, or both.
+     * @param abs Whether to apply the abs() function to the input operand.
+     * @param neg Whether to negate the input operand.
+     * @returns String corresponding to the operand after being transformed by the abs() and
+     * negation operations.
+     */
+    static std::string GetOperandAbsNeg(const std::string& operand, bool abs, bool neg) {
+        std::string result = operand;
+
+        if (abs) {
+            result = "abs(" + result + ')';
+        }
+
+        if (neg) {
+            result = "-(" + result + ')';
+        }
+
+        return result;
+    }
+
     /*
      * Returns whether the instruction at the specified offset is a 'sched' instruction.
      * Sched instructions always appear before a sequence of 3 instructions.
@@ -756,26 +784,49 @@ private:
     }
 
     void WriteLogicOperation(Register dest, LogicOperation logic_op, const std::string& op_a,
-                             const std::string& op_b) {
+                             const std::string& op_b,
+                             Tegra::Shader::PredicateResultMode predicate_mode,
+                             Tegra::Shader::Pred predicate) {
+        std::string result{};
         switch (logic_op) {
         case LogicOperation::And: {
-            regs.SetRegisterToInteger(dest, true, 0, '(' + op_a + " & " + op_b + ')', 1, 1);
+            result = '(' + op_a + " & " + op_b + ')';
             break;
         }
         case LogicOperation::Or: {
-            regs.SetRegisterToInteger(dest, true, 0, '(' + op_a + " | " + op_b + ')', 1, 1);
+            result = '(' + op_a + " | " + op_b + ')';
             break;
         }
         case LogicOperation::Xor: {
-            regs.SetRegisterToInteger(dest, true, 0, '(' + op_a + " ^ " + op_b + ')', 1, 1);
+            result = '(' + op_a + " ^ " + op_b + ')';
             break;
         }
         case LogicOperation::PassB: {
-            regs.SetRegisterToInteger(dest, true, 0, op_b, 1, 1);
+            result = op_b;
             break;
         }
         default:
             LOG_CRITICAL(HW_GPU, "Unimplemented logic operation: {}", static_cast<u32>(logic_op));
+            UNREACHABLE();
+        }
+
+        if (dest != Tegra::Shader::Register::ZeroIndex) {
+            regs.SetRegisterToInteger(dest, true, 0, result, 1, 1);
+        }
+
+        using Tegra::Shader::PredicateResultMode;
+        // Write the predicate value depending on the predicate mode.
+        switch (predicate_mode) {
+        case PredicateResultMode::None:
+            // Do nothing.
+            return;
+        case PredicateResultMode::NotZero:
+            // Set the predicate to true if the result is not zero.
+            SetPredicate(static_cast<u64>(predicate), '(' + result + ") != 0");
+            break;
+        default:
+            LOG_CRITICAL(HW_GPU, "Unimplemented predicate result mode: {}",
+                         static_cast<u32>(predicate_mode));
             UNREACHABLE();
         }
     }
@@ -811,6 +862,33 @@ private:
 
             texs_offset += 2;
         }
+        --shader.scope;
+        shader.AddLine('}');
+    }
+
+    /*
+     * Emits code to push the input target address to the SSY address stack, incrementing the stack
+     * top.
+     */
+    void EmitPushToSSYStack(u32 target) {
+        shader.AddLine('{');
+        ++shader.scope;
+        shader.AddLine("ssy_stack[ssy_stack_top] = " + std::to_string(target) + "u;");
+        shader.AddLine("ssy_stack_top++;");
+        --shader.scope;
+        shader.AddLine('}');
+    }
+
+    /*
+     * Emits code to pop an address from the SSY address stack, setting the jump address to the
+     * popped address and decrementing the stack top.
+     */
+    void EmitPopFromSSYStack() {
+        shader.AddLine('{');
+        ++shader.scope;
+        shader.AddLine("ssy_stack_top--;");
+        shader.AddLine("jmp_to = ssy_stack[ssy_stack_top];");
+        shader.AddLine("break;");
         --shader.scope;
         shader.AddLine('}');
     }
@@ -859,13 +937,6 @@ private:
         switch (opcode->GetType()) {
         case OpCode::Type::Arithmetic: {
             std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
-            if (instr.alu.abs_a) {
-                op_a = "abs(" + op_a + ')';
-            }
-
-            if (instr.alu.negate_a) {
-                op_a = "-(" + op_a + ')';
-            }
 
             std::string op_b;
 
@@ -880,17 +951,10 @@ private:
                 }
             }
 
-            if (instr.alu.abs_b) {
-                op_b = "abs(" + op_b + ')';
-            }
-
-            if (instr.alu.negate_b) {
-                op_b = "-(" + op_b + ')';
-            }
-
             switch (opcode->GetId()) {
             case OpCode::Id::MOV_C:
             case OpCode::Id::MOV_R: {
+                // MOV does not have neither 'abs' nor 'neg' bits.
                 regs.SetRegisterToFloat(instr.gpr0, 0, op_b, 1, 1);
                 break;
             }
@@ -898,6 +962,8 @@ private:
             case OpCode::Id::FMUL_C:
             case OpCode::Id::FMUL_R:
             case OpCode::Id::FMUL_IMM: {
+                // FMUL does not have 'abs' bits and only the second operand has a 'neg' bit.
+                op_b = GetOperandAbsNeg(op_b, false, instr.fmul.negate_b);
                 regs.SetRegisterToFloat(instr.gpr0, 0, op_a + " * " + op_b, 1, 1,
                                         instr.alu.saturate_d);
                 break;
@@ -905,11 +971,14 @@ private:
             case OpCode::Id::FADD_C:
             case OpCode::Id::FADD_R:
             case OpCode::Id::FADD_IMM: {
+                op_a = GetOperandAbsNeg(op_a, instr.alu.abs_a, instr.alu.negate_a);
+                op_b = GetOperandAbsNeg(op_b, instr.alu.abs_b, instr.alu.negate_b);
                 regs.SetRegisterToFloat(instr.gpr0, 0, op_a + " + " + op_b, 1, 1,
                                         instr.alu.saturate_d);
                 break;
             }
             case OpCode::Id::MUFU: {
+                op_a = GetOperandAbsNeg(op_a, instr.alu.abs_a, instr.alu.negate_a);
                 switch (instr.sub_op) {
                 case SubOp::Cos:
                     regs.SetRegisterToFloat(instr.gpr0, 0, "cos(" + op_a + ')', 1, 1,
@@ -949,6 +1018,9 @@ private:
             case OpCode::Id::FMNMX_C:
             case OpCode::Id::FMNMX_R:
             case OpCode::Id::FMNMX_IMM: {
+                op_a = GetOperandAbsNeg(op_a, instr.alu.abs_a, instr.alu.negate_a);
+                op_b = GetOperandAbsNeg(op_b, instr.alu.abs_b, instr.alu.negate_b);
+
                 std::string condition =
                     GetPredicateCondition(instr.alu.fmnmx.pred, instr.alu.fmnmx.negate_pred != 0);
                 std::string parameters = op_a + ',' + op_b;
@@ -962,7 +1034,7 @@ private:
             case OpCode::Id::RRO_R:
             case OpCode::Id::RRO_IMM: {
                 // Currently RRO is only implemented as a register move.
-                // Usage of `abs_b` and `negate_b` here should also be correct.
+                op_b = GetOperandAbsNeg(op_b, instr.alu.abs_b, instr.alu.negate_b);
                 regs.SetRegisterToFloat(instr.gpr0, 0, op_b, 1, 1);
                 LOG_WARNING(HW_GPU, "RRO instruction is incomplete");
                 break;
@@ -1099,7 +1171,9 @@ private:
                 if (instr.alu.lop32i.invert_b)
                     op_b = "~(" + op_b + ')';
 
-                WriteLogicOperation(instr.gpr0, instr.alu.lop32i.operation, op_a, op_b);
+                WriteLogicOperation(instr.gpr0, instr.alu.lop32i.operation, op_a, op_b,
+                                    Tegra::Shader::PredicateResultMode::None,
+                                    Tegra::Shader::Pred::UnusedIndex);
                 break;
             }
             default: {
@@ -1165,16 +1239,14 @@ private:
             case OpCode::Id::LOP_C:
             case OpCode::Id::LOP_R:
             case OpCode::Id::LOP_IMM: {
-                ASSERT_MSG(!instr.alu.lop.unk44, "Unimplemented");
-                ASSERT_MSG(instr.alu.lop.pred48 == Pred::UnusedIndex, "Unimplemented");
-
                 if (instr.alu.lop.invert_a)
                     op_a = "~(" + op_a + ')';
 
                 if (instr.alu.lop.invert_b)
                     op_b = "~(" + op_b + ')';
 
-                WriteLogicOperation(instr.gpr0, instr.alu.lop.operation, op_a, op_b);
+                WriteLogicOperation(instr.gpr0, instr.alu.lop.operation, op_a, op_b,
+                                    instr.alu.lop.pred_result_mode, instr.alu.lop.pred48);
                 break;
             }
             case OpCode::Id::IMNMX_C:
@@ -1239,8 +1311,6 @@ private:
             break;
         }
         case OpCode::Type::Conversion: {
-            ASSERT_MSG(!instr.conversion.negate_a, "Unimplemented");
-
             switch (opcode->GetId()) {
             case OpCode::Id::I2I_R: {
                 ASSERT_MSG(!instr.conversion.selector, "Unimplemented");
@@ -1843,13 +1913,13 @@ private:
                 ASSERT_MSG(instr.bra.constant_buffer == 0, "Constant buffer SSY is not supported");
 
                 u32 target = offset + instr.bra.GetBranchTarget();
-                shader.AddLine("ssy_target = " + std::to_string(target) + "u;");
+                EmitPushToSSYStack(target);
                 break;
             }
             case OpCode::Id::SYNC: {
                 // The SYNC opcode jumps to the address previously set by the SSY opcode
                 ASSERT(instr.flow.cond == Tegra::Shader::FlowCondition::Always);
-                shader.AddLine("{ jmp_to = ssy_target; break; }");
+                EmitPopFromSSYStack();
                 break;
             }
             case OpCode::Id::DEPBAR: {
@@ -1920,7 +1990,13 @@ private:
             } else {
                 labels.insert(subroutine.begin);
                 shader.AddLine("uint jmp_to = " + std::to_string(subroutine.begin) + "u;");
-                shader.AddLine("uint ssy_target = 0u;");
+
+                // TODO(Subv): Figure out the actual depth of the SSY stack, for now it seems
+                // unlikely that shaders will use 20 nested SSYs.
+                constexpr u32 SSY_STACK_SIZE = 20;
+                shader.AddLine("uint ssy_stack[" + std::to_string(SSY_STACK_SIZE) + "];");
+                shader.AddLine("uint ssy_stack_top = 0u;");
+
                 shader.AddLine("while (true) {");
                 ++shader.scope;
 

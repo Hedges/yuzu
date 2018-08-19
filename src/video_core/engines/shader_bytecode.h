@@ -12,6 +12,7 @@
 
 #include <boost/optional.hpp>
 
+#include "common/assert.h"
 #include "common/bit_field.h"
 #include "common/common_types.h"
 
@@ -79,6 +80,9 @@ union Attribute {
         // shader, and a tuple of (TessCoord.x, TessCoord.y, TessCoord.z, ~) when inside a Tess Eval
         // shader.
         TessCoordInstanceIDVertexID = 47,
+        // This attribute contains a tuple of (Unk, Unk, Unk, gl_FrontFacing) when inside a fragment
+        // shader. It is unknown what the other values contain.
+        FrontFacing = 63,
     };
 
     union {
@@ -214,6 +218,11 @@ enum class FlowCondition : u64 {
     Fcsm_Tr = 0x1C, // TODO(bunnei): What is this used for?
 };
 
+enum class PredicateResultMode : u64 {
+    None = 0x0,
+    NotZero = 0x3,
+};
+
 union Instruction {
     Instruction& operator=(const Instruction& instr) {
         value = instr.value;
@@ -254,7 +263,7 @@ union Instruction {
             BitField<39, 1, u64> invert_a;
             BitField<40, 1, u64> invert_b;
             BitField<41, 2, LogicOperation> operation;
-            BitField<44, 2, u64> unk44;
+            BitField<44, 2, PredicateResultMode> pred_result_mode;
             BitField<48, 3, Pred> pred48;
         } lop;
 
@@ -282,6 +291,10 @@ union Instruction {
             return static_cast<s32>((immediate ^ mask) - mask);
         }
     } alu;
+
+    union {
+        BitField<48, 1, u64> negate_b;
+    } fmul;
 
     union {
         BitField<48, 1, u64> is_signed;
@@ -438,16 +451,20 @@ union Instruction {
         }
 
         bool IsComponentEnabled(size_t component) const {
-            static constexpr std::array<std::array<u32, 8>, 4> mask_lut{
-                {{},
-                 {0x1, 0x2, 0x4, 0x8, 0x3},
-                 {0x1, 0x2, 0x4, 0x8, 0x3, 0x9, 0xa, 0xc},
-                 {0x7, 0xb, 0xd, 0xe, 0xf}}};
+            static constexpr std::array<std::array<u32, 8>, 4> mask_lut{{
+                {},
+                {0x1, 0x2, 0x4, 0x8, 0x3, 0x9, 0xa, 0xc},
+                {0x1, 0x2, 0x4, 0x8, 0x3, 0x9, 0xa, 0xc},
+                {0x7, 0xb, 0xd, 0xe, 0xf},
+            }};
 
             size_t index{gpr0.Value() != Register::ZeroIndex ? 1U : 0U};
             index |= gpr28.Value() != Register::ZeroIndex ? 2 : 0;
 
-            return ((1ull << component) & mask_lut[index][component_mask_selector]) != 0;
+            u32 mask = mask_lut[index][component_mask_selector];
+            // A mask of 0 means this instruction uses an unimplemented mask.
+            ASSERT(mask != 0);
+            return ((1ull << component) & mask) != 0;
         }
     } texs;
 
@@ -513,6 +530,8 @@ public:
         LD_A,
         LD_C,
         ST_A,
+        LDG, // Load from global memory
+        STG, // Store in global memory
         TEX,
         TEXQ, // Texture Query
         TEXS, // Texture Fetch with scalar/non-vec4 source/destinations
@@ -724,6 +743,8 @@ private:
             INST("1110111111011---", Id::LD_A, Type::Memory, "LD_A"),
             INST("1110111110010---", Id::LD_C, Type::Memory, "LD_C"),
             INST("1110111111110---", Id::ST_A, Type::Memory, "ST_A"),
+            INST("1110111011010---", Id::LDG, Type::Memory, "LDG"),
+            INST("1110111011011---", Id::STG, Type::Memory, "STG"),
             INST("110000----111---", Id::TEX, Type::Memory, "TEX"),
             INST("1101111101001---", Id::TEXQ, Type::Memory, "TEXQ"),
             INST("1101100---------", Id::TEXS, Type::Memory, "TEXS"),
