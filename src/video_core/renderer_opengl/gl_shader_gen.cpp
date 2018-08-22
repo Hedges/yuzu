@@ -7,7 +7,7 @@
 #include "video_core/renderer_opengl/gl_shader_decompiler.h"
 #include "video_core/renderer_opengl/gl_shader_gen.h"
 
-namespace GLShader {
+namespace OpenGL::GLShader {
 
 using Tegra::Engines::Maxwell3D;
 
@@ -87,7 +87,7 @@ ProgramResult GenerateFragmentShader(const ShaderSetup& setup, const MaxwellFSCo
             .get_value_or({});
     out += R"(
 in vec4 position;
-out vec4 color;
+layout(location = 0) out vec4 color[8];
 
 layout (std140) uniform fs_config {
     vec4 viewport_flip;
@@ -103,4 +103,4 @@ void main() {
     return {out, program.second};
 }
 
-} // namespace GLShader
+} // namespace OpenGL::GLShader

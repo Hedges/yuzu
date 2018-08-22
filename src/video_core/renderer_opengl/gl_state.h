@@ -9,6 +9,8 @@
 
 #include "video_core/engines/maxwell_3d.h"
 
+namespace OpenGL {
+
 using Regs = Tegra::Engines::Maxwell3D::Regs;
 
 namespace TextureUnits {
@@ -83,7 +85,10 @@ public:
         } color; // GL_BLEND_COLOR
     } blend;
 
-    GLenum logic_op; // GL_LOGIC_OP_MODE
+    struct {
+        bool enabled; // GL_LOGIC_OP_MODE
+        GLenum operation;
+    } logic_op;
 
     // 3 texture units - one for each that is used in PICA fragment shader emulation
     struct TextureUnit {
@@ -160,3 +165,5 @@ public:
 private:
     static OpenGLState cur_state;
 };
+
+} // namespace OpenGL

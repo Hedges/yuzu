@@ -10,6 +10,8 @@
 #include "common/logging/log.h"
 #include "video_core/engines/maxwell_3d.h"
 
+namespace OpenGL {
+
 using GLvec2 = std::array<GLfloat, 2>;
 using GLvec3 = std::array<GLfloat, 3>;
 using GLvec4 = std::array<GLfloat, 4>;
@@ -107,6 +109,8 @@ inline GLenum PrimitiveTopology(Maxwell::PrimitiveTopology topology) {
     switch (topology) {
     case Maxwell::PrimitiveTopology::Points:
         return GL_POINTS;
+    case Maxwell::PrimitiveTopology::Lines:
+        return GL_LINES;
     case Maxwell::PrimitiveTopology::LineStrip:
         return GL_LINE_STRIP;
     case Maxwell::PrimitiveTopology::Triangles:
@@ -317,4 +321,45 @@ inline GLenum CullFace(Maxwell::Cull::CullFace cull_face) {
     return {};
 }
 
+inline GLenum LogicOp(Maxwell::LogicOperation operation) {
+    switch (operation) {
+    case Maxwell::LogicOperation::Clear:
+        return GL_CLEAR;
+    case Maxwell::LogicOperation::And:
+        return GL_AND;
+    case Maxwell::LogicOperation::AndReverse:
+        return GL_AND_REVERSE;
+    case Maxwell::LogicOperation::Copy:
+        return GL_COPY;
+    case Maxwell::LogicOperation::AndInverted:
+        return GL_AND_INVERTED;
+    case Maxwell::LogicOperation::NoOp:
+        return GL_NOOP;
+    case Maxwell::LogicOperation::Xor:
+        return GL_XOR;
+    case Maxwell::LogicOperation::Or:
+        return GL_OR;
+    case Maxwell::LogicOperation::Nor:
+        return GL_NOR;
+    case Maxwell::LogicOperation::Equiv:
+        return GL_EQUIV;
+    case Maxwell::LogicOperation::Invert:
+        return GL_INVERT;
+    case Maxwell::LogicOperation::OrReverse:
+        return GL_OR_REVERSE;
+    case Maxwell::LogicOperation::CopyInverted:
+        return GL_COPY_INVERTED;
+    case Maxwell::LogicOperation::OrInverted:
+        return GL_OR_INVERTED;
+    case Maxwell::LogicOperation::Nand:
+        return GL_NAND;
+    case Maxwell::LogicOperation::Set:
+        return GL_SET;
+    }
+    LOG_CRITICAL(Render_OpenGL, "Unimplemented logic operation={}", static_cast<u32>(operation));
+    UNREACHABLE();
+    return {};
+}
+
 } // namespace MaxwellToGL
+} // namespace OpenGL
