@@ -36,8 +36,8 @@ MICROPROFILE_DEFINE(OpenGL_Drawing, "OpenGL", "Drawing", MP_RGB(128, 128, 192));
 MICROPROFILE_DEFINE(OpenGL_Blits, "OpenGL", "Blits", MP_RGB(100, 100, 255));
 MICROPROFILE_DEFINE(OpenGL_CacheManagement, "OpenGL", "Cache Mgmt", MP_RGB(100, 255, 100));
 
-RasterizerOpenGL::RasterizerOpenGL(Core::Frontend::EmuWindow& window)
-    : emu_window{window}, stream_buffer(GL_ARRAY_BUFFER, STREAM_BUFFER_SIZE) {
+RasterizerOpenGL::RasterizerOpenGL(Core::Frontend::EmuWindow& window, ScreenInfo& info)
+    : emu_window{window}, screen_info{info}, stream_buffer(GL_ARRAY_BUFFER, STREAM_BUFFER_SIZE) {
     // Create sampler objects
     for (size_t i = 0; i < texture_samplers.size(); ++i) {
         texture_samplers[i].Create();
@@ -98,7 +98,8 @@ RasterizerOpenGL::~RasterizerOpenGL() {}
 std::pair<u8*, GLintptr> RasterizerOpenGL::SetupVertexArrays(u8* array_ptr,
                                                              GLintptr buffer_offset) {
     MICROPROFILE_SCOPE(OpenGL_VAO);
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
+    const auto& regs = gpu.regs;
 
     state.draw.vertex_array = hw_vao.handle;
     state.draw.vertex_buffer = stream_buffer.GetHandle();
@@ -110,8 +111,12 @@ std::pair<u8*, GLintptr> RasterizerOpenGL::SetupVertexArrays(u8* array_ptr,
         if (!vertex_array.IsEnabled())
             continue;
 
-        const Tegra::GPUVAddr start = vertex_array.StartAddress();
+        Tegra::GPUVAddr start = vertex_array.StartAddress();
         const Tegra::GPUVAddr end = regs.vertex_array_limit[index].LimitAddress();
+
+        if (regs.instanced_arrays.IsInstancingEnabled(index) && vertex_array.divisor != 0) {
+            start += vertex_array.stride * (gpu.state.current_instance / vertex_array.divisor);
+        }
 
         ASSERT(end > start);
         u64 size = end - start + 1;
@@ -124,7 +129,15 @@ std::pair<u8*, GLintptr> RasterizerOpenGL::SetupVertexArrays(u8* array_ptr,
         glBindVertexBuffer(index, stream_buffer.GetHandle(), vertex_buffer_offset,
                            vertex_array.stride);
 
-        ASSERT_MSG(vertex_array.divisor == 0, "Instanced vertex arrays are not supported");
+        if (regs.instanced_arrays.IsInstancingEnabled(index) && vertex_array.divisor != 0) {
+            // Tell OpenGL that this is an instanced vertex buffer to prevent accessing different
+            // indexes on each vertex. We do the instance indexing manually by incrementing the
+            // start address of the vertex buffer.
+            glVertexBindingDivisor(index, 1);
+        } else {
+            // Disable the vertex buffer instancing.
+            glVertexBindingDivisor(index, 0);
+        }
     }
 
     // Use the vertex array as-is, assumes that the data is formatted correctly for OpenGL.
@@ -291,7 +304,8 @@ bool RasterizerOpenGL::AccelerateDrawBatch(bool is_indexed) {
 }
 
 std::pair<Surface, Surface> RasterizerOpenGL::ConfigureFramebuffers(bool using_color_fb,
-                                                                    bool using_depth_fb) {
+                                                                    bool using_depth_fb,
+                                                                    bool preserve_contents) {
     const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
 
     if (regs.rt[0].format == Tegra::RenderTargetFormat::NONE) {
@@ -314,7 +328,7 @@ std::pair<Surface, Surface> RasterizerOpenGL::ConfigureFramebuffers(bool using_c
     Surface depth_surface;
     MathUtil::Rectangle<u32> surfaces_rect;
     std::tie(color_surface, depth_surface, surfaces_rect) =
-        res_cache.GetFramebufferSurfaces(using_color_fb, using_depth_fb);
+        res_cache.GetFramebufferSurfaces(using_color_fb, using_depth_fb, preserve_contents);
 
     const MathUtil::Rectangle<s32> viewport_rect{regs.viewport_transform[0].GetRect()};
     const MathUtil::Rectangle<u32> draw_rect{
@@ -377,7 +391,7 @@ void RasterizerOpenGL::Clear() {
     ScopeAcquireGLContext acquire_context{emu_window};
 
     auto [dirty_color_surface, dirty_depth_surface] =
-        ConfigureFramebuffers(use_color_fb, use_depth_fb);
+        ConfigureFramebuffers(use_color_fb, use_depth_fb, false);
 
     // TODO(Subv): Support clearing only partial colors.
     glClearColor(regs.clear_color[0], regs.clear_color[1], regs.clear_color[2],
@@ -432,10 +446,11 @@ void RasterizerOpenGL::DrawArrays() {
     ScopeAcquireGLContext acquire_context{emu_window};
 
     auto [dirty_color_surface, dirty_depth_surface] =
-        ConfigureFramebuffers(true, regs.zeta.Address() != 0 && regs.zeta_enable != 0);
+        ConfigureFramebuffers(true, regs.zeta.Address() != 0 && regs.zeta_enable != 0, true);
 
     SyncDepthTestState();
     SyncBlendState();
+    SyncLogicOpState();
     SyncCullMode();
 
     // TODO(bunnei): Sync framebuffer_scale uniform here
@@ -561,8 +576,7 @@ bool RasterizerOpenGL::AccelerateFill(const void* config) {
 }
 
 bool RasterizerOpenGL::AccelerateDisplay(const Tegra::FramebufferConfig& config,
-                                         VAddr framebuffer_addr, u32 pixel_stride,
-                                         ScreenInfo& screen_info) {
+                                         VAddr framebuffer_addr, u32 pixel_stride) {
     if (!framebuffer_addr) {
         return {};
     }
@@ -834,6 +848,9 @@ void RasterizerOpenGL::SyncBlendState() {
     if (!state.blend.enabled)
         return;
 
+    ASSERT_MSG(regs.logic_op.enable == 0,
+               "Blending and logic op can't be enabled at the same time.");
+
     ASSERT_MSG(regs.independent_blend_enable == 1, "Only independent blending is implemented");
     ASSERT_MSG(!regs.independent_blend[0].separate_alpha, "Unimplemented");
     state.blend.rgb_equation = MaxwellToGL::BlendEquation(regs.independent_blend[0].equation_rgb);
@@ -842,4 +859,18 @@ void RasterizerOpenGL::SyncBlendState() {
     state.blend.a_equation = MaxwellToGL::BlendEquation(regs.independent_blend[0].equation_a);
     state.blend.src_a_func = MaxwellToGL::BlendFunc(regs.independent_blend[0].factor_source_a);
     state.blend.dst_a_func = MaxwellToGL::BlendFunc(regs.independent_blend[0].factor_dest_a);
+}
+
+void RasterizerOpenGL::SyncLogicOpState() {
+    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+
+    // TODO(Subv): Support more than just render target 0.
+    state.logic_op.enabled = regs.logic_op.enable != 0;
+
+    if (!state.logic_op.enabled)
+        return;
+
+    ASSERT_MSG(regs.blend.enable == 0, "Blending and logic op can't be enabled at the same time.");
+
+    state.logic_op.operation = MaxwellToGL::LogicOp(regs.logic_op.operation);
 }

@@ -30,7 +30,7 @@ class EmuWindow;
 
 class RasterizerOpenGL : public VideoCore::RasterizerInterface {
 public:
-    explicit RasterizerOpenGL(Core::Frontend::EmuWindow& renderer);
+    explicit RasterizerOpenGL(Core::Frontend::EmuWindow& renderer, ScreenInfo& info);
     ~RasterizerOpenGL() override;
 
     void DrawArrays() override;
@@ -43,8 +43,8 @@ public:
     bool AccelerateDisplayTransfer(const void* config) override;
     bool AccelerateTextureCopy(const void* config) override;
     bool AccelerateFill(const void* config) override;
-    bool AccelerateDisplay(const Tegra::FramebufferConfig& framebuffer, VAddr framebuffer_addr,
-                           u32 pixel_stride, ScreenInfo& screen_info) override;
+    bool AccelerateDisplay(const Tegra::FramebufferConfig& config, VAddr framebuffer_addr,
+                           u32 pixel_stride) override;
     bool AccelerateDrawBatch(bool is_indexed) override;
 
     /// OpenGL shader generated for a given Maxwell register state
@@ -87,7 +87,8 @@ private:
 
     /// Configures the color and depth framebuffer states and returns the dirty <Color, Depth>
     /// surfaces if writing was enabled.
-    std::pair<Surface, Surface> ConfigureFramebuffers(bool using_color_fb, bool using_depth_fb);
+    std::pair<Surface, Surface> ConfigureFramebuffers(bool using_color_fb, bool using_depth_fb,
+                                                      bool preserve_contents);
 
     /// Binds the framebuffer color and depth surface
     void BindFramebufferSurfaces(const Surface& color_surface, const Surface& depth_surface,
@@ -141,6 +142,9 @@ private:
     /// Syncs the blend state to match the guest state
     void SyncBlendState();
 
+    /// Syncs the LogicOp state to match the guest state
+    void SyncLogicOpState();
+
     bool has_ARB_direct_state_access = false;
     bool has_ARB_separate_shader_objects = false;
     bool has_ARB_vertex_attrib_binding = false;
@@ -150,6 +154,8 @@ private:
     RasterizerCacheOpenGL res_cache;
 
     Core::Frontend::EmuWindow& emu_window;
+
+    ScreenInfo& screen_info;
 
     std::unique_ptr<GLShader::ProgramManager> shader_program_manager;
     OGLVertexArray sw_vao;

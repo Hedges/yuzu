@@ -26,6 +26,7 @@ using Tegra::Shader::Sampler;
 using Tegra::Shader::SubOp;
 
 constexpr u32 PROGRAM_END = MAX_PROGRAM_CODE_LENGTH;
+constexpr u32 PROGRAM_HEADER_SIZE = 0x50;
 
 class DecompileFail : public std::runtime_error {
 public:
@@ -620,6 +621,23 @@ public:
     }
 
 private:
+    // Shader program header for a Fragment Shader.
+    struct FragmentHeader {
+        INSERT_PADDING_WORDS(5);
+        INSERT_PADDING_WORDS(13);
+        u32 enabled_color_outputs;
+        union {
+            BitField<0, 1, u32> writes_samplemask;
+            BitField<1, 1, u32> writes_depth;
+        };
+
+        bool IsColorComponentOutputEnabled(u32 render_target, u32 component) const {
+            u32 bit = render_target * 4 + component;
+            return enabled_color_outputs & (1 << bit);
+        }
+    };
+    static_assert(sizeof(FragmentHeader) == PROGRAM_HEADER_SIZE, "FragmentHeader size is wrong");
+
     /// Gets the Subroutine object corresponding to the specified address.
     const Subroutine& GetSubroutine(u32 begin, u32 end) const {
         auto iter = subroutines.find(Subroutine{begin, end, suffix});
@@ -839,29 +857,29 @@ private:
         ++shader.scope;
         shader.AddLine(coord);
 
-        // TEXS has two destination registers. RG goes into gpr0+0 and gpr0+1, and BA
-        // goes into gpr28+0 and gpr28+1
-        size_t texs_offset{};
+        // TEXS has two destination registers and a swizzle. The first two elements in the swizzle
+        // go into gpr0+0 and gpr0+1, and the rest goes into gpr28+0 and gpr28+1
 
-        size_t src_elem{};
-        for (const auto& dest : {instr.gpr0.Value(), instr.gpr28.Value()}) {
-            size_t dest_elem{};
-            for (unsigned elem = 0; elem < 2; ++elem) {
-                if (!instr.texs.IsComponentEnabled(src_elem++)) {
-                    // Skip disabled components
-                    continue;
-                }
-                regs.SetRegisterToFloat(dest, elem + texs_offset, texture, 1, 4, false,
-                                        dest_elem++);
+        size_t written_components = 0;
+        for (u32 component = 0; component < 4; ++component) {
+            if (!instr.texs.IsComponentEnabled(component)) {
+                continue;
             }
 
-            if (!instr.texs.HasTwoDestinations()) {
-                // Skip the second destination
-                break;
+            if (written_components < 2) {
+                // Write the first two swizzle components to gpr0 and gpr0+1
+                regs.SetRegisterToFloat(instr.gpr0, component, texture, 1, 4, false,
+                                        written_components % 2);
+            } else {
+                ASSERT(instr.texs.HasTwoDestinations());
+                // Write the rest of the swizzle components to gpr28 and gpr28+1
+                regs.SetRegisterToFloat(instr.gpr28, component, texture, 1, 4, false,
+                                        written_components % 2);
             }
 
-            texs_offset += 2;
+            ++written_components;
         }
+
         --shader.scope;
         shader.AddLine('}');
     }
@@ -891,6 +909,36 @@ private:
         shader.AddLine("break;");
         --shader.scope;
         shader.AddLine('}');
+    }
+
+    /// Writes the output values from a fragment shader to the corresponding GLSL output variables.
+    void EmitFragmentOutputsWrite() {
+        ASSERT(stage == Maxwell3D::Regs::ShaderStage::Fragment);
+        FragmentHeader header;
+        std::memcpy(&header, program_code.data(), PROGRAM_HEADER_SIZE);
+
+        ASSERT_MSG(header.writes_samplemask == 0, "Samplemask write is unimplemented");
+
+        // Write the color outputs using the data in the shader registers, disabled
+        // rendertargets/components are skipped in the register assignment.
+        u32 current_reg = 0;
+        for (u32 render_target = 0; render_target < Maxwell3D::Regs::NumRenderTargets;
+             ++render_target) {
+            // TODO(Subv): Figure out how dual-source blending is configured in the Switch.
+            for (u32 component = 0; component < 4; ++component) {
+                if (header.IsColorComponentOutputEnabled(render_target, component)) {
+                    shader.AddLine(fmt::format("color[{}][{}] = {};", render_target, component,
+                                               regs.GetRegisterAsFloat(current_reg)));
+                    ++current_reg;
+                }
+            }
+        }
+
+        if (header.writes_depth) {
+            // The depth output is always 2 registers after the last color output, and current_reg
+            // already contains one past the last color register.
+            shader.AddLine("gl_FragDepth = " + regs.GetRegisterAsFloat(current_reg + 1) + ';');
+        }
     }
 
     /**
@@ -1550,6 +1598,57 @@ private:
                 WriteTexsInstruction(instr, coord, texture);
                 break;
             }
+            case OpCode::Id::TLD4: {
+                ASSERT(instr.tld4.texture_type == Tegra::Shader::TextureType::Texture2D);
+                ASSERT(instr.tld4.array == 0);
+                std::string coord{};
+
+                switch (instr.tld4.texture_type) {
+                case Tegra::Shader::TextureType::Texture2D: {
+                    std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                    std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    break;
+                }
+                default:
+                    LOG_CRITICAL(HW_GPU, "Unhandled texture type {}",
+                                 static_cast<u32>(instr.tld4.texture_type.Value()));
+                    UNREACHABLE();
+                }
+
+                const std::string sampler = GetSampler(instr.sampler);
+                // Add an extra scope and declare the texture coords inside to prevent
+                // overwriting them in case they are used as outputs of the texs instruction.
+                shader.AddLine("{");
+                ++shader.scope;
+                shader.AddLine(coord);
+                const std::string texture = "textureGather(" + sampler + ", coords, " +
+                                            std::to_string(instr.tld4.component) + ')';
+
+                size_t dest_elem{};
+                for (size_t elem = 0; elem < 4; ++elem) {
+                    if (!instr.tex.IsComponentEnabled(elem)) {
+                        // Skip disabled components
+                        continue;
+                    }
+                    regs.SetRegisterToFloat(instr.gpr0, elem, texture, 1, 4, false, dest_elem);
+                    ++dest_elem;
+                }
+                --shader.scope;
+                shader.AddLine("}");
+                break;
+            }
+            case OpCode::Id::TLD4S: {
+                const std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
+                const std::string op_b = regs.GetRegisterAsFloat(instr.gpr20);
+                // TODO(Subv): Figure out how the sampler type is encoded in the TLD4S instruction.
+                const std::string sampler = GetSampler(instr.sampler);
+                const std::string coord = "vec2 coords = vec2(" + op_a + ", " + op_b + ");";
+                const std::string texture = "textureGather(" + sampler + ", coords, " +
+                                            std::to_string(instr.tld4s.component) + ')';
+                WriteTexsInstruction(instr, coord, texture);
+                break;
+            }
             default: {
                 LOG_CRITICAL(HW_GPU, "Unhandled memory instruction: {}", opcode->GetName());
                 UNREACHABLE();
@@ -1849,12 +1948,8 @@ private:
         default: {
             switch (opcode->GetId()) {
             case OpCode::Id::EXIT: {
-                // Final color output is currently hardcoded to GPR0-3 for fragment shaders
                 if (stage == Maxwell3D::Regs::ShaderStage::Fragment) {
-                    shader.AddLine("color.r = " + regs.GetRegisterAsFloat(0) + ';');
-                    shader.AddLine("color.g = " + regs.GetRegisterAsFloat(1) + ';');
-                    shader.AddLine("color.b = " + regs.GetRegisterAsFloat(2) + ';');
-                    shader.AddLine("color.a = " + regs.GetRegisterAsFloat(3) + ';');
+                    EmitFragmentOutputsWrite();
                 }
 
                 switch (instr.flow.cond) {

@@ -16,6 +16,7 @@
 #include "common/string_util.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
+#include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/vfs_real.h"
 #include "core/loader/loader.h"
@@ -326,7 +327,7 @@ void GameList::PopupContextMenu(const QPoint& menu_location) {
     QAction* open_save_location = context_menu.addAction(tr("Open Save Data Location"));
     open_save_location->setEnabled(program_id != 0);
     connect(open_save_location, &QAction::triggered,
-            [&]() { emit OpenSaveFolderRequested(program_id); });
+            [&]() { emit OpenFolderRequested(program_id, GameListOpenTarget::SaveData); });
     context_menu.exec(tree_view->viewport()->mapToGlobal(menu_location));
 }
 
@@ -438,7 +439,7 @@ void GameListWorker::AddInstalledTitlesToGameList() {
 
         std::vector<u8> icon;
         std::string name;
-        u64 program_id;
+        u64 program_id = 0;
         loader->ReadProgramId(program_id);
 
         const auto& control =
@@ -509,7 +510,7 @@ void GameListWorker::AddFstEntriesToGameList(const std::string& dir_path, unsign
             std::vector<u8> icon;
             const auto res1 = loader->ReadIcon(icon);
 
-            u64 program_id;
+            u64 program_id = 0;
             const auto res2 = loader->ReadProgramId(program_id);
 
             std::string name = " ";

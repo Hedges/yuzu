@@ -27,7 +27,10 @@
 #include "common/string_util.h"
 #include "core/core.h"
 #include "core/crypto/key_manager.h"
+#include "core/file_sys/bis_factory.h"
 #include "core/file_sys/card_image.h"
+#include "core/file_sys/registered_cache.h"
+#include "core/file_sys/savedata_factory.h"
 #include "core/file_sys/vfs_real.h"
 #include "core/gdbstub/gdbstub.h"
 #include "core/loader/loader.h"
@@ -213,6 +216,14 @@ void GMainWindow::InitializeRecentFileMenuActions() {
 
         ui.menu_recent_files->addAction(actions_recent_files[i]);
     }
+    ui.menu_recent_files->addSeparator();
+    QAction* action_clear_recent_files = new QAction(this);
+    action_clear_recent_files->setText(tr("Clear Recent Files"));
+    connect(action_clear_recent_files, &QAction::triggered, this, [this] {
+        UISettings::values.recent_files.clear();
+        UpdateRecentFiles();
+    });
+    ui.menu_recent_files->addAction(action_clear_recent_files);
 
     UpdateRecentFiles();
 }
@@ -221,10 +232,15 @@ void GMainWindow::InitializeHotkeys() {
     hotkey_registry.RegisterHotkey("Main Window", "Load File", QKeySequence::Open);
     hotkey_registry.RegisterHotkey("Main Window", "Start Emulation");
     hotkey_registry.RegisterHotkey("Main Window", "Continue/Pause", QKeySequence(Qt::Key_F4));
+    hotkey_registry.RegisterHotkey("Main Window", "Restart", QKeySequence(Qt::Key_F5));
     hotkey_registry.RegisterHotkey("Main Window", "Fullscreen", QKeySequence::FullScreen);
     hotkey_registry.RegisterHotkey("Main Window", "Exit Fullscreen", QKeySequence(Qt::Key_Escape),
                                    Qt::ApplicationShortcut);
     hotkey_registry.RegisterHotkey("Main Window", "Toggle Speed Limit", QKeySequence("CTRL+Z"),
+                                   Qt::ApplicationShortcut);
+    hotkey_registry.RegisterHotkey("Main Window", "Increase Speed Limit", QKeySequence("+"),
+                                   Qt::ApplicationShortcut);
+    hotkey_registry.RegisterHotkey("Main Window", "Decrease Speed Limit", QKeySequence("-"),
                                    Qt::ApplicationShortcut);
     hotkey_registry.LoadHotkeys();
 
@@ -242,6 +258,12 @@ void GMainWindow::InitializeHotkeys() {
                     }
                 }
             });
+    connect(hotkey_registry.GetHotkey("Main Window", "Restart", this), &QShortcut::activated, this,
+            [this] {
+                if (!Core::System::GetInstance().IsPoweredOn())
+                    return;
+                BootGame(QString(game_path));
+            });
     connect(hotkey_registry.GetHotkey("Main Window", "Fullscreen", render_window),
             &QShortcut::activated, ui.action_Fullscreen, &QAction::trigger);
     connect(hotkey_registry.GetHotkey("Main Window", "Fullscreen", render_window),
@@ -255,8 +277,23 @@ void GMainWindow::InitializeHotkeys() {
             });
     connect(hotkey_registry.GetHotkey("Main Window", "Toggle Speed Limit", this),
             &QShortcut::activated, this, [&] {
-                Settings::values.toggle_framelimit = !Settings::values.toggle_framelimit;
+                Settings::values.use_frame_limit = !Settings::values.use_frame_limit;
                 UpdateStatusBar();
+            });
+    constexpr u16 SPEED_LIMIT_STEP = 5;
+    connect(hotkey_registry.GetHotkey("Main Window", "Increase Speed Limit", this),
+            &QShortcut::activated, this, [&] {
+                if (Settings::values.frame_limit < 9999 - SPEED_LIMIT_STEP) {
+                    Settings::values.frame_limit += SPEED_LIMIT_STEP;
+                    UpdateStatusBar();
+                }
+            });
+    connect(hotkey_registry.GetHotkey("Main Window", "Decrease Speed Limit", this),
+            &QShortcut::activated, this, [&] {
+                if (Settings::values.frame_limit > SPEED_LIMIT_STEP) {
+                    Settings::values.frame_limit -= SPEED_LIMIT_STEP;
+                    UpdateStatusBar();
+                }
             });
 }
 
@@ -301,8 +338,7 @@ void GMainWindow::RestoreUIState() {
 
 void GMainWindow::ConnectWidgetEvents() {
     connect(game_list, &GameList::GameChosen, this, &GMainWindow::OnGameListLoadFile);
-    connect(game_list, &GameList::OpenSaveFolderRequested, this,
-            &GMainWindow::OnGameListOpenSaveFolder);
+    connect(game_list, &GameList::OpenFolderRequested, this, &GMainWindow::OnGameListOpenFolder);
 
     connect(this, &GMainWindow::EmulationStarting, render_window,
             &GRenderWindow::OnEmulationStarting);
@@ -326,6 +362,7 @@ void GMainWindow::ConnectMenuEvents() {
     connect(ui.action_Start, &QAction::triggered, this, &GMainWindow::OnStartGame);
     connect(ui.action_Pause, &QAction::triggered, this, &GMainWindow::OnPauseGame);
     connect(ui.action_Stop, &QAction::triggered, this, &GMainWindow::OnStopGame);
+    connect(ui.action_Restart, &QAction::triggered, this, [this] { BootGame(QString(game_path)); });
     connect(ui.action_Configure, &QAction::triggered, this, &GMainWindow::OnConfigure);
 
     // View
@@ -475,6 +512,8 @@ bool GMainWindow::LoadROM(const QString& filename) {
         }
         return false;
     }
+    game_path = filename;
+
     Core::Telemetry().AddField(Telemetry::FieldType::App, "Frontend", "Qt");
     return true;
 }
@@ -533,6 +572,7 @@ void GMainWindow::ShutdownGame() {
     ui.action_Start->setText(tr("Start"));
     ui.action_Pause->setEnabled(false);
     ui.action_Stop->setEnabled(false);
+    ui.action_Restart->setEnabled(false);
     render_window->hide();
     game_list->show();
     game_list->setFilterFocus();
@@ -545,6 +585,8 @@ void GMainWindow::ShutdownGame() {
     emu_frametime_label->setVisible(false);
 
     emulation_running = false;
+
+    game_path.clear();
 }
 
 void GMainWindow::StoreRecentFile(const QString& filename) {
@@ -582,8 +624,37 @@ void GMainWindow::OnGameListLoadFile(QString game_path) {
     BootGame(game_path);
 }
 
-void GMainWindow::OnGameListOpenSaveFolder(u64 program_id) {
-    UNIMPLEMENTED();
+void GMainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target) {
+    std::string path;
+    std::string open_target;
+    switch (target) {
+    case GameListOpenTarget::SaveData: {
+        open_target = "Save Data";
+        const std::string nand_dir = FileUtil::GetUserPath(FileUtil::UserPath::NANDDir);
+        ASSERT(program_id != 0);
+        // TODO(tech4me): Update this to work with arbitrary user profile
+        // Refer to core/hle/service/acc/profile_manager.cpp ProfileManager constructor
+        constexpr u128 user_id = {1, 0};
+        path = nand_dir + FileSys::SaveDataFactory::GetFullPath(FileSys::SaveDataSpaceId::NandUser,
+                                                                FileSys::SaveDataType::SaveData,
+                                                                program_id, user_id, 0);
+        break;
+    }
+    default:
+        UNIMPLEMENTED();
+    }
+
+    const QString qpath = QString::fromStdString(path);
+
+    const QDir dir(qpath);
+    if (!dir.exists()) {
+        QMessageBox::warning(this,
+                             tr("Error Opening %1 Folder").arg(QString::fromStdString(open_target)),
+                             tr("Folder does not exist!"));
+        return;
+    }
+    LOG_INFO(Frontend, "Opening {} path for program_id={:016x}", open_target, program_id);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(qpath));
 }
 
 void GMainWindow::OnMenuLoadFile() {
@@ -809,6 +880,7 @@ void GMainWindow::OnPauseGame() {
     ui.action_Start->setEnabled(true);
     ui.action_Pause->setEnabled(false);
     ui.action_Stop->setEnabled(true);
+    ui.action_Restart->setEnabled(true);
 }
 
 void GMainWindow::OnStopGame() {
@@ -910,7 +982,13 @@ void GMainWindow::UpdateStatusBar() {
 
     auto results = Core::System::GetInstance().GetAndResetPerfStats();
 
-    emu_speed_label->setText(tr("Speed: %1%").arg(results.emulation_speed * 100.0, 0, 'f', 0));
+    if (Settings::values.use_frame_limit) {
+        emu_speed_label->setText(tr("Speed: %1% / %2%")
+                                     .arg(results.emulation_speed * 100.0, 0, 'f', 0)
+                                     .arg(Settings::values.frame_limit));
+    } else {
+        emu_speed_label->setText(tr("Speed: %1%").arg(results.emulation_speed * 100.0, 0, 'f', 0));
+    }
     game_fps_label->setText(tr("Game: %1 FPS").arg(results.game_fps, 0, 'f', 0));
     emu_frametime_label->setText(tr("Frame: %1 ms").arg(results.frametime * 1000.0, 0, 'f', 2));
 
