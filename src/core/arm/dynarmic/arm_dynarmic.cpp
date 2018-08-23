@@ -135,7 +135,7 @@ std::unique_ptr<Dynarmic::A64::Jit> ARM_Dynarmic::MakeJit() const {
     config.ctr_el0 = 0x8444c004;
 
     // Unpredictable instructions
-    config.define_unpredictable_behaviour = !GDBStub::IsServerEnabled();
+    config.define_unpredictable_behaviour = true;
 
     return std::make_unique<Dynarmic::A64::Jit>(config);
 }
