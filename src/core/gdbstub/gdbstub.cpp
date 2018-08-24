@@ -918,10 +918,6 @@ static void ReadMemory() {
         SendReply("E01");
     }
 
-    if (addr < Memory::PROCESS_IMAGE_VADDR || addr >= Memory::MAP_REGION_VADDR_END) {
-        return SendReply("E00");
-    }
-
     if (!Memory::IsValidVirtualAddress(addr)) {
         return SendReply("E00");
     }
