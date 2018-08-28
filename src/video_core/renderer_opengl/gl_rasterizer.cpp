@@ -211,7 +211,6 @@ std::pair<u8*, GLintptr> RasterizerOpenGL::SetupShaders(u8* buffer_ptr, GLintptr
         buffer_ptr += sizeof(ubo);
         buffer_offset += sizeof(ubo);
 
-        const Tegra::GPUVAddr addr{gpu.regs.code_address.CodeAddress() + shader_config.offset};
         Shader shader{shader_cache.GetStageProgram(program)};
 
         switch (program) {
@@ -425,8 +424,8 @@ std::tuple<u8*, GLintptr, GLintptr> RasterizerOpenGL::UploadMemory(u8* buffer_pt
     std::tie(buffer_ptr, buffer_offset) = AlignBuffer(buffer_ptr, buffer_offset, alignment);
     GLintptr uploaded_offset = buffer_offset;
 
-    const auto& memory_manager = Core::System::GetInstance().GPU().memory_manager;
-    const boost::optional<VAddr> cpu_addr{memory_manager->GpuToCpuAddress(gpu_addr)};
+    auto& memory_manager = Core::System::GetInstance().GPU().MemoryManager();
+    const boost::optional<VAddr> cpu_addr{memory_manager.GpuToCpuAddress(gpu_addr)};
     Memory::ReadBlock(*cpu_addr, buffer_ptr, size);
 
     buffer_ptr += size;
@@ -459,7 +458,6 @@ void RasterizerOpenGL::DrawArrays() {
     // Draw the vertex batch
     const bool is_indexed = accelerate_draw == AccelDraw::Indexed;
     const u64 index_buffer_size{regs.index_array.count * regs.index_array.FormatSizeInBytes()};
-    const unsigned vertex_num{is_indexed ? regs.index_array.count : regs.vertex_buffer.count};
 
     state.draw.vertex_buffer = stream_buffer.GetHandle();
     state.Apply();
