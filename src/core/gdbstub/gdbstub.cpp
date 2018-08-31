@@ -156,6 +156,7 @@ u16 gdbstub_port = 24689;
 bool halt_loop = true;
 bool step_loop = false;
 bool send_trap = false;
+bool packet_tick = false;
 
 // If set to false, the server will never be started and no
 // gdbstub-related functions will be executed.
@@ -918,6 +919,10 @@ static void ReadMemory() {
         SendReply("E01");
     }
 
+    if (addr < Memory::PROCESS_IMAGE_VADDR || addr >= Memory::MAP_REGION_VADDR_END) {
+        return SendReply("E00");
+    }
+
     if (!Memory::IsValidVirtualAddress(addr)) {
         return SendReply("E00");
     }
@@ -1103,6 +1108,8 @@ static void RemoveBreakpoint() {
 }
 
 void HandlePacket() {
+    packet_tick = true;
+
     if (!IsConnected()) {
         return;
     }
@@ -1314,6 +1321,12 @@ void SetCpuStepFlag(bool is_step) {
 }
 
 void SendTrap(Kernel::Thread* thread, int trap) {
+    if (packet_tick) {
+        packet_tick = false;
+    } else {
+        send_trap = false;
+    }
+
     if (!send_trap) {
         return;
     }

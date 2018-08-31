@@ -216,11 +216,11 @@ void RegisteredCache::ProcessFiles(const std::vector<NcaID>& ids) {
 
         const auto section0 = nca->GetSubdirectories()[0];
 
-        for (const auto& file : section0->GetFiles()) {
-            if (file->GetExtension() != "cnmt")
+        for (const auto& section0_file : section0->GetFiles()) {
+            if (section0_file->GetExtension() != "cnmt")
                 continue;
 
-            meta.insert_or_assign(nca->GetTitleId(), CNMT(file));
+            meta.insert_or_assign(nca->GetTitleId(), CNMT(section0_file));
             meta_id.insert_or_assign(nca->GetTitleId(), id);
             break;
         }
@@ -254,12 +254,26 @@ RegisteredCache::RegisteredCache(VirtualDir dir_, RegisteredCacheParsingFunction
     Refresh();
 }
 
+RegisteredCache::~RegisteredCache() = default;
+
 bool RegisteredCache::HasEntry(u64 title_id, ContentRecordType type) const {
     return GetEntryRaw(title_id, type) != nullptr;
 }
 
 bool RegisteredCache::HasEntry(RegisteredCacheEntry entry) const {
     return GetEntryRaw(entry) != nullptr;
+}
+
+VirtualFile RegisteredCache::GetEntryUnparsed(u64 title_id, ContentRecordType type) const {
+    const auto id = GetNcaIDFromMetadata(title_id, type);
+    if (id == boost::none)
+        return nullptr;
+
+    return GetFileAtID(id.get());
+}
+
+VirtualFile RegisteredCache::GetEntryUnparsed(RegisteredCacheEntry entry) const {
+    return GetEntryUnparsed(entry.title_id, entry.type);
 }
 
 VirtualFile RegisteredCache::GetEntryRaw(u64 title_id, ContentRecordType type) const {

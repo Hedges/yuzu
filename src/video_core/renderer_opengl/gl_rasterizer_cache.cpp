@@ -168,8 +168,8 @@ static const FormatTuple& GetFormatTuple(PixelFormat pixel_format, ComponentType
 }
 
 VAddr SurfaceParams::GetCpuAddr() const {
-    const auto& gpu = Core::System::GetInstance().GPU();
-    return *gpu.memory_manager->GpuToCpuAddress(addr);
+    auto& gpu = Core::System::GetInstance().GPU();
+    return *gpu.MemoryManager().GpuToCpuAddress(addr);
 }
 
 static bool IsPixelFormatASTC(PixelFormat format) {
@@ -220,14 +220,14 @@ void MortonCopy(u32 stride, u32 block_height, u32 height, std::vector<u8>& gl_bu
                 Tegra::GPUVAddr addr) {
     constexpr u32 bytes_per_pixel = SurfaceParams::GetFormatBpp(format) / CHAR_BIT;
     constexpr u32 gl_bytes_per_pixel = CachedSurface::GetGLBytesPerPixel(format);
-    const auto& gpu = Core::System::GetInstance().GPU();
+    auto& gpu = Core::System::GetInstance().GPU();
 
     if (morton_to_gl) {
         // With the BCn formats (DXT and DXN), each 4x4 tile is swizzled instead of just individual
         // pixel values.
         const u32 tile_size{IsFormatBCn(format) ? 4U : 1U};
         const std::vector<u8> data =
-            Tegra::Texture::UnswizzleTexture(*gpu.memory_manager->GpuToCpuAddress(addr), tile_size,
+            Tegra::Texture::UnswizzleTexture(*gpu.MemoryManager().GpuToCpuAddress(addr), tile_size,
                                              bytes_per_pixel, stride, height, block_height);
         const size_t size_to_copy{std::min(gl_buffer.size(), data.size())};
         gl_buffer.assign(data.begin(), data.begin() + size_to_copy);
@@ -237,7 +237,7 @@ void MortonCopy(u32 stride, u32 block_height, u32 height, std::vector<u8>& gl_bu
         LOG_WARNING(Render_OpenGL, "need to use correct swizzle/GOB parameters!");
         VideoCore::MortonCopyPixels128(
             stride, height, bytes_per_pixel, gl_bytes_per_pixel,
-            Memory::GetPointer(*gpu.memory_manager->GpuToCpuAddress(addr)), gl_buffer.data(),
+            Memory::GetPointer(*gpu.MemoryManager().GpuToCpuAddress(addr)), gl_buffer.data(),
             morton_to_gl);
     }
 }
@@ -677,12 +677,6 @@ RasterizerCacheOpenGL::RasterizerCacheOpenGL() {
     draw_framebuffer.Create();
 }
 
-RasterizerCacheOpenGL::~RasterizerCacheOpenGL() {
-    while (!surface_cache.empty()) {
-        UnregisterSurface(surface_cache.begin()->second);
-    }
-}
-
 Surface RasterizerCacheOpenGL::GetTextureSurface(const Tegra::Texture::FullTextureInfo& config) {
     return GetSurface(SurfaceParams::CreateForTexture(config));
 }
@@ -760,33 +754,31 @@ Surface RasterizerCacheOpenGL::GetSurface(const SurfaceParams& params, bool pres
         return {};
     }
 
-    const auto& gpu = Core::System::GetInstance().GPU();
+    auto& gpu = Core::System::GetInstance().GPU();
     // Don't try to create any entries in the cache if the address of the texture is invalid.
-    if (gpu.memory_manager->GpuToCpuAddress(params.addr) == boost::none)
+    if (gpu.MemoryManager().GpuToCpuAddress(params.addr) == boost::none)
         return {};
 
     // Look up surface in the cache based on address
-    const auto& search{surface_cache.find(params.addr)};
-    Surface surface;
-    if (search != surface_cache.end()) {
-        surface = search->second;
+    Surface surface{TryGet(params.addr)};
+    if (surface) {
         if (Settings::values.use_accurate_framebuffers) {
             // If use_accurate_framebuffers is enabled, always load from memory
             FlushSurface(surface);
-            UnregisterSurface(surface);
+            Unregister(surface);
         } else if (surface->GetSurfaceParams().IsCompatibleSurface(params)) {
             // Use the cached surface as-is
             return surface;
         } else if (preserve_contents) {
             // If surface parameters changed and we care about keeping the previous data, recreate
             // the surface from the old one
-            UnregisterSurface(surface);
+            Unregister(surface);
             Surface new_surface{RecreateSurface(surface, params)};
-            RegisterSurface(new_surface);
+            Register(new_surface);
             return new_surface;
         } else {
             // Delete the old surface before creating a new one to prevent collisions.
-            UnregisterSurface(surface);
+            Unregister(surface);
         }
     }
 
@@ -797,7 +789,7 @@ Surface RasterizerCacheOpenGL::GetSurface(const SurfaceParams& params, bool pres
     if (!surface) {
         surface = std::make_shared<CachedSurface>(params);
         ReserveSurface(surface);
-        RegisterSurface(surface);
+        Register(surface);
     }
 
     // Only load surface from memory if we care about the contents
@@ -856,7 +848,7 @@ Surface RasterizerCacheOpenGL::RecreateSurface(const Surface& surface,
                                  "reinterpretation but the texture is tiled.");
         }
         size_t remaining_size = new_params.SizeInBytes() - params.SizeInBytes();
-        auto address = Core::System::GetInstance().GPU().memory_manager->GpuToCpuAddress(
+        auto address = Core::System::GetInstance().GPU().MemoryManager().GpuToCpuAddress(
             new_params.addr + params.SizeInBytes());
         std::vector<u8> data(remaining_size);
         Memory::ReadBlock(*address, data.data(), data.size());
@@ -894,7 +886,7 @@ Surface RasterizerCacheOpenGL::TryFindFramebufferSurface(VAddr cpu_addr) const {
     // framebuffer overlaps surfaces.
 
     std::vector<Surface> surfaces;
-    for (const auto& surface : surface_cache) {
+    for (const auto& surface : GetCache()) {
         const auto& params = surface.second->GetSurfaceParams();
         const VAddr surface_cpu_addr = params.GetCpuAddr();
         if (cpu_addr >= surface_cpu_addr && cpu_addr < (surface_cpu_addr + params.size_in_bytes)) {
@@ -912,51 +904,6 @@ Surface RasterizerCacheOpenGL::TryFindFramebufferSurface(VAddr cpu_addr) const {
     return surfaces[0];
 }
 
-void RasterizerCacheOpenGL::FlushRegion(Tegra::GPUVAddr /*addr*/, size_t /*size*/) {
-    // TODO(bunnei): This is unused in the current implementation of the rasterizer cache. We should
-    // probably implement this in the future, but for now, the `use_accurate_framebufers` setting
-    // can be used to always flush.
-}
-
-void RasterizerCacheOpenGL::InvalidateRegion(Tegra::GPUVAddr addr, size_t size) {
-    for (auto iter = surface_cache.cbegin(); iter != surface_cache.cend();) {
-        const auto& surface{iter->second};
-        const auto& params{surface->GetSurfaceParams()};
-
-        ++iter;
-
-        if (params.IsOverlappingRegion(addr, size)) {
-            UnregisterSurface(surface);
-        }
-    }
-}
-
-void RasterizerCacheOpenGL::RegisterSurface(const Surface& surface) {
-    const auto& params{surface->GetSurfaceParams()};
-    const auto& search{surface_cache.find(params.addr)};
-
-    if (search != surface_cache.end()) {
-        // Registered already
-        return;
-    }
-
-    surface_cache[params.addr] = surface;
-    UpdatePagesCachedCount(params.addr, params.size_in_bytes, 1);
-}
-
-void RasterizerCacheOpenGL::UnregisterSurface(const Surface& surface) {
-    const auto& params{surface->GetSurfaceParams()};
-    const auto& search{surface_cache.find(params.addr)};
-
-    if (search == surface_cache.end()) {
-        // Unregistered already
-        return;
-    }
-
-    UpdatePagesCachedCount(params.addr, params.size_in_bytes, -1);
-    surface_cache.erase(search);
-}
-
 void RasterizerCacheOpenGL::ReserveSurface(const Surface& surface) {
     const auto& surface_reserve_key{SurfaceReserveKey::Create(surface->GetSurfaceParams())};
     surface_reserve[surface_reserve_key] = surface;
@@ -966,49 +913,10 @@ Surface RasterizerCacheOpenGL::TryGetReservedSurface(const SurfaceParams& params
     const auto& surface_reserve_key{SurfaceReserveKey::Create(params)};
     auto search{surface_reserve.find(surface_reserve_key)};
     if (search != surface_reserve.end()) {
-        RegisterSurface(search->second);
+        Register(search->second);
         return search->second;
     }
     return {};
-}
-
-template <typename Map, typename Interval>
-constexpr auto RangeFromInterval(Map& map, const Interval& interval) {
-    return boost::make_iterator_range(map.equal_range(interval));
-}
-
-void RasterizerCacheOpenGL::UpdatePagesCachedCount(Tegra::GPUVAddr addr, u64 size, int delta) {
-    const u64 num_pages = ((addr + size - 1) >> Tegra::MemoryManager::PAGE_BITS) -
-                          (addr >> Tegra::MemoryManager::PAGE_BITS) + 1;
-    const u64 page_start = addr >> Tegra::MemoryManager::PAGE_BITS;
-    const u64 page_end = page_start + num_pages;
-
-    // Interval maps will erase segments if count reaches 0, so if delta is negative we have to
-    // subtract after iterating
-    const auto pages_interval = PageMap::interval_type::right_open(page_start, page_end);
-    if (delta > 0)
-        cached_pages.add({pages_interval, delta});
-
-    for (const auto& pair : RangeFromInterval(cached_pages, pages_interval)) {
-        const auto interval = pair.first & pages_interval;
-        const int count = pair.second;
-
-        const Tegra::GPUVAddr interval_start_addr = boost::icl::first(interval)
-                                                    << Tegra::MemoryManager::PAGE_BITS;
-        const Tegra::GPUVAddr interval_end_addr = boost::icl::last_next(interval)
-                                                  << Tegra::MemoryManager::PAGE_BITS;
-        const u64 interval_size = interval_end_addr - interval_start_addr;
-
-        if (delta > 0 && count == delta)
-            Memory::RasterizerMarkRegionCached(interval_start_addr, interval_size, true);
-        else if (delta < 0 && count == -delta)
-            Memory::RasterizerMarkRegionCached(interval_start_addr, interval_size, false);
-        else
-            ASSERT(count >= 0);
-    }
-
-    if (delta < 0)
-        cached_pages.add({pages_interval, delta});
 }
 
 } // namespace OpenGL

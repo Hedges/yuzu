@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -22,8 +23,6 @@
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/gpu.h"
 
-class ARM_Interface;
-
 namespace Core::Frontend {
 class EmuWindow;
 }
@@ -37,6 +36,8 @@ class RendererBase;
 }
 
 namespace Core {
+
+class ARM_Interface;
 
 class System {
 public:
@@ -185,6 +186,13 @@ public:
     /// Gets the current process
     Kernel::SharedPtr<Kernel::Process>& CurrentProcess() {
         return current_process;
+    }
+
+    /// Gets the name of the current game
+    Loader::ResultStatus GetGameName(std::string& out) const {
+        if (app_loader == nullptr)
+            return Loader::ResultStatus::ErrorNotInitialized;
+        return app_loader->ReadTitle(out);
     }
 
     PerfStats perf_stats;
