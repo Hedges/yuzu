@@ -14,6 +14,7 @@
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/vfs_offset.h"
 #include "core/gdbstub/gdbstub.h"
+#include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/resource_limit.h"
 #include "core/loader/nro.h"
@@ -136,7 +137,8 @@ bool AppLoader_NRO::LoadNro(FileSys::VirtualFile file, VAddr load_base) {
     }
 
     // Build program image
-    Kernel::SharedPtr<Kernel::CodeSet> codeset = Kernel::CodeSet::Create("");
+    auto& kernel = Core::System::GetInstance().Kernel();
+    Kernel::SharedPtr<Kernel::CodeSet> codeset = Kernel::CodeSet::Create(kernel, "");
     std::vector<u8> program_image = file->ReadBytes(PageAlignSize(nro_header.file_size));
     if (program_image.size() != PageAlignSize(nro_header.file_size)) {
         return {};
@@ -185,9 +187,10 @@ ResultStatus AppLoader_NRO::Load(Kernel::SharedPtr<Kernel::Process>& process) {
         return ResultStatus::ErrorLoadingNRO;
     }
 
+    auto& kernel = Core::System::GetInstance().Kernel();
     process->svc_access_mask.set();
     process->resource_limit =
-        Kernel::ResourceLimit::GetForCategory(Kernel::ResourceLimitCategory::APPLICATION);
+        kernel.ResourceLimitForCategory(Kernel::ResourceLimitCategory::APPLICATION);
     process->Run(base_addr, THREADPRIO_DEFAULT, Memory::DEFAULT_STACK_SIZE);
 
     is_loaded = true;

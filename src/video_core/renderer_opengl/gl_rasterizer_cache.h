@@ -45,42 +45,44 @@ struct SurfaceParams {
         DXN2UNORM = 17,
         DXN2SNORM = 18,
         BC7U = 19,
-        ASTC_2D_4X4 = 20,
-        G8R8U = 21,
-        G8R8S = 22,
-        BGRA8 = 23,
-        RGBA32F = 24,
-        RG32F = 25,
-        R32F = 26,
-        R16F = 27,
-        R16U = 28,
-        R16S = 29,
-        R16UI = 30,
-        R16I = 31,
-        RG16 = 32,
-        RG16F = 33,
-        RG16UI = 34,
-        RG16I = 35,
-        RG16S = 36,
-        RGB32F = 37,
-        SRGBA8 = 38,
-        RG8U = 39,
-        RG8S = 40,
-        RG32UI = 41,
-        R32UI = 42,
+        BC6H_UF16 = 20,
+        BC6H_SF16 = 21,
+        ASTC_2D_4X4 = 22,
+        G8R8U = 23,
+        G8R8S = 24,
+        BGRA8 = 25,
+        RGBA32F = 26,
+        RG32F = 27,
+        R32F = 28,
+        R16F = 29,
+        R16U = 30,
+        R16S = 31,
+        R16UI = 32,
+        R16I = 33,
+        RG16 = 34,
+        RG16F = 35,
+        RG16UI = 36,
+        RG16I = 37,
+        RG16S = 38,
+        RGB32F = 39,
+        SRGBA8 = 40,
+        RG8U = 41,
+        RG8S = 42,
+        RG32UI = 43,
+        R32UI = 44,
 
         MaxColorFormat,
 
         // Depth formats
-        Z32F = 43,
-        Z16 = 44,
+        Z32F = 45,
+        Z16 = 46,
 
         MaxDepthFormat,
 
         // DepthStencil formats
-        Z24S8 = 45,
-        S8Z24 = 46,
-        Z32FS8 = 47,
+        Z24S8 = 47,
+        S8Z24 = 48,
+        Z32FS8 = 49,
 
         MaxDepthStencilFormat,
 
@@ -138,6 +140,8 @@ struct SurfaceParams {
             4, // DXN2UNORM
             4, // DXN2SNORM
             4, // BC7U
+            4, // BC6H_UF16
+            4, // BC6H_SF16
             4, // ASTC_2D_4X4
             1, // G8R8U
             1, // G8R8S
@@ -197,6 +201,8 @@ struct SurfaceParams {
             128, // DXN2UNORM
             128, // DXN2SNORM
             128, // BC7U
+            128, // BC6H_UF16
+            128, // BC6H_SF16
             32,  // ASTC_2D_4X4
             16,  // G8R8U
             16,  // G8R8S
@@ -482,6 +488,10 @@ struct SurfaceParams {
             UNREACHABLE();
         case Tegra::Texture::TextureFormat::BC7U:
             return PixelFormat::BC7U;
+        case Tegra::Texture::TextureFormat::BC6H_UF16:
+            return PixelFormat::BC6H_UF16;
+        case Tegra::Texture::TextureFormat::BC6H_SF16:
+            return PixelFormat::BC6H_SF16;
         case Tegra::Texture::TextureFormat::ASTC_2D_4X4:
             return PixelFormat::ASTC_2D_4X4;
         case Tegra::Texture::TextureFormat::R16_G16:
@@ -628,9 +638,6 @@ struct SurfaceParams {
                GetFormatBpp(pixel_format) / CHAR_BIT;
     }
 
-    /// Returns the CPU virtual address for this surface
-    VAddr GetCpuAddr() const;
-
     /// Creates SurfaceParams from a texture configuration
     static SurfaceParams CreateForTexture(const Tegra::Texture::FullTextureInfo& config);
 
@@ -643,25 +650,13 @@ struct SurfaceParams {
                                               Tegra::GPUVAddr zeta_address,
                                               Tegra::DepthFormat format);
 
-    bool operator==(const SurfaceParams& other) const {
-        return std::tie(addr, is_tiled, block_height, pixel_format, component_type, type, width,
-                        height, unaligned_height, size_in_bytes) ==
-               std::tie(other.addr, other.is_tiled, other.block_height, other.pixel_format,
-                        other.component_type, other.type, other.width, other.height,
-                        other.unaligned_height, other.size_in_bytes);
-    }
-
-    bool operator!=(const SurfaceParams& other) const {
-        return !operator==(other);
-    }
-
     /// Checks if surfaces are compatible for caching
     bool IsCompatibleSurface(const SurfaceParams& other) const {
         return std::tie(pixel_format, type, cache_width, cache_height) ==
                std::tie(other.pixel_format, other.type, other.cache_width, other.cache_height);
     }
 
-    Tegra::GPUVAddr addr;
+    VAddr addr;
     bool is_tiled;
     u32 block_height;
     PixelFormat pixel_format;
@@ -702,7 +697,7 @@ class CachedSurface final {
 public:
     CachedSurface(const SurfaceParams& params);
 
-    Tegra::GPUVAddr GetAddr() const {
+    VAddr GetAddr() const {
         return params.addr;
     }
 
@@ -753,12 +748,15 @@ public:
     /// Flushes the surface to Switch memory
     void FlushSurface(const Surface& surface);
 
-    /// Tries to find a framebuffer GPU address based on the provided CPU address
-    Surface TryFindFramebufferSurface(VAddr cpu_addr) const;
+    /// Tries to find a framebuffer using on the provided CPU address
+    Surface TryFindFramebufferSurface(VAddr addr) const;
 
 private:
     void LoadSurface(const Surface& surface);
     Surface GetSurface(const SurfaceParams& params, bool preserve_contents = true);
+
+    /// Gets an uncached surface, creating it if need be
+    Surface GetUncachedSurface(const SurfaceParams& params);
 
     /// Recreates a surface with new parameters
     Surface RecreateSurface(const Surface& surface, const SurfaceParams& new_params);

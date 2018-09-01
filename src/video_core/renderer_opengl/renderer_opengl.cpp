@@ -10,11 +10,14 @@
 #include <glad/glad.h>
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "common/telemetry.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/frontend/emu_window.h"
 #include "core/memory.h"
+#include "core/perf_stats.h"
 #include "core/settings.h"
+#include "core/telemetry_session.h"
 #include "core/tracer/recorder.h"
 #include "video_core/renderer_opengl/gl_rasterizer.h"
 #include "video_core/renderer_opengl/renderer_opengl.h"
@@ -115,7 +118,7 @@ RendererOpenGL::~RendererOpenGL() = default;
 void RendererOpenGL::SwapBuffers(boost::optional<const Tegra::FramebufferConfig&> framebuffer) {
     ScopeAcquireGLContext acquire_context{render_window};
 
-    Core::System::GetInstance().perf_stats.EndSystemFrame();
+    Core::System::GetInstance().GetPerfStats().EndSystemFrame();
 
     // Maintain the rasterizer's state as a priority
     OpenGLState prev_state = OpenGLState::GetCurState();
@@ -140,8 +143,8 @@ void RendererOpenGL::SwapBuffers(boost::optional<const Tegra::FramebufferConfig&
 
     render_window.PollEvents();
 
-    Core::System::GetInstance().frame_limiter.DoFrameLimiting(CoreTiming::GetGlobalTimeUs());
-    Core::System::GetInstance().perf_stats.BeginSystemFrame();
+    Core::System::GetInstance().FrameLimiter().DoFrameLimiting(CoreTiming::GetGlobalTimeUs());
+    Core::System::GetInstance().GetPerfStats().BeginSystemFrame();
 
     // Restore the rasterizer state
     prev_state.Apply();

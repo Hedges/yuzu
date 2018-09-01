@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <unordered_map>
 #include <QMainWindow>
 #include <QTimer>
 #include "core/core.h"
@@ -22,6 +23,10 @@ class MicroProfileDialog;
 class ProfilerWidget;
 class WaitTreeWidget;
 enum class GameListOpenTarget;
+
+namespace FileSys {
+class VfsFilesystem;
+}
 
 namespace Tegra {
 class DebugContext;
@@ -124,6 +129,9 @@ private slots:
     /// Called whenever a user selects a game in the game list widget.
     void OnGameListLoadFile(QString game_path);
     void OnGameListOpenFolder(u64 program_id, GameListOpenTarget target);
+    void OnGameListNavigateToGamedbEntry(
+        u64 program_id,
+        std::unordered_map<std::string, std::pair<QString, QString>>& compatibility_list);
     void OnMenuLoadFile();
     void OnMenuLoadFolder();
     void OnMenuInstallToNAND();
@@ -166,7 +174,7 @@ private:
     QString game_path;
 
     // FS
-    FileSys::VirtualFilesystem vfs;
+    std::shared_ptr<FileSys::VfsFilesystem> vfs;
 
     // Debugger panes
     ProfilerWidget* profilerWidget;

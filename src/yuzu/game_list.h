@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include <QFileSystemWatcher>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -17,9 +19,13 @@
 #include <QTreeView>
 #include <QVBoxLayout>
 #include <QWidget>
-#include "main.h"
 
 class GameListWorker;
+class GMainWindow;
+
+namespace FileSys {
+class VfsFilesystem;
+}
 
 enum class GameListOpenTarget { SaveData };
 
@@ -29,6 +35,7 @@ class GameList : public QWidget {
 public:
     enum {
         COLUMN_NAME,
+        COLUMN_COMPATIBILITY,
         COLUMN_FILE_TYPE,
         COLUMN_SIZE,
         COLUMN_COUNT, // Number of columns
@@ -61,13 +68,14 @@ public:
         QToolButton* button_filter_close = nullptr;
     };
 
-    explicit GameList(FileSys::VirtualFilesystem vfs, GMainWindow* parent = nullptr);
+    explicit GameList(std::shared_ptr<FileSys::VfsFilesystem> vfs, GMainWindow* parent = nullptr);
     ~GameList() override;
 
     void clearFilter();
     void setFilterFocus();
     void setFilterVisible(bool visibility);
 
+    void LoadCompatibilityList();
     void PopulateAsync(const QString& dir_path, bool deep_scan);
 
     void SaveInterfaceLayout();
@@ -79,6 +87,9 @@ signals:
     void GameChosen(QString game_path);
     void ShouldCancelWorker();
     void OpenFolderRequested(u64 program_id, GameListOpenTarget target);
+    void NavigateToGamedbEntryRequested(
+        u64 program_id,
+        std::unordered_map<std::string, std::pair<QString, QString>>& compatibility_list);
 
 private slots:
     void onTextChanged(const QString& newText);
@@ -92,7 +103,7 @@ private:
     void PopupContextMenu(const QPoint& menu_location);
     void RefreshGameDirectory();
 
-    FileSys::VirtualFilesystem vfs;
+    std::shared_ptr<FileSys::VfsFilesystem> vfs;
     SearchField* search_field;
     GMainWindow* main_window = nullptr;
     QVBoxLayout* layout = nullptr;
@@ -100,6 +111,7 @@ private:
     QStandardItemModel* item_model = nullptr;
     GameListWorker* current_worker = nullptr;
     QFileSystemWatcher* watcher = nullptr;
+    std::unordered_map<std::string, std::pair<QString, QString>> compatibility_list;
 };
 
 Q_DECLARE_METATYPE(GameListOpenTarget);

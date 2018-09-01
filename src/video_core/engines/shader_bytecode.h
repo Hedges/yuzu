@@ -147,6 +147,7 @@ enum class PredCondition : u64 {
     LessThanWithNan = 9,
     GreaterThanWithNan = 12,
     NotEqualWithNan = 13,
+    GreaterEqualWithNan = 14,
     // TODO(Subv): Other condition types
 };
 
@@ -213,6 +214,18 @@ enum class XmadMode : u64 {
     CBcc = 4,
 };
 
+enum class IAdd3Mode : u64 {
+    None = 0,
+    RightShift = 1,
+    LeftShift = 2,
+};
+
+enum class IAdd3Height : u64 {
+    None = 0,
+    LowerHalfWord = 1,
+    UpperHalfWord = 2,
+};
+
 enum class FlowCondition : u64 {
     Always = 0xF,
     Fcsm_Tr = 0x1C, // TODO(bunnei): What is this used for?
@@ -229,6 +242,8 @@ enum class TextureType : u64 {
     Texture3D = 2,
     TextureCube = 3,
 };
+
+enum class IpaMode : u64 { Pass = 0, None = 1, Constant = 2, Sc = 3 };
 
 union Instruction {
     Instruction& operator=(const Instruction& instr) {
@@ -313,6 +328,10 @@ union Instruction {
     } alu;
 
     union {
+        BitField<54, 3, IpaMode> mode;
+    } ipa;
+
+    union {
         BitField<48, 1, u64> negate_b;
     } fmul;
 
@@ -327,6 +346,10 @@ union Instruction {
     } alu_integer;
 
     union {
+        BitField<40, 1, u64> invert;
+    } popc;
+
+    union {
         BitField<39, 3, u64> pred;
         BitField<42, 1, u64> neg_pred;
     } sel;
@@ -337,6 +360,16 @@ union Instruction {
         BitField<43, 2, IMinMaxExchange> exchange;
         BitField<48, 1, u64> is_signed;
     } imnmx;
+
+    union {
+        BitField<31, 2, IAdd3Height> height_c;
+        BitField<33, 2, IAdd3Height> height_b;
+        BitField<35, 2, IAdd3Height> height_a;
+        BitField<37, 2, IAdd3Mode> mode;
+        BitField<49, 1, u64> neg_c;
+        BitField<50, 1, u64> neg_b;
+        BitField<51, 1, u64> neg_a;
+    } iadd3;
 
     union {
         BitField<54, 1, u64> saturate;
@@ -636,13 +669,16 @@ public:
         IADD_C,
         IADD_R,
         IADD_IMM,
-        IADD3_C,
+        IADD3_C, // Add 3 Integers
         IADD3_R,
         IADD3_IMM,
         IADD32I,
         ISCADD_C, // Scale and Add
         ISCADD_R,
         ISCADD_IMM,
+        POPC_C,
+        POPC_R,
+        POPC_IMM,
         SEL_C,
         SEL_R,
         SEL_IMM,
@@ -864,6 +900,9 @@ private:
             INST("0100110000011---", Id::ISCADD_C, Type::ArithmeticInteger, "ISCADD_C"),
             INST("0101110000011---", Id::ISCADD_R, Type::ArithmeticInteger, "ISCADD_R"),
             INST("0011100-00011---", Id::ISCADD_IMM, Type::ArithmeticInteger, "ISCADD_IMM"),
+            INST("0100110000001---", Id::POPC_C, Type::ArithmeticInteger, "POPC_C"),
+            INST("0101110000001---", Id::POPC_R, Type::ArithmeticInteger, "POPC_R"),
+            INST("0011100-00001---", Id::POPC_IMM, Type::ArithmeticInteger, "POPC_IMM"),
             INST("0100110010100---", Id::SEL_C, Type::ArithmeticInteger, "SEL_C"),
             INST("0101110010100---", Id::SEL_R, Type::ArithmeticInteger, "SEL_R"),
             INST("0011100-10100---", Id::SEL_IMM, Type::ArithmeticInteger, "SEL_IMM"),

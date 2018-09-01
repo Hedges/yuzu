@@ -17,6 +17,7 @@
 #include "core/hle/service/nvdrv/nvdrv.h"
 #include "core/hle/service/nvflinger/buffer_queue.h"
 #include "core/hle/service/nvflinger/nvflinger.h"
+#include "core/perf_stats.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
@@ -137,7 +138,7 @@ void NVFlinger::Compose() {
             auto& system_instance = Core::System::GetInstance();
 
             // There was no queued buffer to draw, render previous frame
-            system_instance.perf_stats.EndGameFrame();
+            system_instance.GetPerfStats().EndGameFrame();
             system_instance.Renderer().SwapBuffers({});
             continue;
         }
@@ -161,7 +162,8 @@ void NVFlinger::Compose() {
 Layer::Layer(u64 id, std::shared_ptr<BufferQueue> queue) : id(id), buffer_queue(std::move(queue)) {}
 
 Display::Display(u64 id, std::string name) : id(id), name(std::move(name)) {
-    vsync_event = Kernel::Event::Create(Kernel::ResetType::Pulse, "Display VSync Event");
+    auto& kernel = Core::System::GetInstance().Kernel();
+    vsync_event = Kernel::Event::Create(kernel, Kernel::ResetType::Pulse, "Display VSync Event");
 }
 
 } // namespace Service::NVFlinger
