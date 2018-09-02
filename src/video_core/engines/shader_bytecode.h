@@ -243,7 +243,8 @@ enum class TextureType : u64 {
     TextureCube = 3,
 };
 
-enum class IpaMode : u64 { Pass = 0, None = 1, Constant = 2, Sc = 3 };
+enum class IpaInterpMode : u64 { Linear = 0, Perspective = 1, Flat = 2, Sc = 3 };
+enum class IpaSampleMode : u64 { Default = 0, Centroid = 1, Offset = 2 };
 
 union Instruction {
     Instruction& operator=(const Instruction& instr) {
@@ -328,10 +329,16 @@ union Instruction {
     } alu;
 
     union {
-        BitField<54, 3, IpaMode> mode;
+        BitField<51, 1, u64> saturate;
+        BitField<52, 2, IpaSampleMode> sample_mode;
+        BitField<54, 2, IpaInterpMode> interp_mode;
     } ipa;
 
     union {
+        BitField<39, 2, u64> tab5cb8_2;
+        BitField<41, 3, u64> tab5c68_1;
+        BitField<44, 2, u64> tab5c68_0;
+        BitField<47, 1, u64> cc;
         BitField<48, 1, u64> negate_b;
     } fmul;
 
@@ -399,8 +406,11 @@ union Instruction {
     } flow;
 
     union {
+        BitField<47, 1, u64> cc;
         BitField<48, 1, u64> negate_b;
         BitField<49, 1, u64> negate_c;
+        BitField<51, 2, u64> tab5980_1;
+        BitField<53, 2, u64> tab5980_0;
     } ffma;
 
     union {
@@ -509,6 +519,7 @@ union Instruction {
     union {
         BitField<0, 8, Register> gpr0;
         BitField<28, 8, Register> gpr28;
+        BitField<49, 1, u64> nodep;
         BitField<50, 3, u64> component_mask_selector;
         BitField<53, 4, u64> texture_info;
 
