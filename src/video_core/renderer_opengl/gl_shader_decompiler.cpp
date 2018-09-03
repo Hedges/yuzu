@@ -729,8 +729,7 @@ private:
             {PredCondition::LessEqual, "<="},         {PredCondition::GreaterThan, ">"},
             {PredCondition::NotEqual, "!="},          {PredCondition::GreaterEqual, ">="},
             {PredCondition::LessThanWithNan, "<"},    {PredCondition::NotEqualWithNan, "!="},
-            {PredCondition::GreaterThanWithNan, ">"},
-        };
+            {PredCondition::GreaterThanWithNan, ">"}, {PredCondition::GreaterEqualWithNan, ">="}};
 
         const auto& comparison{PredicateComparisonStrings.find(condition)};
         ASSERT_MSG(comparison != PredicateComparisonStrings.end(),
@@ -739,7 +738,8 @@ private:
         std::string predicate{'(' + op_a + ") " + comparison->second + " (" + op_b + ')'};
         if (condition == PredCondition::LessThanWithNan ||
             condition == PredCondition::NotEqualWithNan ||
-            condition == PredCondition::GreaterThanWithNan) {
+            condition == PredCondition::GreaterThanWithNan ||
+            condition == PredCondition::GreaterEqualWithNan) {
             predicate += " || isnan(" + op_a + ") || isnan(" + op_b + ')';
         }
 
@@ -886,6 +886,8 @@ private:
 
         // TEXS has two destination registers and a swizzle. The first two elements in the swizzle
         // go into gpr0+0 and gpr0+1, and the rest goes into gpr28+0 and gpr28+1
+
+        ASSERT_MSG(instr.texs.nodep == 0, "TEXS nodep not implemented");
 
         size_t written_components = 0;
         for (u32 component = 0; component < 4; ++component) {
@@ -1038,6 +1040,15 @@ private:
             case OpCode::Id::FMUL_R:
             case OpCode::Id::FMUL_IMM: {
                 // FMUL does not have 'abs' bits and only the second operand has a 'neg' bit.
+                ASSERT_MSG(instr.fmul.tab5cb8_2 == 0, "FMUL tab5cb8_2({}) is not implemented",
+                           instr.fmul.tab5cb8_2.Value());
+                ASSERT_MSG(instr.fmul.tab5c68_1 == 0, "FMUL tab5cb8_1({}) is not implemented",
+                           instr.fmul.tab5c68_1.Value());
+                ASSERT_MSG(instr.fmul.tab5c68_0 == 1, "FMUL tab5cb8_0({}) is not implemented",
+                           instr.fmul.tab5c68_0
+                               .Value()); // SMO typical sends 1 here which seems to be the default
+                ASSERT_MSG(instr.fmul.cc == 0, "FMUL cc is not implemented");
+
                 op_b = GetOperandAbsNeg(op_b, false, instr.fmul.negate_b);
                 regs.SetRegisterToFloat(instr.gpr0, 0, op_a + " * " + op_b, 1, 1,
                                         instr.alu.saturate_d);
@@ -1435,6 +1446,12 @@ private:
             std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
             std::string op_b = instr.ffma.negate_b ? "-" : "";
             std::string op_c = instr.ffma.negate_c ? "-" : "";
+
+            ASSERT_MSG(instr.ffma.cc == 0, "FFMA cc not implemented");
+            ASSERT_MSG(instr.ffma.tab5980_0 == 1, "FFMA tab5980_0({}) not implemented",
+                       instr.ffma.tab5980_0.Value()); // Seems to be 1 by default based on SMO
+            ASSERT_MSG(instr.ffma.tab5980_1 == 0, "FFMA tab5980_1({}) not implemented",
+                       instr.ffma.tab5980_1.Value());
 
             switch (opcode->GetId()) {
             case OpCode::Id::FFMA_CR: {
@@ -2110,8 +2127,12 @@ private:
             case OpCode::Id::IPA: {
                 const auto& attribute = instr.attribute.fmt28;
                 const auto& reg = instr.gpr0;
-                switch (instr.ipa.mode) {
-                case Tegra::Shader::IpaMode::Pass:
+                ASSERT_MSG(instr.ipa.sample_mode == Tegra::Shader::IpaSampleMode::Default,
+                           "Unhandled IPA sample mode: {}",
+                           static_cast<u32>(instr.ipa.sample_mode.Value()));
+                ASSERT_MSG(instr.ipa.saturate == 0, "IPA saturate not implemented");
+                switch (instr.ipa.interp_mode) {
+                case Tegra::Shader::IpaInterpMode::Linear:
                     if (stage == Maxwell3D::Regs::ShaderStage::Fragment &&
                         attribute.index == Attribute::Index::Position) {
                         switch (attribute.element) {
@@ -2132,12 +2153,12 @@ private:
                         regs.SetRegisterToInputAttibute(reg, attribute.element, attribute.index);
                     }
                     break;
-                case Tegra::Shader::IpaMode::None:
+                case Tegra::Shader::IpaInterpMode::Perspective:
                     regs.SetRegisterToInputAttibute(reg, attribute.element, attribute.index);
                     break;
                 default:
                     LOG_CRITICAL(HW_GPU, "Unhandled IPA mode: {}",
-                                 static_cast<u32>(instr.ipa.mode.Value()));
+                                 static_cast<u32>(instr.ipa.interp_mode.Value()));
                     UNREACHABLE();
                     regs.SetRegisterToInputAttibute(reg, attribute.element, attribute.index);
                 }

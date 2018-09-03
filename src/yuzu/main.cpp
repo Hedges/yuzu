@@ -21,22 +21,22 @@
 #include "common/logging/backend.h"
 #include "common/logging/filter.h"
 #include "common/logging/log.h"
-#include "common/logging/text_formatter.h"
 #include "common/microprofile.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
 #include "common/string_util.h"
+#include "common/telemetry.h"
 #include "core/core.h"
 #include "core/crypto/key_manager.h"
-#include "core/file_sys/bis_factory.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/file_sys/vfs_real.h"
-#include "core/gdbstub/gdbstub.h"
+#include "core/hle/service/filesystem/filesystem.h"
 #include "core/loader/loader.h"
+#include "core/perf_stats.h"
 #include "core/settings.h"
-#include "game_list_p.h"
+#include "core/telemetry_session.h"
 #include "video_core/debug_utils/debug_utils.h"
 #include "yuzu/about_dialog.h"
 #include "yuzu/bootmanager.h"
@@ -48,6 +48,7 @@
 #include "yuzu/debugger/profiler.h"
 #include "yuzu/debugger/wait_tree.h"
 #include "yuzu/game_list.h"
+#include "yuzu/game_list_p.h"
 #include "yuzu/hotkeys.h"
 #include "yuzu/main.h"
 #include "yuzu/ui_settings.h"
@@ -418,7 +419,7 @@ void GMainWindow::OnDisplayTitleBars(bool show) {
     }
 }
 
-bool GMainWindow::SupportsRequiredGLExtensions() {
+QStringList GMainWindow::GetUnsupportedGLExtensions() {
     QStringList unsupported_ext;
 
     if (!GLAD_GL_ARB_program_interface_query)
@@ -445,7 +446,7 @@ bool GMainWindow::SupportsRequiredGLExtensions() {
     for (const QString& ext : unsupported_ext)
         LOG_CRITICAL(Frontend, "Unsupported GL extension: {}", ext.toStdString());
 
-    return unsupported_ext.empty();
+    return unsupported_ext;
 }
 
 bool GMainWindow::LoadROM(const QString& filename) {
@@ -463,11 +464,13 @@ bool GMainWindow::LoadROM(const QString& filename) {
         return false;
     }
 
-    if (!SupportsRequiredGLExtensions()) {
-        QMessageBox::critical(
-            this, tr("Error while initializing OpenGL Core!"),
-            tr("Your GPU may not support one or more required OpenGL extensions. Please "
-               "ensure you have the latest graphics driver. See the log for more details."));
+    QStringList unsupported_gl_extensions = GetUnsupportedGLExtensions();
+    if (!unsupported_gl_extensions.empty()) {
+        QMessageBox::critical(this, tr("Error while initializing OpenGL Core!"),
+                              tr("Your GPU may not support one or more required OpenGL"
+                                 "extensions. Please ensure you have the latest graphics "
+                                 "driver.<br><br>Unsupported extensions:<br>") +
+                                  unsupported_gl_extensions.join("<br>"));
         return false;
     }
 

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <unordered_map>
 #include <QMainWindow>
 #include <QTimer>
 #include "core/core.h"
@@ -22,6 +23,10 @@ class MicroProfileDialog;
 class ProfilerWidget;
 class WaitTreeWidget;
 enum class GameListOpenTarget;
+
+namespace FileSys {
+class VfsFilesystem;
+}
 
 namespace Tegra {
 class DebugContext;
@@ -80,7 +85,7 @@ private:
     void ConnectWidgetEvents();
     void ConnectMenuEvents();
 
-    bool SupportsRequiredGLExtensions();
+    QStringList GetUnsupportedGLExtensions();
     bool LoadROM(const QString& filename);
     void BootGame(const QString& filename);
     void ShutdownGame();
@@ -169,7 +174,7 @@ private:
     QString game_path;
 
     // FS
-    FileSys::VirtualFilesystem vfs;
+    std::shared_ptr<FileSys::VfsFilesystem> vfs;
 
     // Debugger panes
     ProfilerWidget* profilerWidget;
