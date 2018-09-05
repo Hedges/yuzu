@@ -241,7 +241,7 @@ ResultCode RegisterRomFS(std::unique_ptr<FileSys::RomFSFactory>&& factory) {
 }
 
 ResultCode RegisterSaveData(std::unique_ptr<FileSys::SaveDataFactory>&& factory) {
-    ASSERT_MSG(romfs_factory == nullptr, "Tried to register a second save data");
+    ASSERT_MSG(save_data_factory == nullptr, "Tried to register a second save data");
     save_data_factory = std::move(factory);
     LOG_DEBUG(Service_FS, "Registered save data");
     return RESULT_SUCCESS;
@@ -352,6 +352,14 @@ void CreateFactories(const FileSys::VirtualFilesystem& vfs, bool overwrite) {
         save_data_factory = std::make_unique<FileSys::SaveDataFactory>(std::move(nand_directory));
     if (sdmc_factory == nullptr)
         sdmc_factory = std::make_unique<FileSys::SDMCFactory>(std::move(sd_directory));
+
+    if (romfs_factory == nullptr) {
+        if (&(Core::System::GetInstance().GetAppLoader()) != nullptr) {
+            auto romfs =
+                std::make_unique<FileSys::RomFSFactory>(Core::System::GetInstance().GetAppLoader());
+            romfs_factory = std::move(romfs);
+        }
+    }
 }
 
 void InstallInterfaces(SM::ServiceManager& service_manager, const FileSys::VirtualFilesystem& vfs) {
