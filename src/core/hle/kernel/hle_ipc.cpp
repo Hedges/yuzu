@@ -154,11 +154,11 @@ void HLERequestContext::ParseCommandBuffer(u32_le* src_cmdbuf, bool incoming) {
         return;
     }
 
-    if (incoming) {
-        ASSERT(data_payload_header->magic == Common::MakeMagic('S', 'F', 'C', 'I'));
-    } else {
-        ASSERT(data_payload_header->magic == Common::MakeMagic('S', 'F', 'C', 'O'));
-    }
+    //if (incoming) {
+    //    ASSERT(data_payload_header->magic == Common::MakeMagic('S', 'F', 'C', 'I'));
+    //} else {
+    //    ASSERT(data_payload_header->magic == Common::MakeMagic('S', 'F', 'C', 'O'));
+    //}
 
     rp.SetCurrentOffset(buffer_c_offset);
 

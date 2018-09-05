@@ -25,7 +25,7 @@ u32 nvhost_ctrl::ioctl(Ioctl command, const std::vector<u8>& input, std::vector<
     case IoctlCommand::IocCtrlEventRegisterCommand:
         return IocCtrlEventRegister(input, output);
     }
-    UNIMPLEMENTED_MSG("Unimplemented ioctl");
+    //UNIMPLEMENTED_MSG("Unimplemented ioctl");
     return 0;
 }
 
