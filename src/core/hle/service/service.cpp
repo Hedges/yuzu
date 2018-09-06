@@ -187,7 +187,7 @@ ResultCode ServiceFrameworkBase::HandleSyncRequest(Kernel::HLERequestContext& co
         break;
     }
     default:
-        UNIMPLEMENTED_MSG("command_type={}", static_cast<int>(context.GetCommandType()));
+        UNIMPLEMENTED();
     }
 
     context.WriteToOutgoingCommandBuffer(*Kernel::GetCurrentThread());

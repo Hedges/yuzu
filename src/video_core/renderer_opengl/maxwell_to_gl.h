@@ -162,6 +162,7 @@ inline GLenum WrapMode(Tegra::Texture::WrapMode wrap_mode) {
 inline GLenum BlendEquation(Maxwell::Blend::Equation equation) {
     switch (equation) {
     case Maxwell::Blend::Equation::Add:
+    default:
         return GL_FUNC_ADD;
     case Maxwell::Blend::Equation::Subtract:
         return GL_FUNC_SUBTRACT;
@@ -184,6 +185,7 @@ inline GLenum BlendFunc(Maxwell::Blend::Factor factor) {
         return GL_ZERO;
     case Maxwell::Blend::Factor::One:
     case Maxwell::Blend::Factor::OneGL:
+    default:
         return GL_ONE;
     case Maxwell::Blend::Factor::SourceColor:
     case Maxwell::Blend::Factor::SourceColorGL:

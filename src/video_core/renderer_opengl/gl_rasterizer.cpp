@@ -891,11 +891,11 @@ void RasterizerOpenGL::SyncBlendState() {
     if (!state.blend.enabled)
         return;
 
-    ASSERT_MSG(regs.logic_op.enable == 0,
-               "Blending and logic op can't be enabled at the same time.");
+    //ASSERT_MSG(regs.logic_op.enable == 0,
+    //           "Blending and logic op can't be enabled at the same time.");
 
-    ASSERT_MSG(regs.independent_blend_enable == 1, "Only independent blending is implemented");
-    ASSERT_MSG(!regs.independent_blend[0].separate_alpha, "Unimplemented");
+    //ASSERT_MSG(regs.independent_blend_enable == 1, "Only independent blending is implemented");
+    //ASSERT_MSG(!regs.independent_blend[0].separate_alpha, "Unimplemented");
     state.blend.rgb_equation = MaxwellToGL::BlendEquation(regs.independent_blend[0].equation_rgb);
     state.blend.src_rgb_func = MaxwellToGL::BlendFunc(regs.independent_blend[0].factor_source_rgb);
     state.blend.dst_rgb_func = MaxwellToGL::BlendFunc(regs.independent_blend[0].factor_dest_rgb);

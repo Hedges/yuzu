@@ -65,7 +65,7 @@ void GPU::WriteReg(u32 method, u32 subchannel, u32 value, u32 remaining_params) 
         maxwell_dma->WriteReg(method, value);
         break;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented engine");
+        UNIMPLEMENTED();
     }
 }
 
