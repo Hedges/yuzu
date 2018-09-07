@@ -126,6 +126,7 @@ inline GLenum PrimitiveTopology(Maxwell::PrimitiveTopology topology) {
 inline GLenum TextureFilterMode(Tegra::Texture::TextureFilter filter_mode) {
     switch (filter_mode) {
     case Tegra::Texture::TextureFilter::Linear:
+    default:
         return GL_LINEAR;
     case Tegra::Texture::TextureFilter::Nearest:
         return GL_NEAREST;

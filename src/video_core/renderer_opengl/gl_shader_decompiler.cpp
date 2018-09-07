@@ -15,6 +15,9 @@
 #include "video_core/renderer_opengl/gl_rasterizer.h"
 #include "video_core/renderer_opengl/gl_shader_decompiler.h"
 
+#undef ASSERT_MSG
+#define ASSERT_MSG(_a_, ...)
+
 namespace OpenGL::GLShader::Decompiler {
 
 using Tegra::Shader::Attribute;
