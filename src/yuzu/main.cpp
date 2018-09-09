@@ -136,11 +136,11 @@ GMainWindow::GMainWindow()
 
     ConnectMenuEvents();
     ConnectWidgetEvents();
-    LOG_INFO(Frontend, "yuzu Version: {} | {}-{}", Common::g_build_name, Common::g_scm_branch,
+    LOG_INFO(Frontend, "yuzu Version: {} | {}-{}", Common::g_build_fullname, Common::g_scm_branch,
              Common::g_scm_desc);
 
     setWindowTitle(QString("yuzu %1| %2-%3")
-                       .arg(Common::g_build_name, Common::g_scm_branch, Common::g_scm_desc));
+                       .arg(Common::g_build_fullname, Common::g_scm_branch, Common::g_scm_desc));
     show();
 
     // Necessary to load titles from nand in gamelist.
@@ -444,6 +444,8 @@ QStringList GMainWindow::GetUnsupportedGLExtensions() {
         unsupported_ext.append("ARB_vertex_type_10f_11f_11f_rev");
     if (!GLAD_GL_ARB_texture_mirror_clamp_to_edge)
         unsupported_ext.append("ARB_texture_mirror_clamp_to_edge");
+    if (!GLAD_GL_ARB_base_instance)
+        unsupported_ext.append("ARB_base_instance");
 
     // Extensions required to support some texture formats.
     if (!GLAD_GL_EXT_texture_compression_s3tc)
@@ -606,7 +608,7 @@ void GMainWindow::BootGame(const QString& filename) {
     }
 
     setWindowTitle(QString("yuzu %1| %4 | %2-%3")
-                       .arg(Common::g_build_name, Common::g_scm_branch, Common::g_scm_desc,
+                       .arg(Common::g_build_fullname, Common::g_scm_branch, Common::g_scm_desc,
                             QString::fromStdString(title_name)));
 
     render_window->show();
@@ -641,7 +643,7 @@ void GMainWindow::ShutdownGame() {
     game_list->show();
     game_list->setFilterFocus();
     setWindowTitle(QString("yuzu %1| %2-%3")
-                       .arg(Common::g_build_name, Common::g_scm_branch, Common::g_scm_desc));
+                       .arg(Common::g_build_fullname, Common::g_scm_branch, Common::g_scm_desc));
 
     // Disable status bar updates
     status_bar_update_timer.stop();

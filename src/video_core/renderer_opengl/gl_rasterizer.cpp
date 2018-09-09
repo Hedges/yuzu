@@ -151,24 +151,17 @@ void RasterizerOpenGL::SetupVertexArrays() {
         Tegra::GPUVAddr start = vertex_array.StartAddress();
         const Tegra::GPUVAddr end = regs.vertex_array_limit[index].LimitAddress();
 
-        if (regs.instanced_arrays.IsInstancingEnabled(index) && vertex_array.divisor != 0) {
-            start += vertex_array.stride * (gpu.state.current_instance / vertex_array.divisor);
-        }
-
         ASSERT(end > start);
-        u64 size = end - start + 1;
-
-        GLintptr vertex_buffer_offset = buffer_cache.UploadMemory(start, size);
+        const u64 size = end - start + 1;
+        const GLintptr vertex_buffer_offset = buffer_cache.UploadMemory(start, size);
 
         // Bind the vertex array to the buffer at the current offset.
         glBindVertexBuffer(index, buffer_cache.GetHandle(), vertex_buffer_offset,
                            vertex_array.stride);
 
         if (regs.instanced_arrays.IsInstancingEnabled(index) && vertex_array.divisor != 0) {
-            // Tell OpenGL that this is an instanced vertex buffer to prevent accessing different
-            // indexes on each vertex. We do the instance indexing manually by incrementing the
-            // start address of the vertex buffer.
-            glVertexBindingDivisor(index, 1);
+            // Enable vertex buffer instancing with the specified divisor.
+            glVertexBindingDivisor(index, vertex_array.divisor);
         } else {
             // Disable the vertex buffer instancing.
             glVertexBindingDivisor(index, 0);
@@ -178,7 +171,7 @@ void RasterizerOpenGL::SetupVertexArrays() {
 
 void RasterizerOpenGL::SetupShaders() {
     MICROPROFILE_SCOPE(OpenGL_Shader);
-    auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
+    const auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
 
     // Next available bindpoints to use when uploading the const buffers and textures to the GLSL
     // shaders. The constbuffer bindpoint starts after the shader stage configuration bind points.
@@ -186,7 +179,7 @@ void RasterizerOpenGL::SetupShaders() {
     u32 current_texture_bindpoint = 0;
 
     for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
-        auto& shader_config = gpu.regs.shader_config[index];
+        const auto& shader_config = gpu.regs.shader_config[index];
         const Maxwell::ShaderProgram program{static_cast<Maxwell::ShaderProgram>(index)};
 
         // Skip stages that are not enabled
@@ -198,7 +191,7 @@ void RasterizerOpenGL::SetupShaders() {
 
         GLShader::MaxwellUniformData ubo{};
         ubo.SetFromRegs(gpu.state.shader_stages[stage]);
-        GLintptr offset = buffer_cache.UploadHostMemory(
+        const GLintptr offset = buffer_cache.UploadHostMemory(
             &ubo, sizeof(ubo), static_cast<size_t>(uniform_buffer_alignment));
 
         // Bind the buffer
@@ -432,11 +425,12 @@ void RasterizerOpenGL::DrawArrays() {
         return;
 
     MICROPROFILE_SCOPE(OpenGL_Drawing);
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    const auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
+    const auto& regs = gpu.regs;
 
     ScopeAcquireGLContext acquire_context{emu_window};
 
-    auto [dirty_color_surface, dirty_depth_surface] =
+    const auto [dirty_color_surface, dirty_depth_surface] =
         ConfigureFramebuffers(true, regs.zeta.Address() != 0 && regs.zeta_enable != 0, true);
 
     SyncDepthTestState();
@@ -450,7 +444,8 @@ void RasterizerOpenGL::DrawArrays() {
 
     // Draw the vertex batch
     const bool is_indexed = accelerate_draw == AccelDraw::Indexed;
-    const u64 index_buffer_size{regs.index_array.count * regs.index_array.FormatSizeInBytes()};
+    const u64 index_buffer_size{static_cast<u64>(regs.index_array.count) *
+                                static_cast<u64>(regs.index_array.FormatSizeInBytes())};
 
     state.draw.vertex_buffer = buffer_cache.GetHandle();
     state.Apply();
@@ -493,13 +488,29 @@ void RasterizerOpenGL::DrawArrays() {
         const GLint base_vertex{static_cast<GLint>(regs.vb_element_base)};
 
         // Adjust the index buffer offset so it points to the first desired index.
-        index_buffer_offset += regs.index_array.first * regs.index_array.FormatSizeInBytes();
+        index_buffer_offset += static_cast<GLintptr>(regs.index_array.first) *
+                               static_cast<GLintptr>(regs.index_array.FormatSizeInBytes());
 
-        glDrawElementsBaseVertex(primitive_mode, regs.index_array.count,
-                                 MaxwellToGL::IndexFormat(regs.index_array.format),
-                                 reinterpret_cast<const void*>(index_buffer_offset), base_vertex);
+        if (gpu.state.current_instance > 0) {
+            glDrawElementsInstancedBaseVertexBaseInstance(
+                primitive_mode, regs.index_array.count,
+                MaxwellToGL::IndexFormat(regs.index_array.format),
+                reinterpret_cast<const void*>(index_buffer_offset), 1, base_vertex,
+                gpu.state.current_instance);
+        } else {
+            glDrawElementsBaseVertex(primitive_mode, regs.index_array.count,
+                                     MaxwellToGL::IndexFormat(regs.index_array.format),
+                                     reinterpret_cast<const void*>(index_buffer_offset),
+                                     base_vertex);
+        }
     } else {
-        glDrawArrays(primitive_mode, regs.vertex_buffer.first, regs.vertex_buffer.count);
+        if (gpu.state.current_instance > 0) {
+            glDrawArraysInstancedBaseInstance(primitive_mode, regs.vertex_buffer.first,
+                                              regs.vertex_buffer.count, 1,
+                                              gpu.state.current_instance);
+        } else {
+            glDrawArrays(primitive_mode, regs.vertex_buffer.first, regs.vertex_buffer.count);
+        }
     }
 
     // Disable scissor test
@@ -516,13 +527,9 @@ void RasterizerOpenGL::DrawArrays() {
 
 void RasterizerOpenGL::NotifyMaxwellRegisterChanged(u32 method) {}
 
-void RasterizerOpenGL::FlushAll() {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
-}
+void RasterizerOpenGL::FlushAll() {}
 
-void RasterizerOpenGL::FlushRegion(VAddr addr, u64 size) {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
-}
+void RasterizerOpenGL::FlushRegion(VAddr addr, u64 size) {}
 
 void RasterizerOpenGL::InvalidateRegion(VAddr addr, u64 size) {
     MICROPROFILE_SCOPE(OpenGL_CacheManagement);
@@ -532,7 +539,6 @@ void RasterizerOpenGL::InvalidateRegion(VAddr addr, u64 size) {
 }
 
 void RasterizerOpenGL::FlushAndInvalidateRegion(VAddr addr, u64 size) {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
     InvalidateRegion(addr, size);
 }
 
@@ -580,7 +586,7 @@ bool RasterizerOpenGL::AccelerateDisplay(const Tegra::FramebufferConfig& config,
 void RasterizerOpenGL::SamplerInfo::Create() {
     sampler.Create();
     mag_filter = min_filter = Tegra::Texture::TextureFilter::Linear;
-    wrap_u = wrap_v = Tegra::Texture::WrapMode::Wrap;
+    wrap_u = wrap_v = wrap_p = Tegra::Texture::WrapMode::Wrap;
 
     // default is GL_LINEAR_MIPMAP_LINEAR
     glSamplerParameteri(sampler.handle, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -588,7 +594,7 @@ void RasterizerOpenGL::SamplerInfo::Create() {
 }
 
 void RasterizerOpenGL::SamplerInfo::SyncWithConfig(const Tegra::Texture::TSCEntry& config) {
-    GLuint s = sampler.handle;
+    const GLuint s = sampler.handle;
 
     if (mag_filter != config.mag_filter) {
         mag_filter = config.mag_filter;
@@ -607,8 +613,13 @@ void RasterizerOpenGL::SamplerInfo::SyncWithConfig(const Tegra::Texture::TSCEntr
         wrap_v = config.wrap_v;
         glSamplerParameteri(s, GL_TEXTURE_WRAP_T, MaxwellToGL::WrapMode(wrap_v));
     }
+    if (wrap_p != config.wrap_p) {
+        wrap_p = config.wrap_p;
+        glSamplerParameteri(s, GL_TEXTURE_WRAP_R, MaxwellToGL::WrapMode(wrap_p));
+    }
 
-    if (wrap_u == Tegra::Texture::WrapMode::Border || wrap_v == Tegra::Texture::WrapMode::Border) {
+    if (wrap_u == Tegra::Texture::WrapMode::Border || wrap_v == Tegra::Texture::WrapMode::Border ||
+        wrap_p == Tegra::Texture::WrapMode::Border) {
         const GLvec4 new_border_color = {{config.border_color_r, config.border_color_g,
                                           config.border_color_b, config.border_color_a}};
         if (border_color != new_border_color) {
@@ -682,7 +693,7 @@ u32 RasterizerOpenGL::SetupTextures(Maxwell::ShaderStage stage, Shader& shader, 
 
     for (u32 bindpoint = 0; bindpoint < entries.size(); ++bindpoint) {
         const auto& entry = entries[bindpoint];
-        u32 current_bindpoint = current_unit + bindpoint;
+        const u32 current_bindpoint = current_unit + bindpoint;
 
         // Bind the uniform to the sampler.
 
@@ -692,14 +703,15 @@ u32 RasterizerOpenGL::SetupTextures(Maxwell::ShaderStage stage, Shader& shader, 
         const auto texture = maxwell3d.GetStageTexture(entry.GetStage(), entry.GetOffset());
 
         if (!texture.enabled) {
-            state.texture_units[current_bindpoint].texture_2d = 0;
+            state.texture_units[current_bindpoint].texture = 0;
             continue;
         }
 
         texture_samplers[current_bindpoint].SyncWithConfig(texture.tsc);
         Surface surface = res_cache.GetTextureSurface(texture);
         if (surface != nullptr) {
-            state.texture_units[current_bindpoint].texture_2d = surface->Texture().handle;
+            state.texture_units[current_bindpoint].texture = surface->Texture().handle;
+            state.texture_units[current_bindpoint].target = surface->Target();
             state.texture_units[current_bindpoint].swizzle.r =
                 MaxwellToGL::SwizzleSource(texture.tic.x_source);
             state.texture_units[current_bindpoint].swizzle.g =
@@ -710,7 +722,7 @@ u32 RasterizerOpenGL::SetupTextures(Maxwell::ShaderStage stage, Shader& shader, 
                 MaxwellToGL::SwizzleSource(texture.tic.w_source);
         } else {
             // Can occur when texture addr is null or its memory is unmapped/invalid
-            state.texture_units[current_bindpoint].texture_2d = 0;
+            state.texture_units[current_bindpoint].texture = 0;
         }
     }
 

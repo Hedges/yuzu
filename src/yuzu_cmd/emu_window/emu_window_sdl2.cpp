@@ -91,6 +91,8 @@ bool EmuWindow_SDL2::SupportsRequiredGLExtensions() {
         unsupported_ext.push_back("ARB_vertex_type_10f_11f_11f_rev");
     if (!GLAD_GL_ARB_texture_mirror_clamp_to_edge)
         unsupported_ext.push_back("ARB_texture_mirror_clamp_to_edge");
+    if (!GLAD_GL_ARB_base_instance)
+        unsupported_ext.push_back("ARB_base_instance");
 
     // Extensions required to support some texture formats.
     if (!GLAD_GL_EXT_texture_compression_s3tc)
@@ -128,7 +130,7 @@ EmuWindow_SDL2::EmuWindow_SDL2(bool fullscreen) {
     SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
 
-    std::string window_title = fmt::format("yuzu {} | {}-{}", Common::g_build_name,
+    std::string window_title = fmt::format("yuzu {} | {}-{}", Common::g_build_fullname,
                                            Common::g_scm_branch, Common::g_scm_desc);
     render_window =
         SDL_CreateWindow(window_title.c_str(),
@@ -167,7 +169,7 @@ EmuWindow_SDL2::EmuWindow_SDL2(bool fullscreen) {
     OnMinimalClientAreaChangeRequest(GetActiveConfig().min_client_area_size);
     SDL_PumpEvents();
     SDL_GL_SetSwapInterval(false);
-    LOG_INFO(Frontend, "yuzu Version: {} | {}-{}", Common::g_build_name, Common::g_scm_branch,
+    LOG_INFO(Frontend, "yuzu Version: {} | {}-{}", Common::g_build_fullname, Common::g_scm_branch,
              Common::g_scm_desc);
 
     DoneCurrent();
