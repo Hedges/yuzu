@@ -203,7 +203,7 @@ void OpenGLState::Apply() const {
         if (texture_unit.texture != cur_state_texture_unit.texture) {
             glActiveTexture(TextureUnits::MaxwellTexture(static_cast<int>(i)).Enum());
             glBindTexture(texture_unit.target, texture_unit.texture);
-        //}
+        }
         if (texture_unit.sampler != cur_state_texture_unit.sampler) {
             glBindSampler(static_cast<GLuint>(i), texture_unit.sampler);
         }
