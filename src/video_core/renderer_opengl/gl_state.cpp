@@ -200,10 +200,10 @@ void OpenGLState::Apply() const {
         const auto& texture_unit = texture_units[i];
         const auto& cur_state_texture_unit = cur_state.texture_units[i];
 
-        if (texture_unit.texture_2d != cur_state_texture_unit.texture_2d) {
+        //if (texture_unit.texture_2d != cur_state_texture_unit.texture_2d) {
             glActiveTexture(TextureUnits::MaxwellTexture(static_cast<int>(i)).Enum());
             glBindTexture(GL_TEXTURE_2D, texture_unit.texture_2d);
-        }
+        //}
         if (texture_unit.sampler != cur_state_texture_unit.sampler) {
             glBindSampler(static_cast<GLuint>(i), texture_unit.sampler);
         }

@@ -348,10 +348,13 @@ public:
      * @param attribute The input attribute to use as the source value.
      */
     void SetRegisterToInputAttibute(const Register& reg, u64 elem, Attribute::Index attribute,
-                                    const Tegra::Shader::IpaMode& input_mode) {
-        std::string dest = GetRegisterAsFloat(reg);
-        std::string src = GetInputAttribute(attribute, input_mode) + GetSwizzle(elem);
-        shader.AddLine(dest + " = " + src + ';');
+                                    const Tegra::Shader::IpaMode& input_mode, u64 size = 1) {
+        for(u64 i = 0; i < size+1; i++)
+        {
+            std::string dest = GetRegisterAsFloat(reg+i);
+            std::string src = GetInputAttribute(attribute, input_mode) + GetSwizzle(i);
+            shader.AddLine(dest + " = " + src + ';');
+        }
     }
 
     /**
@@ -361,14 +364,19 @@ public:
      * @param elem The element to use for the operation.
      * @param reg The register to use as the source value.
      */
-    void SetOutputAttributeToRegister(Attribute::Index attribute, u64 elem, const Register& reg) {
+    void SetOutputAttributeToRegister(Attribute::Index attribute, u64 elem, const Register& reg, u64 size = 1) {
         std::string dest = GetOutputAttribute(attribute);
         std::string src = GetRegisterAsFloat(reg);
 
         if (!dest.empty()) {
             // Can happen with unknown/unimplemented output attributes, in which case we ignore the
             // instruction for now.
-            shader.AddLine(dest + GetSwizzle(elem) + " = " + src + ';');
+            for(u64 i = 0; i < size+1; i++)
+            {
+                dest = GetOutputAttribute(attribute) + GetSwizzle(i);
+                src = GetRegisterAsFloat(reg+i);
+                shader.AddLine(dest + " = " + src + ';');
+            }
         }
     }
 
@@ -1708,7 +1716,7 @@ private:
                 Tegra::Shader::IpaMode input_mode{Tegra::Shader::IpaInterpMode::Perspective,
                                                   Tegra::Shader::IpaSampleMode::Default};
                 regs.SetRegisterToInputAttibute(instr.gpr0, instr.attribute.fmt20.element,
-                                                instr.attribute.fmt20.index, input_mode);
+                                                instr.attribute.fmt20.index, input_mode, instr.attribute.fmt20.size);
                 break;
             }
             case OpCode::Id::LD_C: {
@@ -1752,7 +1760,7 @@ private:
             case OpCode::Id::ST_A: {
                 ASSERT_MSG(instr.attribute.fmt20.size == 0, "untested");
                 regs.SetOutputAttributeToRegister(instr.attribute.fmt20.index,
-                                                  instr.attribute.fmt20.element, instr.gpr0);
+                                                  instr.attribute.fmt20.element, instr.gpr0, instr.attribute.fmt20.size);
                 break;
             }
             case OpCode::Id::TEX: {
