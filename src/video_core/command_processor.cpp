@@ -62,10 +62,9 @@ void GPU::WriteReg(u32 method, u32 subchannel, u32 value, u32 remaining_params) 
         maxwell_compute->WriteReg(method, value);
         break;
     case EngineID::MAXWELL_DMA_COPY_A:
+    default:
         maxwell_dma->WriteReg(method, value);
         break;
-    default:
-        UNIMPLEMENTED();
     }
 }
 

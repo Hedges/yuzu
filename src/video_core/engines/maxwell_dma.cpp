@@ -40,15 +40,15 @@ void MaxwellDMA::HandleCopy() {
     const VAddr dest_cpu = *memory_manager.GpuToCpuAddress(dest);
 
     // TODO(Subv): Perform more research and implement all features of this engine.
-    ASSERT(regs.exec.enable_swizzle == 0);
-    ASSERT(regs.exec.enable_2d == 1);
-    ASSERT(regs.exec.query_mode == Regs::QueryMode::None);
-    ASSERT(regs.exec.query_intr == Regs::QueryIntr::None);
-    ASSERT(regs.exec.copy_mode == Regs::CopyMode::Unk2);
-    ASSERT(regs.src_params.pos_x == 0);
-    ASSERT(regs.src_params.pos_y == 0);
-    ASSERT(regs.dst_params.pos_x == 0);
-    ASSERT(regs.dst_params.pos_y == 0);
+    //ASSERT(regs.exec.enable_swizzle == 0);
+    //ASSERT(regs.exec.enable_2d == 1);
+    //ASSERT(regs.exec.query_mode == Regs::QueryMode::None);
+    //ASSERT(regs.exec.query_intr == Regs::QueryIntr::None);
+    //ASSERT(regs.exec.copy_mode == Regs::CopyMode::Unk2);
+    //ASSERT(regs.src_params.pos_x == 0);
+    //ASSERT(regs.src_params.pos_y == 0);
+    //ASSERT(regs.dst_params.pos_x == 0);
+    //ASSERT(regs.dst_params.pos_y == 0);
 
     if (regs.exec.is_dst_linear == regs.exec.is_src_linear) {
         Memory::CopyBlock(dest_cpu, source_cpu, regs.x_count * regs.y_count);
