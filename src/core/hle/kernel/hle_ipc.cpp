@@ -154,7 +154,7 @@ void HLERequestContext::ParseCommandBuffer(u32_le* src_cmdbuf, bool incoming) {
         return;
     }
 
-    //if (incoming) {
+    // if (incoming) {
     //    ASSERT(data_payload_header->magic == Common::MakeMagic('S', 'F', 'C', 'I'));
     //} else {
     //    ASSERT(data_payload_header->magic == Common::MakeMagic('S', 'F', 'C', 'O'));

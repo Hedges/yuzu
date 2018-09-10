@@ -67,10 +67,9 @@ u32 Module::Ioctl(u32 fd, u32 command, const std::vector<u8>& input, std::vector
 
 ResultCode Module::Close(u32 fd) {
     auto itr = open_files.find(fd);
-    //ASSERT_MSG(itr != open_files.end(), "Tried to talk to an invalid device");
+    // ASSERT_MSG(itr != open_files.end(), "Tried to talk to an invalid device");
 
-    if(itr != open_files.end())
-    {
+    if (itr != open_files.end()) {
         open_files.erase(itr);
     }
 

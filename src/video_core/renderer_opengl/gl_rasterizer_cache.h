@@ -109,6 +109,33 @@ struct SurfaceParams {
         Invalid = 4,
     };
 
+    enum class SurfaceTarget {
+        Texture1D,
+        Texture2D,
+        Texture3D,
+        Texture1DArray,
+        Texture2DArray,
+        TextureCubemap,
+    };
+
+    static SurfaceTarget SurfaceTargetFromTextureType(Tegra::Texture::TextureType texture_type) {
+        switch (texture_type) {
+        case Tegra::Texture::TextureType::Texture1D:
+            return SurfaceTarget::Texture1D;
+        case Tegra::Texture::TextureType::Texture2D:
+        case Tegra::Texture::TextureType::Texture2DNoMipmap:
+            return SurfaceTarget::Texture2D;
+        case Tegra::Texture::TextureType::Texture1DArray:
+            return SurfaceTarget::Texture1DArray;
+        case Tegra::Texture::TextureType::Texture2DArray:
+            return SurfaceTarget::Texture2DArray;
+        default:
+            LOG_CRITICAL(HW_GPU, "Unimplemented texture_type={}", static_cast<u32>(texture_type));
+            UNREACHABLE();
+            return SurfaceTarget::Texture2D;
+        }
+    }
+
     /**
      * Gets the compression factor for the specified PixelFormat. This applies to just the
      * "compressed width" and "compressed height", not the overall compression factor of a
@@ -635,15 +662,14 @@ struct SurfaceParams {
         ASSERT(width % compression_factor == 0);
         ASSERT(height % compression_factor == 0);
         return (width / compression_factor) * (height / compression_factor) *
-               GetFormatBpp(pixel_format) / CHAR_BIT;
+               GetFormatBpp(pixel_format) * depth / CHAR_BIT;
     }
 
     /// Creates SurfaceParams from a texture configuration
     static SurfaceParams CreateForTexture(const Tegra::Texture::FullTextureInfo& config);
 
     /// Creates SurfaceParams from a framebuffer configuration
-    static SurfaceParams CreateForFramebuffer(
-        const Tegra::Engines::Maxwell3D::Regs::RenderTargetConfig& config);
+    static SurfaceParams CreateForFramebuffer(size_t index);
 
     /// Creates SurfaceParams for a depth buffer configuration
     static SurfaceParams CreateForDepthBuffer(u32 zeta_width, u32 zeta_height,
@@ -664,8 +690,10 @@ struct SurfaceParams {
     SurfaceType type;
     u32 width;
     u32 height;
+    u32 depth;
     u32 unaligned_height;
     size_t size_in_bytes;
+    SurfaceTarget target;
 
     // Parameters used for caching only
     u32 cache_width;
@@ -709,6 +737,10 @@ public:
         return texture;
     }
 
+    GLenum Target() const {
+        return gl_target;
+    }
+
     static constexpr unsigned int GetGLBytesPerPixel(SurfaceParams::PixelFormat format) {
         if (format == SurfaceParams::PixelFormat::Invalid)
             return 0;
@@ -724,14 +756,14 @@ public:
     void LoadGLBuffer();
     void FlushGLBuffer();
 
-    // Upload/Download data in gl_buffer in/to this surface's texture
+    // Upload data in gl_buffer to this surface's texture
     void UploadGLTexture(GLuint read_fb_handle, GLuint draw_fb_handle);
-    void DownloadGLTexture(GLuint read_fb_handle, GLuint draw_fb_handle);
 
 private:
     OGLTexture texture;
     std::vector<u8> gl_buffer;
     SurfaceParams params;
+    GLenum gl_target;
 };
 
 class RasterizerCacheOpenGL final : public RasterizerCache<Surface> {
@@ -741,9 +773,11 @@ public:
     /// Get a surface based on the texture configuration
     Surface GetTextureSurface(const Tegra::Texture::FullTextureInfo& config);
 
-    /// Get the color and depth surfaces based on the framebuffer configuration
-    SurfaceSurfaceRect_Tuple GetFramebufferSurfaces(bool using_color_fb, bool using_depth_fb,
-                                                    bool preserve_contents);
+    /// Get the depth surface based on the framebuffer configuration
+    Surface GetDepthBufferSurface(bool preserve_contents);
+
+    /// Get the color surface based on the framebuffer configuration and the specified render target
+    Surface GetColorBufferSurface(size_t index, bool preserve_contents);
 
     /// Flushes the surface to Switch memory
     void FlushSurface(const Surface& surface);
@@ -774,6 +808,10 @@ private:
 
     OGLFramebuffer read_framebuffer;
     OGLFramebuffer draw_framebuffer;
+
+    /// Use a Pixel Buffer Object to download the previous texture and then upload it to the new one
+    /// using the new format.
+    OGLBuffer copy_pbo;
 };
 
 } // namespace OpenGL

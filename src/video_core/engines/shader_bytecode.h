@@ -244,6 +244,16 @@ enum class TextureType : u64 {
     TextureCube = 3,
 };
 
+enum class TextureQueryType : u64 {
+    Dimension = 1,
+    TextureType = 2,
+    SamplePosition = 5,
+    Filter = 16,
+    LevelOfDetail = 18,
+    Wrap = 20,
+    BorderColor = 22,
+};
+
 enum class IpaInterpMode : u64 { Linear = 0, Perspective = 1, Flat = 2, Sc = 3 };
 enum class IpaSampleMode : u64 { Default = 0, Centroid = 1, Offset = 2 };
 
@@ -519,6 +529,21 @@ union Instruction {
     } tex;
 
     union {
+        BitField<22, 6, TextureQueryType> query_type;
+        BitField<31, 4, u64> component_mask;
+    } txq;
+
+    union {
+        BitField<28, 1, u64> array;
+        BitField<29, 2, TextureType> texture_type;
+        BitField<31, 4, u64> component_mask;
+
+        bool IsComponentEnabled(size_t component) const {
+            return ((1ull << component) & component_mask) != 0;
+        }
+    } tmml;
+
+    union {
         BitField<28, 1, u64> array;
         BitField<29, 2, TextureType> texture_type;
         BitField<56, 2, u64> component;
@@ -670,11 +695,13 @@ public:
         LDG, // Load from global memory
         STG, // Store in global memory
         TEX,
-        TEXQ,  // Texture Query
-        TEXS,  // Texture Fetch with scalar/non-vec4 source/destinations
-        TLDS,  // Texture Load with scalar/non-vec4 source/destinations
-        TLD4,  // Texture Load 4
-        TLD4S, // Texture Load 4 with scalar / non - vec4 source / destinations
+        TXQ,    // Texture Query
+        TEXS,   // Texture Fetch with scalar/non-vec4 source/destinations
+        TLDS,   // Texture Load with scalar/non-vec4 source/destinations
+        TLD4,   // Texture Load 4
+        TLD4S,  // Texture Load 4 with scalar / non - vec4 source / destinations
+        TMML_B, // Texture Mip Map Level
+        TMML,   // Texture Mip Map Level
         EXIT,
         IPA,
         FFMA_IMM, // Fused Multiply and Add
@@ -894,11 +921,13 @@ private:
             INST("1110111011010---", Id::LDG, Type::Memory, "LDG"),
             INST("1110111011011---", Id::STG, Type::Memory, "STG"),
             INST("110000----111---", Id::TEX, Type::Memory, "TEX"),
-            INST("1101111101001---", Id::TEXQ, Type::Memory, "TEXQ"),
+            INST("1101111101001---", Id::TXQ, Type::Memory, "TXQ"),
             INST("1101100---------", Id::TEXS, Type::Memory, "TEXS"),
             INST("1101101---------", Id::TLDS, Type::Memory, "TLDS"),
             INST("110010----111---", Id::TLD4, Type::Memory, "TLD4"),
             INST("1101111100------", Id::TLD4S, Type::Memory, "TLD4S"),
+            INST("110111110110----", Id::TMML_B, Type::Memory, "TMML_B"),
+            INST("1101111101011---", Id::TMML, Type::Memory, "TMML"),
             INST("111000110000----", Id::EXIT, Type::Trivial, "EXIT"),
             INST("11100000--------", Id::IPA, Type::Trivial, "IPA"),
             INST("0011001-1-------", Id::FFMA_IMM, Type::Ffma, "FFMA_IMM"),

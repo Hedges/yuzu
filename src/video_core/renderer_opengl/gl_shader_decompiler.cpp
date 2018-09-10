@@ -116,7 +116,7 @@ private:
 
     /// Scans a range of code for labels and determines the exit method.
     ExitMethod Scan(u32 begin, u32 end, std::set<u32>& labels) {
-        auto [iter, inserted] =
+        const auto [iter, inserted] =
             exit_method_map.emplace(std::make_pair(begin, end), ExitMethod::Undetermined);
         ExitMethod& exit_method = iter->second;
         if (!inserted)
@@ -134,22 +134,22 @@ private:
                     if (instr.pred.pred_index == static_cast<u64>(Pred::UnusedIndex)) {
                         return exit_method = ExitMethod::AlwaysEnd;
                     } else {
-                        ExitMethod not_met = Scan(offset + 1, end, labels);
+                        const ExitMethod not_met = Scan(offset + 1, end, labels);
                         return exit_method = ParallelExit(ExitMethod::AlwaysEnd, not_met);
                     }
                 }
                 case OpCode::Id::BRA: {
-                    u32 target = offset + instr.bra.GetBranchTarget();
+                    const u32 target = offset + instr.bra.GetBranchTarget();
                     labels.insert(target);
-                    ExitMethod no_jmp = Scan(offset + 1, end, labels);
-                    ExitMethod jmp = Scan(target, end, labels);
+                    const ExitMethod no_jmp = Scan(offset + 1, end, labels);
+                    const ExitMethod jmp = Scan(target, end, labels);
                     return exit_method = ParallelExit(no_jmp, jmp);
                 }
                 case OpCode::Id::SSY: {
                     // The SSY instruction uses a similar encoding as the BRA instruction.
                     ASSERT_MSG(instr.bra.constant_buffer == 0,
                                "Constant buffer SSY is not supported");
-                    u32 target = offset + instr.bra.GetBranchTarget();
+                    const u32 target = offset + instr.bra.GetBranchTarget();
                     labels.insert(target);
                     // Continue scanning for an exit method.
                     break;
@@ -349,9 +349,8 @@ public:
      */
     void SetRegisterToInputAttibute(const Register& reg, u64 elem, Attribute::Index attribute,
                                     const Tegra::Shader::IpaMode& input_mode, u64 size = 1) {
-        for(u64 i = 0; i < size+1; i++)
-        {
-            std::string dest = GetRegisterAsFloat(reg+i);
+        for (u64 i = 0; i < size + 1; i++) {
+            std::string dest = GetRegisterAsFloat(reg + i);
             std::string src = GetInputAttribute(attribute, input_mode) + GetSwizzle(i);
             shader.AddLine(dest + " = " + src + ';');
         }
@@ -364,17 +363,17 @@ public:
      * @param elem The element to use for the operation.
      * @param reg The register to use as the source value.
      */
-    void SetOutputAttributeToRegister(Attribute::Index attribute, u64 elem, const Register& reg, u64 size = 1) {
+    void SetOutputAttributeToRegister(Attribute::Index attribute, u64 elem, const Register& reg,
+                                      u64 size = 1) {
         std::string dest = GetOutputAttribute(attribute);
         std::string src = GetRegisterAsFloat(reg);
 
         if (!dest.empty()) {
             // Can happen with unknown/unimplemented output attributes, in which case we ignore the
             // instruction for now.
-            for(u64 i = 0; i < size+1; i++)
-            {
+            for (u64 i = 0; i < size + 1; i++) {
                 dest = GetOutputAttribute(attribute) + GetSwizzle(i);
-                src = GetRegisterAsFloat(reg+i);
+                src = GetRegisterAsFloat(reg + i);
                 shader.AddLine(dest + " = " + src + ';');
             }
         }
@@ -404,9 +403,9 @@ public:
                                    GLSLRegister::Type type) {
         declr_const_buffers[cbuf_index].MarkAsUsedIndirect(cbuf_index, stage);
 
-        std::string final_offset = fmt::format("({} + {})", index_str, offset / 4);
-        std::string value = 'c' + std::to_string(cbuf_index) + '[' + final_offset + " / 4][" +
-                            final_offset + " % 4]";
+        const std::string final_offset = fmt::format("({} + {})", index_str, offset / 4);
+        const std::string value = 'c' + std::to_string(cbuf_index) + '[' + final_offset + " / 4][" +
+                                  final_offset + " % 4]";
 
         if (type == GLSLRegister::Type::Float) {
             return value;
@@ -454,13 +453,12 @@ public:
         }
         declarations.AddNewLine();
 
-        // Append the sampler2D array for the used textures.
-        const size_t num_samplers = used_samplers.size();
-        if (num_samplers > 0) {
-            declarations.AddLine("uniform sampler2D " + SamplerEntry::GetArrayName(stage) + '[' +
-                                 std::to_string(num_samplers) + "];");
-            declarations.AddNewLine();
+        const auto& samplers = GetSamplers();
+        for (const auto& sampler : samplers) {
+            declarations.AddLine("uniform " + sampler.GetTypeString() + ' ' + sampler.GetName() +
+                                 ';');
         }
+        declarations.AddNewLine();
     }
 
     /// Returns a list of constant buffer declarations
@@ -472,27 +470,29 @@ public:
     }
 
     /// Returns a list of samplers used in the shader
-    std::vector<SamplerEntry> GetSamplers() const {
+    const std::vector<SamplerEntry>& GetSamplers() const {
         return used_samplers;
     }
 
     /// Returns the GLSL sampler used for the input shader sampler, and creates a new one if
     /// necessary.
-    std::string AccessSampler(const Sampler& sampler) {
-        size_t offset = static_cast<size_t>(sampler.index.Value());
+    std::string AccessSampler(const Sampler& sampler, Tegra::Shader::TextureType type,
+                              bool is_array) {
+        const size_t offset = static_cast<size_t>(sampler.index.Value());
 
         // If this sampler has already been used, return the existing mapping.
-        auto itr =
+        const auto itr =
             std::find_if(used_samplers.begin(), used_samplers.end(),
                          [&](const SamplerEntry& entry) { return entry.GetOffset() == offset; });
 
         if (itr != used_samplers.end()) {
+            ASSERT(itr->GetType() == type && itr->IsArray() == is_array);
             return itr->GetName();
         }
 
         // Otherwise create a new mapping for this sampler
-        size_t next_index = used_samplers.size();
-        SamplerEntry entry{stage, offset, next_index};
+        const size_t next_index = used_samplers.size();
+        const SamplerEntry entry{stage, offset, next_index, type, is_array};
         used_samplers.emplace_back(entry);
         return entry.GetName();
     }
@@ -709,7 +709,7 @@ private:
         };
 
         bool IsColorComponentOutputEnabled(u32 render_target, u32 component) const {
-            u32 bit = render_target * 4 + component;
+            const u32 bit = render_target * 4 + component;
             return enabled_color_outputs & (1 << bit);
         }
     };
@@ -717,7 +717,7 @@ private:
 
     /// Gets the Subroutine object corresponding to the specified address.
     const Subroutine& GetSubroutine(u32 begin, u32 end) const {
-        auto iter = subroutines.find(Subroutine{begin, end, suffix});
+        const auto iter = subroutines.find(Subroutine{begin, end, suffix});
         ASSERT(iter != subroutines.end());
         return *iter;
     }
@@ -733,8 +733,8 @@ private:
     }
 
     /// Generates code representing a texture sampler.
-    std::string GetSampler(const Sampler& sampler) {
-        return regs.AccessSampler(sampler);
+    std::string GetSampler(const Sampler& sampler, Tegra::Shader::TextureType type, bool is_array) {
+        return regs.AccessSampler(sampler, type, is_array);
     }
 
     /**
@@ -762,7 +762,7 @@ private:
         // Can't assign to the constant predicate.
         ASSERT(pred != static_cast<u64>(Pred::UnusedIndex));
 
-        std::string variable = 'p' + std::to_string(pred) + '_' + suffix;
+        const std::string variable = 'p' + std::to_string(pred) + '_' + suffix;
         shader.AddLine(variable + " = " + value + ';');
         declr_predicates.insert(std::move(variable));
     }
@@ -1043,7 +1043,11 @@ private:
         if (header.writes_depth) {
             // The depth output is always 2 registers after the last color output, and current_reg
             // already contains one past the last color register.
-            shader.AddLine("gl_FragDepth = " + regs.GetRegisterAsFloat(current_reg + 1) + ';');
+
+            shader.AddLine(
+                "gl_FragDepth = " +
+                regs.GetRegisterAsFloat(static_cast<Tegra::Shader::Register>(current_reg) + 1) +
+                ';');
         }
     }
 
@@ -1445,7 +1449,7 @@ private:
                 if (instr.alu_integer.negate_b)
                     op_b = "-(" + op_b + ')';
 
-                std::string shift = std::to_string(instr.alu_integer.shift_amount.Value());
+                const std::string shift = std::to_string(instr.alu_integer.shift_amount.Value());
 
                 regs.SetRegisterToInteger(instr.gpr0, true, 0,
                                           "((" + op_a + " << " + shift + ") + " + op_b + ')', 1, 1);
@@ -1463,7 +1467,7 @@ private:
             case OpCode::Id::SEL_C:
             case OpCode::Id::SEL_R:
             case OpCode::Id::SEL_IMM: {
-                std::string condition =
+                const std::string condition =
                     GetPredicateCondition(instr.sel.pred, instr.sel.neg_pred != 0);
                 regs.SetRegisterToInteger(instr.gpr0, true, 0,
                                           '(' + condition + ") ? " + op_a + " : " + op_b, 1, 1);
@@ -1485,8 +1489,9 @@ private:
             case OpCode::Id::LOP3_C:
             case OpCode::Id::LOP3_R:
             case OpCode::Id::LOP3_IMM: {
-                std::string op_c = regs.GetRegisterAsInteger(instr.gpr39);
+                const std::string op_c = regs.GetRegisterAsInteger(instr.gpr39);
                 std::string lut;
+
                 if (opcode->GetId() == OpCode::Id::LOP3_R) {
                     lut = '(' + std::to_string(instr.alu.lop3.GetImmLut28()) + ')';
                 } else {
@@ -1501,9 +1506,9 @@ private:
             case OpCode::Id::IMNMX_IMM: {
                 ASSERT_MSG(instr.imnmx.exchange == Tegra::Shader::IMinMaxExchange::None,
                            "Unimplemented");
-                std::string condition =
+                const std::string condition =
                     GetPredicateCondition(instr.imnmx.pred, instr.imnmx.negate_pred != 0);
-                std::string parameters = op_a + ',' + op_b;
+                const std::string parameters = op_a + ',' + op_b;
                 regs.SetRegisterToInteger(instr.gpr0, instr.imnmx.is_signed, 0,
                                           '(' + condition + ") ? min(" + parameters + ") : max(" +
                                               parameters + ')',
@@ -1520,7 +1525,7 @@ private:
             break;
         }
         case OpCode::Type::Ffma: {
-            std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
+            const std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
             std::string op_b = instr.ffma.negate_b ? "-" : "";
             std::string op_c = instr.ffma.negate_c ? "-" : "";
 
@@ -1716,7 +1721,8 @@ private:
                 Tegra::Shader::IpaMode input_mode{Tegra::Shader::IpaInterpMode::Perspective,
                                                   Tegra::Shader::IpaSampleMode::Default};
                 regs.SetRegisterToInputAttibute(instr.gpr0, instr.attribute.fmt20.element,
-                                                instr.attribute.fmt20.index, input_mode, instr.attribute.fmt20.size);
+                                                instr.attribute.fmt20.index, input_mode,
+                                                instr.attribute.fmt20.size);
                 break;
             }
             case OpCode::Id::LD_C: {
@@ -1730,7 +1736,7 @@ private:
                 shader.AddLine("uint index = (" + regs.GetRegisterAsInteger(instr.gpr8, 0, false) +
                                " / 4) & (MAX_CONSTBUFFER_ELEMENTS - 1);");
 
-                std::string op_a =
+                const std::string op_a =
                     regs.GetUniformIndirect(instr.cbuf36.index, instr.cbuf36.offset + 0, "index",
                                             GLSLRegister::Type::Float);
 
@@ -1740,7 +1746,7 @@ private:
                     break;
 
                 case Tegra::Shader::UniformType::Double: {
-                    std::string op_b =
+                    const std::string op_b =
                         regs.GetUniformIndirect(instr.cbuf36.index, instr.cbuf36.offset + 4,
                                                 "index", GLSLRegister::Type::Float);
                     regs.SetRegisterToFloat(instr.gpr0, 0, op_a, 1, 1);
@@ -1760,14 +1766,40 @@ private:
             case OpCode::Id::ST_A: {
                 ASSERT_MSG(instr.attribute.fmt20.size == 0, "untested");
                 regs.SetOutputAttributeToRegister(instr.attribute.fmt20.index,
-                                                  instr.attribute.fmt20.element, instr.gpr0, instr.attribute.fmt20.size);
+                                                  instr.attribute.fmt20.element, instr.gpr0,
+                                                  instr.attribute.fmt20.size);
                 break;
             }
             case OpCode::Id::TEX: {
-                const std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
-                const std::string op_b = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                const std::string sampler = GetSampler(instr.sampler);
-                const std::string coord = "vec2 coords = vec2(" + op_a + ", " + op_b + ");";
+                ASSERT_MSG(instr.tex.array == 0, "TEX arrays unimplemented");
+                Tegra::Shader::TextureType texture_type{instr.tex.texture_type};
+                std::string coord;
+
+                switch (texture_type) {
+                case Tegra::Shader::TextureType::Texture1D: {
+                    const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                    coord = "float coords = " + x + ';';
+                    break;
+                }
+                case Tegra::Shader::TextureType::Texture2D: {
+                    const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                    const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    break;
+                }
+                default:
+                    LOG_CRITICAL(HW_GPU, "Unhandled texture type {}",
+                                 static_cast<u32>(texture_type));
+                    UNREACHABLE();
+
+                    // Fallback to interpreting as a 2D texture for now
+                    const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                    const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    texture_type = Tegra::Shader::TextureType::Texture2D;
+                }
+
+                const std::string sampler = GetSampler(instr.sampler, texture_type, false);
                 // Add an extra scope and declare the texture coords inside to prevent
                 // overwriting them in case they are used as outputs of the texs instruction.
                 shader.AddLine("{");
@@ -1789,20 +1821,65 @@ private:
                 break;
             }
             case OpCode::Id::TEXS: {
-                const std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
-                const std::string op_b = regs.GetRegisterAsFloat(instr.gpr20);
-                const std::string sampler = GetSampler(instr.sampler);
-                const std::string coord = "vec2 coords = vec2(" + op_a + ", " + op_b + ");";
+                std::string coord;
+                Tegra::Shader::TextureType texture_type{instr.texs.GetTextureType()};
+                bool is_array{instr.texs.IsArrayTexture()};
 
+                switch (texture_type) {
+                case Tegra::Shader::TextureType::Texture2D: {
+                    if (is_array) {
+                        const std::string index = regs.GetRegisterAsInteger(instr.gpr8);
+                        const std::string x = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                        const std::string y = regs.GetRegisterAsFloat(instr.gpr20);
+                        coord = "vec3 coords = vec3(" + x + ", " + y + ", " + index + ");";
+                    } else {
+                        const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                        const std::string y = regs.GetRegisterAsFloat(instr.gpr20);
+                        coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    }
+                    break;
+                }
+                default:
+                    LOG_CRITICAL(HW_GPU, "Unhandled texture type {}",
+                                 static_cast<u32>(texture_type));
+                    UNREACHABLE();
+
+                    // Fallback to interpreting as a 2D texture for now
+                    const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                    const std::string y = regs.GetRegisterAsFloat(instr.gpr20);
+                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    texture_type = Tegra::Shader::TextureType::Texture2D;
+                    is_array = false;
+                }
+                const std::string sampler = GetSampler(instr.sampler, texture_type, is_array);
                 const std::string texture = "texture(" + sampler + ", coords)";
                 WriteTexsInstruction(instr, coord, texture);
                 break;
             }
             case OpCode::Id::TLDS: {
-                const std::string op_a = regs.GetRegisterAsInteger(instr.gpr8);
-                const std::string op_b = regs.GetRegisterAsInteger(instr.gpr20);
-                const std::string sampler = GetSampler(instr.sampler);
-                const std::string coord = "ivec2 coords = ivec2(" + op_a + ", " + op_b + ");";
+                ASSERT(instr.tlds.GetTextureType() == Tegra::Shader::TextureType::Texture2D);
+                ASSERT(instr.tlds.IsArrayTexture() == false);
+                std::string coord;
+
+                switch (instr.tlds.GetTextureType()) {
+                case Tegra::Shader::TextureType::Texture2D: {
+                    if (instr.tlds.IsArrayTexture()) {
+                        LOG_CRITICAL(HW_GPU, "Unhandled 2d array texture");
+                        UNREACHABLE();
+                    } else {
+                        const std::string x = regs.GetRegisterAsInteger(instr.gpr8);
+                        const std::string y = regs.GetRegisterAsInteger(instr.gpr20);
+                        coord = "ivec2 coords = ivec2(" + x + ", " + y + ");";
+                    }
+                    break;
+                }
+                default:
+                    LOG_CRITICAL(HW_GPU, "Unhandled texture type {}",
+                                 static_cast<u32>(instr.tlds.GetTextureType()));
+                    UNREACHABLE();
+                }
+                const std::string sampler = GetSampler(instr.sampler, instr.tlds.GetTextureType(),
+                                                       instr.tlds.IsArrayTexture());
                 const std::string texture = "texelFetch(" + sampler + ", coords, 0)";
                 WriteTexsInstruction(instr, coord, texture);
                 break;
@@ -1810,12 +1887,12 @@ private:
             case OpCode::Id::TLD4: {
                 ASSERT(instr.tld4.texture_type == Tegra::Shader::TextureType::Texture2D);
                 ASSERT(instr.tld4.array == 0);
-                std::string coord{};
+                std::string coord;
 
                 switch (instr.tld4.texture_type) {
                 case Tegra::Shader::TextureType::Texture2D: {
-                    std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                    std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                    const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                    const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
                     coord = "vec2 coords = vec2(" + x + ", " + y + ");";
                     break;
                 }
@@ -1825,7 +1902,8 @@ private:
                     UNREACHABLE();
                 }
 
-                const std::string sampler = GetSampler(instr.sampler);
+                const std::string sampler =
+                    GetSampler(instr.sampler, instr.tld4.texture_type, false);
                 // Add an extra scope and declare the texture coords inside to prevent
                 // overwriting them in case they are used as outputs of the texs instruction.
                 shader.AddLine("{");
@@ -1851,11 +1929,80 @@ private:
                 const std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
                 const std::string op_b = regs.GetRegisterAsFloat(instr.gpr20);
                 // TODO(Subv): Figure out how the sampler type is encoded in the TLD4S instruction.
-                const std::string sampler = GetSampler(instr.sampler);
+                const std::string sampler =
+                    GetSampler(instr.sampler, Tegra::Shader::TextureType::Texture2D, false);
                 const std::string coord = "vec2 coords = vec2(" + op_a + ", " + op_b + ");";
                 const std::string texture = "textureGather(" + sampler + ", coords, " +
                                             std::to_string(instr.tld4s.component) + ')';
                 WriteTexsInstruction(instr, coord, texture);
+                break;
+            }
+            case OpCode::Id::TXQ: {
+                // TODO: the new commits on the texture refactor, change the way samplers work.
+                // Sadly, not all texture instructions specify the type of texture their sampler
+                // uses. This must be fixed at a later instance.
+                const std::string sampler =
+                    GetSampler(instr.sampler, Tegra::Shader::TextureType::Texture2D, false);
+                switch (instr.txq.query_type) {
+                case Tegra::Shader::TextureQueryType::Dimension: {
+                    const std::string texture = "textureQueryLevels(" + sampler + ')';
+                    regs.SetRegisterToInteger(instr.gpr0, true, 0, texture, 1, 1);
+                    break;
+                }
+                default: {
+                    LOG_CRITICAL(HW_GPU, "Unhandled texture query type: {}",
+                                 static_cast<u32>(instr.txq.query_type.Value()));
+                    UNREACHABLE();
+                }
+                }
+                break;
+            }
+            case OpCode::Id::TMML: {
+                const std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
+                const std::string op_b = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                const bool is_array = instr.tmml.array != 0;
+                auto texture_type = instr.tmml.texture_type.Value();
+                const std::string sampler = GetSampler(instr.sampler, texture_type, is_array);
+
+                // TODO: add coordinates for different samplers once other texture types are
+                // implemented.
+                std::string coord;
+                switch (texture_type) {
+                case Tegra::Shader::TextureType::Texture1D: {
+                    std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                    coord = "float coords = " + x + ';';
+                    break;
+                }
+                case Tegra::Shader::TextureType::Texture2D: {
+                    std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                    std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    break;
+                }
+                default:
+                    LOG_CRITICAL(HW_GPU, "Unhandled texture type {}",
+                                 static_cast<u32>(texture_type));
+                    UNREACHABLE();
+
+                    // Fallback to interpreting as a 2D texture for now
+                    std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                    std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    texture_type = Tegra::Shader::TextureType::Texture2D;
+                }
+                // Add an extra scope and declare the texture coords inside to prevent
+                // overwriting them in case they are used as outputs of the texs instruction.
+                shader.AddLine('{');
+                ++shader.scope;
+                shader.AddLine(coord);
+                const std::string texture = "textureQueryLod(" + sampler + ", coords)";
+                const std::string tmp = "vec2 tmp = " + texture + "*vec2(256.0, 256.0);";
+                shader.AddLine(tmp);
+
+                regs.SetRegisterToInteger(instr.gpr0, true, 0, "int(tmp.y)", 1, 1);
+                regs.SetRegisterToInteger(instr.gpr0.Value() + 1, false, 0, "uint(tmp.x)", 1, 1);
+                --shader.scope;
+                shader.AddLine('}');
                 break;
             }
             default: {
@@ -1897,12 +2044,12 @@ private:
             // We can't use the constant predicate as destination.
             ASSERT(instr.fsetp.pred3 != static_cast<u64>(Pred::UnusedIndex));
 
-            std::string second_pred =
+            const std::string second_pred =
                 GetPredicateCondition(instr.fsetp.pred39, instr.fsetp.neg_pred != 0);
 
-            std::string combiner = GetPredicateCombiner(instr.fsetp.op);
+            const std::string combiner = GetPredicateCombiner(instr.fsetp.op);
 
-            std::string predicate = GetPredicateComparison(instr.fsetp.cond, op_a, op_b);
+            const std::string predicate = GetPredicateComparison(instr.fsetp.cond, op_a, op_b);
             // Set the primary predicate to the result of Predicate OP SecondPredicate
             SetPredicate(instr.fsetp.pred3,
                          '(' + predicate + ") " + combiner + " (" + second_pred + ')');
@@ -1916,7 +2063,8 @@ private:
             break;
         }
         case OpCode::Type::IntegerSetPredicate: {
-            std::string op_a = regs.GetRegisterAsInteger(instr.gpr8, 0, instr.isetp.is_signed);
+            const std::string op_a =
+                regs.GetRegisterAsInteger(instr.gpr8, 0, instr.isetp.is_signed);
             std::string op_b;
 
             if (instr.is_b_imm) {
@@ -1933,12 +2081,12 @@ private:
             // We can't use the constant predicate as destination.
             ASSERT(instr.isetp.pred3 != static_cast<u64>(Pred::UnusedIndex));
 
-            std::string second_pred =
+            const std::string second_pred =
                 GetPredicateCondition(instr.isetp.pred39, instr.isetp.neg_pred != 0);
 
-            std::string combiner = GetPredicateCombiner(instr.isetp.op);
+            const std::string combiner = GetPredicateCombiner(instr.isetp.op);
 
-            std::string predicate = GetPredicateComparison(instr.isetp.cond, op_a, op_b);
+            const std::string predicate = GetPredicateComparison(instr.isetp.cond, op_a, op_b);
             // Set the primary predicate to the result of Predicate OP SecondPredicate
             SetPredicate(instr.isetp.pred3,
                          '(' + predicate + ") " + combiner + " (" + second_pred + ')');
@@ -1952,20 +2100,20 @@ private:
             break;
         }
         case OpCode::Type::PredicateSetPredicate: {
-            std::string op_a =
+            const std::string op_a =
                 GetPredicateCondition(instr.psetp.pred12, instr.psetp.neg_pred12 != 0);
-            std::string op_b =
+            const std::string op_b =
                 GetPredicateCondition(instr.psetp.pred29, instr.psetp.neg_pred29 != 0);
 
             // We can't use the constant predicate as destination.
             ASSERT(instr.psetp.pred3 != static_cast<u64>(Pred::UnusedIndex));
 
-            std::string second_pred =
+            const std::string second_pred =
                 GetPredicateCondition(instr.psetp.pred39, instr.psetp.neg_pred39 != 0);
 
-            std::string combiner = GetPredicateCombiner(instr.psetp.op);
+            const std::string combiner = GetPredicateCombiner(instr.psetp.op);
 
-            std::string predicate =
+            const std::string predicate =
                 '(' + op_a + ") " + GetPredicateCombiner(instr.psetp.cond) + " (" + op_b + ')';
 
             // Set the primary predicate to the result of Predicate OP SecondPredicate
@@ -1991,7 +2139,7 @@ private:
             std::string op_b = instr.fset.neg_b ? "-" : "";
 
             if (instr.is_b_imm) {
-                std::string imm = GetImmediate19(instr);
+                const std::string imm = GetImmediate19(instr);
                 if (instr.fset.neg_imm)
                     op_b += "(-" + imm + ')';
                 else
@@ -2011,13 +2159,14 @@ private:
 
             // The fset instruction sets a register to 1.0 or -1 (depending on the bf bit) if the
             // condition is true, and to 0 otherwise.
-            std::string second_pred =
+            const std::string second_pred =
                 GetPredicateCondition(instr.fset.pred39, instr.fset.neg_pred != 0);
 
-            std::string combiner = GetPredicateCombiner(instr.fset.op);
+            const std::string combiner = GetPredicateCombiner(instr.fset.op);
 
-            std::string predicate = "((" + GetPredicateComparison(instr.fset.cond, op_a, op_b) +
-                                    ") " + combiner + " (" + second_pred + "))";
+            const std::string predicate = "((" +
+                                          GetPredicateComparison(instr.fset.cond, op_a, op_b) +
+                                          ") " + combiner + " (" + second_pred + "))";
 
             if (instr.fset.bf) {
                 regs.SetRegisterToFloat(instr.gpr0, 0, predicate + " ? 1.0 : 0.0", 1, 1);
@@ -2028,7 +2177,7 @@ private:
             break;
         }
         case OpCode::Type::IntegerSet: {
-            std::string op_a = regs.GetRegisterAsInteger(instr.gpr8, 0, instr.iset.is_signed);
+            const std::string op_a = regs.GetRegisterAsInteger(instr.gpr8, 0, instr.iset.is_signed);
 
             std::string op_b;
 
@@ -2045,13 +2194,14 @@ private:
 
             // The iset instruction sets a register to 1.0 or -1 (depending on the bf bit) if the
             // condition is true, and to 0 otherwise.
-            std::string second_pred =
+            const std::string second_pred =
                 GetPredicateCondition(instr.iset.pred39, instr.iset.neg_pred != 0);
 
-            std::string combiner = GetPredicateCombiner(instr.iset.op);
+            const std::string combiner = GetPredicateCombiner(instr.iset.op);
 
-            std::string predicate = "((" + GetPredicateComparison(instr.iset.cond, op_a, op_b) +
-                                    ") " + combiner + " (" + second_pred + "))";
+            const std::string predicate = "((" +
+                                          GetPredicateComparison(instr.iset.cond, op_a, op_b) +
+                                          ") " + combiner + " (" + second_pred + "))";
 
             if (instr.iset.bf) {
                 regs.SetRegisterToFloat(instr.gpr0, 0, predicate + " ? 1.0 : 0.0", 1, 1);
@@ -2201,7 +2351,7 @@ private:
             case OpCode::Id::BRA: {
                 ASSERT_MSG(instr.bra.constant_buffer == 0,
                            "BRA with constant buffers are not implemented");
-                u32 target = offset + instr.bra.GetBranchTarget();
+                const u32 target = offset + instr.bra.GetBranchTarget();
                 shader.AddLine("{ jmp_to = " + std::to_string(target) + "u; break; }");
                 break;
             }
@@ -2225,7 +2375,7 @@ private:
                 // has a similar structure to the BRA opcode.
                 ASSERT_MSG(instr.bra.constant_buffer == 0, "Constant buffer SSY is not supported");
 
-                u32 target = offset + instr.bra.GetBranchTarget();
+                const u32 target = offset + instr.bra.GetBranchTarget();
                 EmitPushToSSYStack(target);
                 break;
             }
@@ -2319,10 +2469,10 @@ private:
                     shader.AddLine("case " + std::to_string(label) + "u: {");
                     ++shader.scope;
 
-                    auto next_it = labels.lower_bound(label + 1);
-                    u32 next_label = next_it == labels.end() ? subroutine.end : *next_it;
+                    const auto next_it = labels.lower_bound(label + 1);
+                    const u32 next_label = next_it == labels.end() ? subroutine.end : *next_it;
 
-                    u32 compile_end = CompileRange(label, next_label);
+                    const u32 compile_end = CompileRange(label, next_label);
                     if (compile_end > next_label && compile_end != PROGRAM_END) {
                         // This happens only when there is a label inside a IF/LOOP block
                         shader.AddLine(" jmp_to = " + std::to_string(compile_end) + "u; break; }");
@@ -2385,7 +2535,8 @@ boost::optional<ProgramResult> DecompileProgram(const ProgramCode& program_code,
                                                 Maxwell3D::Regs::ShaderStage stage,
                                                 const std::string& suffix) {
     try {
-        auto subroutines = ControlFlowAnalyzer(program_code, main_offset, suffix).GetSubroutines();
+        const auto subroutines =
+            ControlFlowAnalyzer(program_code, main_offset, suffix).GetSubroutines();
         GLSLGenerator generator(subroutines, program_code, main_offset, stage, suffix);
         return ProgramResult{generator.GetShaderCode(), generator.GetEntries()};
     } catch (const DecompileFail& exception) {
