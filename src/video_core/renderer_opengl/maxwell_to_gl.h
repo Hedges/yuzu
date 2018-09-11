@@ -86,9 +86,9 @@ inline GLenum VertexType(Maxwell::VertexAttribute attrib) {
         return GL_FLOAT;
     }
 
-    //LOG_CRITICAL(Render_OpenGL, "Unimplemented vertex type={}", attrib.TypeString());
-    //UNREACHABLE();
-    //return {};
+    // LOG_CRITICAL(Render_OpenGL, "Unimplemented vertex type={}", attrib.TypeString());
+    // UNREACHABLE();
+    // return {};
     return GL_UNSIGNED_BYTE;
 }
 
