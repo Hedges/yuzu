@@ -348,10 +348,10 @@ public:
      * @param attribute The input attribute to use as the source value.
      */
     void SetRegisterToInputAttibute(const Register& reg, u64 elem, Attribute::Index attribute,
-                                    const Tegra::Shader::IpaMode& input_mode, u64 size = 1) {
+                                    const Tegra::Shader::IpaMode& input_mode, u64 size = 0) {
         for (u64 i = 0; i < size + 1; i++) {
             std::string dest = GetRegisterAsFloat(reg + i);
-            std::string src = GetInputAttribute(attribute, input_mode) + GetSwizzle(i);
+            std::string src = GetInputAttribute(attribute, input_mode) + GetSwizzle(elem + i);
             shader.AddLine(dest + " = " + src + ';');
         }
     }
@@ -364,7 +364,7 @@ public:
      * @param reg The register to use as the source value.
      */
     void SetOutputAttributeToRegister(Attribute::Index attribute, u64 elem, const Register& reg,
-                                      u64 size = 1) {
+                                      u64 size = 0) {
         std::string dest = GetOutputAttribute(attribute);
         std::string src = GetRegisterAsFloat(reg);
 
@@ -372,7 +372,7 @@ public:
             // Can happen with unknown/unimplemented output attributes, in which case we ignore the
             // instruction for now.
             for (u64 i = 0; i < size + 1; i++) {
-                dest = GetOutputAttribute(attribute) + GetSwizzle(i);
+                dest = GetOutputAttribute(attribute) + GetSwizzle(elem + i);
                 src = GetRegisterAsFloat(reg + i);
                 shader.AddLine(dest + " = " + src + ';');
             }
