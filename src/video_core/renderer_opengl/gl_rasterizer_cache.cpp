@@ -268,13 +268,19 @@ void MortonCopy(u32 stride, u32 block_height, u32 height, u8* gl_buffer, size_t 
     constexpr u32 gl_bytes_per_pixel = CachedSurface::GetGLBytesPerPixel(format);
 
     if (morton_to_gl) {
-        // With the BCn formats (DXT and DXN), each 4x4 tile is swizzled instead of just individual
-        // pixel values.
-        const u32 tile_size{IsFormatBCn(format) ? 4U : 1U};
-        const std::vector<u8> data = Tegra::Texture::UnswizzleTexture(
-            addr, tile_size, bytes_per_pixel, stride, height, block_height);
-        const size_t size_to_copy{std::min(gl_buffer_size, data.size())};
-        memcpy(gl_buffer, data.data(), size_to_copy);
+        if (IsFormatBCn(format)) {
+            const size_t size_to_copy{
+                std::min(gl_buffer_size, (size_t)(stride * height * bytes_per_pixel))};
+            memcpy(gl_buffer, Memory::GetPointer(addr), size_to_copy);
+        } else {
+            // With the BCn formats (DXT and DXN), each 4x4 tile is swizzled instead of just
+            // individual pixel values.
+            const u32 tile_size{IsFormatBCn(format) ? 4U : 1U};
+            const std::vector<u8> data = Tegra::Texture::UnswizzleTexture(
+                addr, tile_size, bytes_per_pixel, stride, height, block_height);
+            const size_t size_to_copy{std::min(gl_buffer_size, data.size())};
+            memcpy(gl_buffer, data.data(), size_to_copy);
+        }
     } else {
         // TODO(bunnei): Assumes the default rendering GOB size of 16 (128 lines). We should
         // check the configuration for this and perform more generic un/swizzle
@@ -282,7 +288,7 @@ void MortonCopy(u32 stride, u32 block_height, u32 height, u8* gl_buffer, size_t 
         VideoCore::MortonCopyPixels128(stride, height, bytes_per_pixel, gl_bytes_per_pixel,
                                        Memory::GetPointer(addr), gl_buffer, morton_to_gl);
     }
-}
+} // namespace OpenGL
 
 static constexpr std::array<void (*)(u32, u32, u32, u8*, size_t, VAddr),
                             SurfaceParams::MaxPixelFormat>

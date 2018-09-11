@@ -541,7 +541,7 @@ void RasterizerOpenGL::FlushRegion(VAddr addr, u64 size) {}
 void RasterizerOpenGL::InvalidateRegion(VAddr addr, u64 size) {
     MICROPROFILE_SCOPE(OpenGL_CacheManagement);
     res_cache.InvalidateRegion(addr, size);
-    //shader_cache.InvalidateRegion(addr, size);
+    // shader_cache.InvalidateRegion(addr, size);
     buffer_cache.InvalidateRegion(addr, size);
 }
 
@@ -827,13 +827,16 @@ void RasterizerOpenGL::SyncStencilTestState() {
 }
 
 void RasterizerOpenGL::SyncBlendState() {
-    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+    auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
 
     // TODO(Subv): Support more than just render target 0.
     state.blend.enabled = regs.blend.enable[0] != 0;
 
     if (!state.blend.enabled)
         return;
+
+    regs.independent_blend[0].factor_source_rgb = Maxwell::Blend::Factor::SourceAlpha;
+    regs.independent_blend[0].factor_dest_rgb = Maxwell::Blend::Factor::OneMinusSourceAlpha;
 
     // ASSERT_MSG(regs.logic_op.enable == 0,
     //           "Blending and logic op can't be enabled at the same time.");
