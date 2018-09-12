@@ -53,8 +53,6 @@ static VAddr TryGetCpuAddr(Tegra::GPUVAddr gpu_addr) {
     params.width = Common::AlignUp(config.tic.Width(), GetCompressionFactor(params.pixel_format));
     params.height = Common::AlignUp(config.tic.Height(), GetCompressionFactor(params.pixel_format));
     params.unaligned_height = config.tic.Height();
-    params.cache_width = Common::AlignUp(params.width, 8);
-    params.cache_height = Common::AlignUp(params.height, 8);
     params.target = SurfaceTargetFromTextureType(config.tic.texture_type);
 
     switch (params.target) {
@@ -89,8 +87,6 @@ static VAddr TryGetCpuAddr(Tegra::GPUVAddr gpu_addr) {
     params.width = config.width;
     params.height = config.height;
     params.unaligned_height = config.height;
-    params.cache_width = Common::AlignUp(params.width, 8);
-    params.cache_height = Common::AlignUp(params.height, 8);
     params.target = SurfaceTarget::Texture2D;
     params.depth = 1;
     params.size_in_bytes = params.SizeInBytes();
@@ -110,8 +106,6 @@ static VAddr TryGetCpuAddr(Tegra::GPUVAddr gpu_addr) {
     params.width = zeta_width;
     params.height = zeta_height;
     params.unaligned_height = zeta_height;
-    params.cache_width = Common::AlignUp(params.width, 8);
-    params.cache_height = Common::AlignUp(params.height, 8);
     params.target = SurfaceTarget::Texture2D;
     params.depth = 1;
     params.size_in_bytes = params.SizeInBytes();
@@ -483,30 +477,27 @@ CachedSurface::CachedSurface(const SurfaceParams& params)
         // Only pre-create the texture for non-compressed textures.
         switch (params.target) {
         case SurfaceParams::SurfaceTarget::Texture1D:
-            glTexImage1D(SurfaceTargetToGL(params.target), 0, format_tuple.internal_format,
-                         rect.GetWidth(), 0, format_tuple.format, format_tuple.type, nullptr);
+            glTexStorage1D(SurfaceTargetToGL(params.target), 1, format_tuple.internal_format,
+                           rect.GetWidth());
             break;
         case SurfaceParams::SurfaceTarget::Texture2D:
-            glTexImage2D(SurfaceTargetToGL(params.target), 0, format_tuple.internal_format,
-                         rect.GetWidth(), rect.GetHeight(), 0, format_tuple.format,
-                         format_tuple.type, nullptr);
+            glTexStorage2D(SurfaceTargetToGL(params.target), 1, format_tuple.internal_format,
+                           rect.GetWidth(), rect.GetHeight());
             break;
         case SurfaceParams::SurfaceTarget::Texture3D:
         case SurfaceParams::SurfaceTarget::Texture2DArray:
-            glTexImage3D(SurfaceTargetToGL(params.target), 0, format_tuple.internal_format,
-                         rect.GetWidth(), rect.GetHeight(), params.depth, 0, format_tuple.format,
-                         format_tuple.type, nullptr);
+            glTexStorage3D(SurfaceTargetToGL(params.target), 1, format_tuple.internal_format,
+                           rect.GetWidth(), rect.GetHeight(), params.depth);
             break;
         default:
             LOG_CRITICAL(Render_OpenGL, "Unimplemented surface target={}",
                          static_cast<u32>(params.target));
             UNREACHABLE();
-            glTexImage2D(GL_TEXTURE_2D, 0, format_tuple.internal_format, rect.GetWidth(),
-                         rect.GetHeight(), 0, format_tuple.format, format_tuple.type, nullptr);
+            glTexStorage2D(GL_TEXTURE_2D, 1, format_tuple.internal_format, rect.GetWidth(),
+                           rect.GetHeight());
         }
     }
 
-    glTexParameteri(SurfaceTargetToGL(params.target), GL_TEXTURE_MAX_LEVEL, 0);
     glTexParameteri(SurfaceTargetToGL(params.target), GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(SurfaceTargetToGL(params.target), GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(SurfaceTargetToGL(params.target), GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -823,16 +814,20 @@ Surface RasterizerCacheOpenGL::RecreateSurface(const Surface& surface,
     // Get a new surface with the new parameters, and blit the previous surface to it
     Surface new_surface{GetUncachedSurface(new_params)};
 
-    // If format is unchanged, we can do a faster blit without reinterpreting pixel data
-    if (params.pixel_format == new_params.pixel_format) {
+    if (params.pixel_format == new_params.pixel_format ||
+        !Settings::values.use_accurate_framebuffers) {
+        // If the format is the same, just do a framebuffer blit. This is significantly faster than
+        // using PBOs. The is also likely less accurate, as textures will be converted rather than
+        // reinterpreted.
+
         BlitTextures(surface->Texture().handle, params.GetRect(), new_surface->Texture().handle,
                      params.GetRect(), params.type, read_framebuffer.handle,
                      draw_framebuffer.handle);
-        return new_surface;
-    }
+    } else {
+        // When use_accurate_framebuffers setting is enabled, perform a more accurate surface copy,
+        // where pixels are reinterpreted as a new format (without conversion). This code path uses
+        // OpenGL PBOs and is quite slow.
 
-    // When using accurate framebuffers, always copy old data to new surface, regardless of format
-    if (Settings::values.use_accurate_framebuffers) {
         auto source_format = GetFormatTuple(params.pixel_format, params.component_type);
         auto dest_format = GetFormatTuple(new_params.pixel_format, new_params.component_type);
 

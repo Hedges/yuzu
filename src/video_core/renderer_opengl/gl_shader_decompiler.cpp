@@ -1033,7 +1033,7 @@ private:
             // TODO(Subv): Figure out how dual-source blending is configured in the Switch.
             for (u32 component = 0; component < 4; ++component) {
                 if (header.IsColorComponentOutputEnabled(render_target, component)) {
-                    shader.AddLine(fmt::format("color[{}][{}] = {};", render_target, component,
+                    shader.AddLine(fmt::format("FragColor{}[{}] = {};", render_target, component,
                                                regs.GetRegisterAsFloat(current_reg)));
                     ++current_reg;
                 }
@@ -1513,6 +1513,73 @@ private:
                                           '(' + condition + ") ? min(" + parameters + ") : max(" +
                                               parameters + ')',
                                           1, 1);
+                break;
+            }
+            case OpCode::Id::LEA_R2:
+            case OpCode::Id::LEA_R1:
+            case OpCode::Id::LEA_IMM:
+            case OpCode::Id::LEA_RZ:
+            case OpCode::Id::LEA_HI: {
+                std::string op_a;
+                std::string op_b;
+                std::string op_c;
+
+                switch (opcode->GetId()) {
+                case OpCode::Id::LEA_R2: {
+                    op_a = regs.GetRegisterAsInteger(instr.gpr20);
+                    op_b = regs.GetRegisterAsInteger(instr.gpr39);
+                    op_c = std::to_string(instr.lea.r2.entry_a);
+                    break;
+                }
+
+                case OpCode::Id::LEA_R1: {
+                    const bool neg = instr.lea.r1.neg != 0;
+                    op_a = regs.GetRegisterAsInteger(instr.gpr8);
+                    if (neg)
+                        op_a = "-(" + op_a + ')';
+                    op_b = regs.GetRegisterAsInteger(instr.gpr20);
+                    op_c = std::to_string(instr.lea.r1.entry_a);
+                    break;
+                }
+
+                case OpCode::Id::LEA_IMM: {
+                    const bool neg = instr.lea.imm.neg != 0;
+                    op_b = regs.GetRegisterAsInteger(instr.gpr8);
+                    if (neg)
+                        op_b = "-(" + op_b + ')';
+                    op_a = std::to_string(instr.lea.imm.entry_a);
+                    op_c = std::to_string(instr.lea.imm.entry_b);
+                    break;
+                }
+
+                case OpCode::Id::LEA_RZ: {
+                    const bool neg = instr.lea.rz.neg != 0;
+                    op_b = regs.GetRegisterAsInteger(instr.gpr8);
+                    if (neg)
+                        op_b = "-(" + op_b + ')';
+                    op_a = regs.GetUniform(instr.lea.rz.cb_index, instr.lea.rz.cb_offset,
+                                           GLSLRegister::Type::Integer);
+                    op_c = std::to_string(instr.lea.rz.entry_a);
+
+                    break;
+                }
+
+                case OpCode::Id::LEA_HI:
+                default: {
+                    op_b = regs.GetRegisterAsInteger(instr.gpr8);
+                    op_a = std::to_string(instr.lea.imm.entry_a);
+                    op_c = std::to_string(instr.lea.imm.entry_b);
+                    LOG_CRITICAL(HW_GPU, "Unhandled LEA subinstruction: {}", opcode->GetName());
+                    UNREACHABLE();
+                }
+                }
+                if (instr.lea.pred48 != static_cast<u64>(Pred::UnusedIndex)) {
+                    LOG_ERROR(HW_GPU, "Unhandled LEA Predicate");
+                    UNREACHABLE();
+                }
+                const std::string value = '(' + op_a + " + (" + op_b + "*(1 << " + op_c + ")))";
+                regs.SetRegisterToInteger(instr.gpr0, true, 0, value, 1, 1);
+
                 break;
             }
             default: {
@@ -2097,6 +2164,30 @@ private:
                 SetPredicate(instr.isetp.pred0,
                              "!(" + predicate + ") " + combiner + " (" + second_pred + ')');
             }
+            break;
+        }
+        case OpCode::Type::PredicateSetRegister: {
+            const std::string op_a =
+                GetPredicateCondition(instr.pset.pred12, instr.pset.neg_pred12 != 0);
+            const std::string op_b =
+                GetPredicateCondition(instr.pset.pred29, instr.pset.neg_pred29 != 0);
+
+            const std::string second_pred =
+                GetPredicateCondition(instr.pset.pred39, instr.pset.neg_pred39 != 0);
+
+            const std::string combiner = GetPredicateCombiner(instr.pset.op);
+
+            const std::string predicate =
+                '(' + op_a + ") " + GetPredicateCombiner(instr.pset.cond) + " (" + op_b + ')';
+            const std::string result = '(' + predicate + ") " + combiner + " (" + second_pred + ')';
+            if (instr.pset.bf == 0) {
+                const std::string value = '(' + result + ") ? 0xFFFFFFFF : 0";
+                regs.SetRegisterToInteger(instr.gpr0, false, 0, value, 1, 1);
+            } else {
+                const std::string value = '(' + result + ") ? 1.0 : 0.0";
+                regs.SetRegisterToFloat(instr.gpr0, 0, value, 1, 1);
+            }
+
             break;
         }
         case OpCode::Type::PredicateSetPredicate: {

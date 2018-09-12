@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "audio_core/audio_renderer.h"
 #include "core/hle/service/service.h"
 
 namespace Kernel {
@@ -16,7 +15,7 @@ namespace Service::Audio {
 class AudRenU final : public ServiceFramework<AudRenU> {
 public:
     explicit AudRenU();
-    ~AudRenU() = default;
+    ~AudRenU() override;
 
 private:
     void OpenAudioRenderer(Kernel::HLERequestContext& ctx);
