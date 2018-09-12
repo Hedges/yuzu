@@ -262,7 +262,7 @@ void MortonCopy(u32 stride, u32 block_height, u32 height, u8* gl_buffer, size_t 
     constexpr u32 gl_bytes_per_pixel = CachedSurface::GetGLBytesPerPixel(format);
 
     if (morton_to_gl) {
-        if (IsFormatBCn(format)) {
+        if (1/*IsFormatBCn(format)*/) {
             const size_t size_to_copy{
                 std::min(gl_buffer_size, (size_t)(stride * height * bytes_per_pixel))};
             memcpy(gl_buffer, Memory::GetPointer(addr), size_to_copy);
