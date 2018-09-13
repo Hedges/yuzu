@@ -8,6 +8,10 @@
 #include <mutex>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -280,6 +284,9 @@ static void OutputDebugString(VAddr address, u64 len) {
 
     std::string str(len, '\0');
     Memory::ReadBlock(address, str.data(), str.size());
+#ifdef _WIN32
+    ::OutputDebugString(str.c_str());
+#endif
     LOG_DEBUG(Debug_Emulated, "{}", str);
 }
 
