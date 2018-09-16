@@ -15,9 +15,6 @@
 #include "video_core/renderer_opengl/gl_rasterizer.h"
 #include "video_core/renderer_opengl/gl_shader_decompiler.h"
 
-#undef ASSERT_MSG
-#define ASSERT_MSG(_a_, ...)
-
 namespace OpenGL::GLShader::Decompiler {
 
 using Tegra::Shader::Attribute;
@@ -348,12 +345,10 @@ public:
      * @param attribute The input attribute to use as the source value.
      */
     void SetRegisterToInputAttibute(const Register& reg, u64 elem, Attribute::Index attribute,
-                                    const Tegra::Shader::IpaMode& input_mode, u64 size = 0) {
-        for (u64 i = 0; i < size + 1; i++) {
-            std::string dest = GetRegisterAsFloat(reg + i);
-            std::string src = GetInputAttribute(attribute, input_mode) + GetSwizzle(elem + i);
-            shader.AddLine(dest + " = " + src + ';');
-        }
+                                    const Tegra::Shader::IpaMode& input_mode) {
+        const std::string dest = GetRegisterAsFloat(reg);
+        const std::string src = GetInputAttribute(attribute, input_mode) + GetSwizzle(elem);
+        shader.AddLine(dest + " = " + src + ';');
     }
 
     /**
@@ -363,19 +358,14 @@ public:
      * @param elem The element to use for the operation.
      * @param reg The register to use as the source value.
      */
-    void SetOutputAttributeToRegister(Attribute::Index attribute, u64 elem, const Register& reg,
-                                      u64 size = 0) {
-        std::string dest = GetOutputAttribute(attribute);
-        std::string src = GetRegisterAsFloat(reg);
+    void SetOutputAttributeToRegister(Attribute::Index attribute, u64 elem, const Register& reg) {
+        const std::string dest = GetOutputAttribute(attribute);
+        const std::string src = GetRegisterAsFloat(reg);
 
         if (!dest.empty()) {
             // Can happen with unknown/unimplemented output attributes, in which case we ignore the
             // instruction for now.
-            for (u64 i = 0; i < size + 1; i++) {
-                dest = GetOutputAttribute(attribute) + GetSwizzle(elem + i);
-                src = GetRegisterAsFloat(reg + i);
-                shader.AddLine(dest + " = " + src + ';');
-            }
+            shader.AddLine(dest + GetSwizzle(elem) + " = " + src + ';');
         }
     }
 
@@ -1782,14 +1772,34 @@ private:
         case OpCode::Type::Memory: {
             switch (opcode->GetId()) {
             case OpCode::Id::LD_A: {
-                ASSERT_MSG(instr.attribute.fmt20.size == 0, "untested");
                 // Note: Shouldn't this be interp mode flat? As in no interpolation made.
+                ASSERT_MSG(instr.gpr8.Value() == Register::ZeroIndex,
+                           "Indirect attribute loads are not supported");
+                ASSERT_MSG((instr.attribute.fmt20.immediate.Value() % sizeof(u32)) == 0,
+                           "Unaligned attribute loads are not supported");
 
                 Tegra::Shader::IpaMode input_mode{Tegra::Shader::IpaInterpMode::Perspective,
                                                   Tegra::Shader::IpaSampleMode::Default};
-                regs.SetRegisterToInputAttibute(instr.gpr0, instr.attribute.fmt20.element,
-                                                instr.attribute.fmt20.index, input_mode,
-                                                instr.attribute.fmt20.size);
+
+                u32 next_element = instr.attribute.fmt20.element;
+                u32 next_index = static_cast<u32>(instr.attribute.fmt20.index.Value());
+
+                const auto LoadNextElement = [&](u32 reg_offset) {
+                    regs.SetRegisterToInputAttibute(instr.gpr0.Value() + reg_offset, next_element,
+                                                    static_cast<Attribute::Index>(next_index),
+                                                    input_mode);
+
+                    // Load the next attribute element into the following register. If the element
+                    // to load goes beyond the vec4 size, load the first element of the next
+                    // attribute.
+                    next_element = (next_element + 1) % 4;
+                    next_index = next_index + (next_element == 0 ? 1 : 0);
+                };
+
+                const u32 num_words = static_cast<u32>(instr.attribute.fmt20.size.Value()) + 1;
+                for (u32 reg_offset = 0; reg_offset < num_words; ++reg_offset) {
+                    LoadNextElement(reg_offset);
+                }
                 break;
             }
             case OpCode::Id::LD_C: {
@@ -1831,10 +1841,31 @@ private:
                 break;
             }
             case OpCode::Id::ST_A: {
-                ASSERT_MSG(instr.attribute.fmt20.size == 0, "untested");
-                regs.SetOutputAttributeToRegister(instr.attribute.fmt20.index,
-                                                  instr.attribute.fmt20.element, instr.gpr0,
-                                                  instr.attribute.fmt20.size);
+                ASSERT_MSG(instr.gpr8.Value() == Register::ZeroIndex,
+                           "Indirect attribute loads are not supported");
+                ASSERT_MSG((instr.attribute.fmt20.immediate.Value() % sizeof(u32)) == 0,
+                           "Unaligned attribute loads are not supported");
+
+                u32 next_element = instr.attribute.fmt20.element;
+                u32 next_index = static_cast<u32>(instr.attribute.fmt20.index.Value());
+
+                const auto StoreNextElement = [&](u32 reg_offset) {
+                    regs.SetOutputAttributeToRegister(static_cast<Attribute::Index>(next_index),
+                                                      next_element,
+                                                      instr.gpr0.Value() + reg_offset);
+
+                    // Load the next attribute element into the following register. If the element
+                    // to load goes beyond the vec4 size, load the first element of the next
+                    // attribute.
+                    next_element = (next_element + 1) % 4;
+                    next_index = next_index + (next_element == 0 ? 1 : 0);
+                };
+
+                const u32 num_words = static_cast<u32>(instr.attribute.fmt20.size.Value()) + 1;
+                for (u32 reg_offset = 0; reg_offset < num_words; ++reg_offset) {
+                    StoreNextElement(reg_offset);
+                }
+
                 break;
             }
             case OpCode::Id::TEX: {
