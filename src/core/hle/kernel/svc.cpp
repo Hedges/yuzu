@@ -314,7 +314,7 @@ static void OutputDebugString(VAddr address, u64 len) {
     std::string str(len, '\0');
     Memory::ReadBlock(address, str.data(), str.size());
 #ifdef _WIN32
-    ::OutputDebugString((str+"\r\n").c_str());
+    ::OutputDebugString((str + "\r\n").c_str());
 #endif
     LOG_DEBUG(Debug_Emulated, "{}", str);
 }

@@ -500,7 +500,7 @@ void RasterizerOpenGL::DrawArrays() {
         const GLint base_vertex{static_cast<GLint>(regs.vb_element_base)};
 
         // Adjust the index buffer offset so it points to the first desired index.
-        //index_buffer_offset += static_cast<GLintptr>(regs.index_array.first) *
+        // index_buffer_offset += static_cast<GLintptr>(regs.index_array.first) *
         //                       static_cast<GLintptr>(regs.index_array.FormatSizeInBytes());
 
         if (gpu.state.current_instance > 0) {

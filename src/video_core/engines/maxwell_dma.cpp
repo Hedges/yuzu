@@ -42,12 +42,12 @@ void MaxwellDMA::HandleCopy() {
     const VAddr dest_cpu = *memory_manager.GpuToCpuAddress(dest);
 
     // TODO(Subv): Perform more research and implement all features of this engine.
-    //ASSERT(regs.exec.enable_swizzle == 0);
-    //ASSERT(regs.exec.query_mode == Regs::QueryMode::None);
-    //ASSERT(regs.exec.query_intr == Regs::QueryIntr::None);
-    //ASSERT(regs.exec.copy_mode == Regs::CopyMode::Unk2);
-    //ASSERT(regs.dst_params.pos_x == 0);
-    //ASSERT(regs.dst_params.pos_y == 0);
+    // ASSERT(regs.exec.enable_swizzle == 0);
+    // ASSERT(regs.exec.query_mode == Regs::QueryMode::None);
+    // ASSERT(regs.exec.query_intr == Regs::QueryIntr::None);
+    // ASSERT(regs.exec.copy_mode == Regs::CopyMode::Unk2);
+    // ASSERT(regs.dst_params.pos_x == 0);
+    // ASSERT(regs.dst_params.pos_y == 0);
 
     size_t copy_size = regs.x_count;
 
@@ -104,8 +104,9 @@ void MaxwellDMA::HandleCopy() {
         u32 dst_bytes_per_pixel = regs.src_pitch / regs.x_count;
 
         // If the input is linear and the output is tiled, swizzle the input and copy it over.
-        Texture::CopySwizzledData(regs.dst_params.size_x, regs.dst_params.size_y, src_bytes_per_pixel, dst_bytes_per_pixel, dst_buffer,
-                                  src_buffer, false, regs.dst_params.BlockHeight());
+        Texture::CopySwizzledData(regs.dst_params.size_x, regs.dst_params.size_y,
+                                  src_bytes_per_pixel, dst_bytes_per_pixel, dst_buffer, src_buffer,
+                                  false, regs.dst_params.BlockHeight());
     }
 
     // We have to invalidate the destination region to evict any outdated surfaces from the cache.
