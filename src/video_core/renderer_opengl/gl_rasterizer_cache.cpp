@@ -663,7 +663,7 @@ void CachedSurface::FlushGLBuffer() {
     ASSERT(params.width * GetGLBytesPerPixel(params.pixel_format) % 4 == 0);
     glPixelStorei(GL_PACK_ROW_LENGTH, static_cast<GLint>(params.width));
 
-    ASSERT(!tuple.compressed);
+    //ASSERT(!tuple.compressed);
     ASSERT(x0 == 0 && y0 == 0);
 
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
