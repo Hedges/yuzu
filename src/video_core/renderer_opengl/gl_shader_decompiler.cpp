@@ -236,6 +236,14 @@ private:
     const std::string& suffix;
 };
 
+enum class InternalFlag : u64 {
+    ZeroFlag = 0,
+    CarryFlag = 1,
+    OverflowFlag = 2,
+    NaNFlag = 3,
+    Amount
+};
+
 /**
  * Used to manage shader registers that are emulated with GLSL. This class keeps track of the state
  * of all registers (e.g. whether they are currently being used as Floats or Integers), and
@@ -329,13 +337,19 @@ public:
     void SetRegisterToInteger(const Register& reg, bool is_signed, u64 elem,
                               const std::string& value, u64 dest_num_components,
                               u64 value_num_components, bool is_saturated = false,
-                              u64 dest_elem = 0, Register::Size size = Register::Size::Word) {
+                              u64 dest_elem = 0, Register::Size size = Register::Size::Word,
+                              bool sets_cc = false) {
         ASSERT_MSG(!is_saturated, "Unimplemented");
 
         const std::string func{is_signed ? "intBitsToFloat" : "uintBitsToFloat"};
 
         SetRegister(reg, elem, func + '(' + ConvertIntegerSize(value, size) + ')',
                     dest_num_components, value_num_components, dest_elem);
+
+        if (sets_cc) {
+            const std::string zero_condition = "( " + ConvertIntegerSize(value, size) + " == 0 )";
+            SetInternalFlag(InternalFlag::ZeroFlag, zero_condition);
+        }
     }
 
     /**
@@ -350,6 +364,26 @@ public:
         const std::string dest = GetRegisterAsFloat(reg);
         const std::string src = GetInputAttribute(attribute, input_mode) + GetSwizzle(elem);
         shader.AddLine(dest + " = " + src + ';');
+    }
+
+    std::string GetControlCode(const Tegra::Shader::ControlCode cc) const {
+        switch (cc) {
+        case Tegra::Shader::ControlCode::NEU:
+            return "!(" + GetInternalFlag(InternalFlag::ZeroFlag) + ')';
+        default:
+            LOG_CRITICAL(HW_GPU, "Unimplemented Control Code {}", static_cast<u32>(cc));
+            UNREACHABLE();
+            return "false";
+        }
+    }
+
+    std::string GetInternalFlag(const InternalFlag ii) const {
+        const u32 code = static_cast<u32>(ii);
+        return "internalFlag_" + std::to_string(code) + suffix;
+    }
+
+    void SetInternalFlag(const InternalFlag ii, const std::string& value) const {
+        shader.AddLine(GetInternalFlag(ii) + " = " + value + ';');
     }
 
     /**
@@ -412,6 +446,12 @@ public:
         for (const auto& reg : regs) {
             declarations.AddLine(GLSLRegister::GetTypeString() + ' ' + reg.GetPrefixString() +
                                  std::to_string(reg.GetIndex()) + '_' + suffix + " = 0;");
+        }
+        declarations.AddNewLine();
+
+        for (u32 ii = 0; ii < static_cast<u64>(InternalFlag::Amount); ii++) {
+            const InternalFlag code = static_cast<InternalFlag>(ii);
+            declarations.AddLine("bool " + GetInternalFlag(code) + " = false;");
         }
         declarations.AddNewLine();
 
@@ -937,8 +977,6 @@ private:
 
         // TEXS has two destination registers and a swizzle. The first two elements in the swizzle
         // go into gpr0+0 and gpr0+1, and the rest goes into gpr28+0 and gpr28+1
-
-        ASSERT_MSG(instr.texs.nodep == 0, "TEXS nodep not implemented");
 
         std::size_t written_components = 0;
         for (u32 component = 0; component < 4; ++component) {
@@ -1622,7 +1660,8 @@ private:
                 }
 
                 regs.SetRegisterToInteger(instr.gpr0, instr.conversion.is_output_signed, 0, op_a, 1,
-                                          1, instr.alu.saturate_d, 0, instr.conversion.dest_size);
+                                          1, instr.alu.saturate_d, 0, instr.conversion.dest_size,
+                                          instr.generates_cc.Value() != 0);
                 break;
             }
             case OpCode::Id::I2F_R:
@@ -1761,8 +1800,8 @@ private:
                 Tegra::Shader::IpaMode input_mode{Tegra::Shader::IpaInterpMode::Perspective,
                                                   Tegra::Shader::IpaSampleMode::Default};
 
-                u32 next_element = instr.attribute.fmt20.element;
-                u32 next_index = static_cast<u32>(instr.attribute.fmt20.index.Value());
+                u64 next_element = instr.attribute.fmt20.element;
+                u64 next_index = static_cast<u64>(instr.attribute.fmt20.index.Value());
 
                 const auto LoadNextElement = [&](u32 reg_offset) {
                     regs.SetRegisterToInputAttibute(instr.gpr0.Value() + reg_offset, next_element,
@@ -1826,8 +1865,8 @@ private:
                 ASSERT_MSG((instr.attribute.fmt20.immediate.Value() % sizeof(u32)) == 0,
                            "Unaligned attribute loads are not supported");
 
-                u32 next_element = instr.attribute.fmt20.element;
-                u32 next_index = static_cast<u32>(instr.attribute.fmt20.index.Value());
+                u64 next_element = instr.attribute.fmt20.element;
+                u64 next_index = static_cast<u64>(instr.attribute.fmt20.index.Value());
 
                 const auto StoreNextElement = [&](u32 reg_offset) {
                     regs.SetOutputAttributeToRegister(static_cast<Attribute::Index>(next_index),
@@ -1852,6 +1891,13 @@ private:
                 ASSERT_MSG(instr.tex.array == 0, "TEX arrays unimplemented");
                 Tegra::Shader::TextureType texture_type{instr.tex.texture_type};
                 std::string coord;
+
+                ASSERT_MSG(!instr.tex.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                           "NODEP is not implemented");
+                ASSERT_MSG(!instr.tex.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
+                           "AOFFI is not implemented");
+                ASSERT_MSG(!instr.tex.UsesMiscMode(Tegra::Shader::TextureMiscMode::DC),
+                           "DC is not implemented");
 
                 switch (texture_type) {
                 case Tegra::Shader::TextureType::Texture1D: {
@@ -1935,6 +1981,11 @@ private:
                 Tegra::Shader::TextureType texture_type{instr.texs.GetTextureType()};
                 bool is_array{instr.texs.IsArrayTexture()};
 
+                ASSERT_MSG(!instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                           "NODEP is not implemented");
+                ASSERT_MSG(!instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::DC),
+                           "DC is not implemented");
+
                 switch (texture_type) {
                 case Tegra::Shader::TextureType::Texture2D: {
                     if (is_array) {
@@ -1971,6 +2022,13 @@ private:
                 ASSERT(instr.tlds.IsArrayTexture() == false);
                 std::string coord;
 
+                ASSERT_MSG(!instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                           "NODEP is not implemented");
+                ASSERT_MSG(!instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
+                           "AOFFI is not implemented");
+                ASSERT_MSG(!instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::MZ),
+                           "MZ is not implemented");
+
                 switch (instr.tlds.GetTextureType()) {
                 case Tegra::Shader::TextureType::Texture2D: {
                     if (instr.tlds.IsArrayTexture()) {
@@ -1998,6 +2056,17 @@ private:
                 ASSERT(instr.tld4.texture_type == Tegra::Shader::TextureType::Texture2D);
                 ASSERT(instr.tld4.array == 0);
                 std::string coord;
+
+                ASSERT_MSG(!instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                           "NODEP is not implemented");
+                ASSERT_MSG(!instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
+                           "AOFFI is not implemented");
+                ASSERT_MSG(!instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::DC),
+                           "DC is not implemented");
+                ASSERT_MSG(!instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::NDV),
+                           "NDV is not implemented");
+                ASSERT_MSG(!instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::PTP),
+                           "PTP is not implemented");
 
                 switch (instr.tld4.texture_type) {
                 case Tegra::Shader::TextureType::Texture2D: {
@@ -2036,6 +2105,13 @@ private:
                 break;
             }
             case OpCode::Id::TLD4S: {
+                ASSERT_MSG(!instr.tld4s.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                           "NODEP is not implemented");
+                ASSERT_MSG(!instr.tld4s.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
+                           "AOFFI is not implemented");
+                ASSERT_MSG(!instr.tld4s.UsesMiscMode(Tegra::Shader::TextureMiscMode::DC),
+                           "DC is not implemented");
+
                 const std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
                 const std::string op_b = regs.GetRegisterAsFloat(instr.gpr20);
                 // TODO(Subv): Figure out how the sampler type is encoded in the TLD4S instruction.
@@ -2048,6 +2124,9 @@ private:
                 break;
             }
             case OpCode::Id::TXQ: {
+                ASSERT_MSG(!instr.txq.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                           "NODEP is not implemented");
+
                 // TODO: the new commits on the texture refactor, change the way samplers work.
                 // Sadly, not all texture instructions specify the type of texture their sampler
                 // uses. This must be fixed at a later instance.
@@ -2068,6 +2147,11 @@ private:
                 break;
             }
             case OpCode::Id::TMML: {
+                ASSERT_MSG(!instr.tmml.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                           "NODEP is not implemented");
+                ASSERT_MSG(!instr.tmml.UsesMiscMode(Tegra::Shader::TextureMiscMode::NDV),
+                           "NDV is not implemented");
+
                 const std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
                 const std::string op_b = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
                 const bool is_array = instr.tmml.array != 0;
@@ -2234,31 +2318,55 @@ private:
             break;
         }
         case OpCode::Type::PredicateSetPredicate: {
-            const std::string op_a =
-                GetPredicateCondition(instr.psetp.pred12, instr.psetp.neg_pred12 != 0);
-            const std::string op_b =
-                GetPredicateCondition(instr.psetp.pred29, instr.psetp.neg_pred29 != 0);
+            switch (opcode->GetId()) {
+            case OpCode::Id::PSETP: {
+                const std::string op_a =
+                    GetPredicateCondition(instr.psetp.pred12, instr.psetp.neg_pred12 != 0);
+                const std::string op_b =
+                    GetPredicateCondition(instr.psetp.pred29, instr.psetp.neg_pred29 != 0);
 
-            // We can't use the constant predicate as destination.
-            ASSERT(instr.psetp.pred3 != static_cast<u64>(Pred::UnusedIndex));
+                // We can't use the constant predicate as destination.
+                ASSERT(instr.psetp.pred3 != static_cast<u64>(Pred::UnusedIndex));
 
-            const std::string second_pred =
-                GetPredicateCondition(instr.psetp.pred39, instr.psetp.neg_pred39 != 0);
+                const std::string second_pred =
+                    GetPredicateCondition(instr.psetp.pred39, instr.psetp.neg_pred39 != 0);
 
-            const std::string combiner = GetPredicateCombiner(instr.psetp.op);
+                const std::string combiner = GetPredicateCombiner(instr.psetp.op);
 
-            const std::string predicate =
-                '(' + op_a + ") " + GetPredicateCombiner(instr.psetp.cond) + " (" + op_b + ')';
+                const std::string predicate =
+                    '(' + op_a + ") " + GetPredicateCombiner(instr.psetp.cond) + " (" + op_b + ')';
 
-            // Set the primary predicate to the result of Predicate OP SecondPredicate
-            SetPredicate(instr.psetp.pred3,
-                         '(' + predicate + ") " + combiner + " (" + second_pred + ')');
+                // Set the primary predicate to the result of Predicate OP SecondPredicate
+                SetPredicate(instr.psetp.pred3,
+                             '(' + predicate + ") " + combiner + " (" + second_pred + ')');
 
-            if (instr.psetp.pred0 != static_cast<u64>(Pred::UnusedIndex)) {
-                // Set the secondary predicate to the result of !Predicate OP SecondPredicate,
-                // if enabled
-                SetPredicate(instr.psetp.pred0,
-                             "!(" + predicate + ") " + combiner + " (" + second_pred + ')');
+                if (instr.psetp.pred0 != static_cast<u64>(Pred::UnusedIndex)) {
+                    // Set the secondary predicate to the result of !Predicate OP SecondPredicate,
+                    // if enabled
+                    SetPredicate(instr.psetp.pred0,
+                                 "!(" + predicate + ") " + combiner + " (" + second_pred + ')');
+                }
+                break;
+            }
+            case OpCode::Id::CSETP: {
+                const std::string pred =
+                    GetPredicateCondition(instr.csetp.pred39, instr.csetp.neg_pred39 != 0);
+                const std::string combiner = GetPredicateCombiner(instr.csetp.op);
+                const std::string controlCode = regs.GetControlCode(instr.csetp.cc);
+                if (instr.csetp.pred3 != static_cast<u64>(Pred::UnusedIndex)) {
+                    SetPredicate(instr.csetp.pred3,
+                                 '(' + controlCode + ") " + combiner + " (" + pred + ')');
+                }
+                if (instr.csetp.pred0 != static_cast<u64>(Pred::UnusedIndex)) {
+                    SetPredicate(instr.csetp.pred0,
+                                 "!(" + controlCode + ") " + combiner + " (" + pred + ')');
+                }
+                break;
+            }
+            default: {
+                LOG_CRITICAL(HW_GPU, "Unhandled predicate instruction: {}", opcode->GetName());
+                UNREACHABLE();
+            }
             }
             break;
         }
