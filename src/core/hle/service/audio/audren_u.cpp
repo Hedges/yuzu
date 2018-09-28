@@ -10,6 +10,7 @@
 #include "common/alignment.h"
 #include "common/common_funcs.h"
 #include "common/logging/log.h"
+#include "core/core.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/event.h"
 #include "core/hle/kernel/hle_ipc.h"
@@ -65,7 +66,7 @@ private:
     void GetAudioRendererState(Kernel::HLERequestContext& ctx) {
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(RESULT_SUCCESS);
-        rb.Push<u32>(renderer->GetState());
+        rb.Push<u32>(static_cast<u32>(renderer->GetStreamState()));
         LOG_DEBUG(Service_Audio, "called");
     }
 
