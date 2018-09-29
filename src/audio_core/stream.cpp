@@ -50,7 +50,7 @@ void Stream::Play() {
 
 void Stream::Stop() {
     state = State::Stopped;
-    ASSERT_MSG(false, "Unimplemented");
+    //ASSERT_MSG(false, "Unimplemented");
 }
 
 u32 Stream::GetState() const {
