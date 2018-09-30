@@ -6,11 +6,11 @@
 #include <cstring>
 #include <ctime>
 #include <fmt/time.h>
-#include "common/common_paths.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/scm_rev.h"
 #include "common/swap.h"
+#include "core/core.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/service/fatal/fatal.h"
@@ -51,7 +51,7 @@ enum class FatalType : u32 {
 };
 
 static void GenerateErrorReport(ResultCode error_code, const FatalInfo& info) {
-    const auto title_id = Core::CurrentProcess()->program_id;
+    const auto title_id = Core::CurrentProcess()->GetTitleID();
     std::string crash_report =
         fmt::format("Yuzu {}-{} crash report\n"
                     "Title ID:                        {:016x}\n"

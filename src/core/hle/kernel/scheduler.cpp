@@ -17,7 +17,7 @@ namespace Kernel {
 
 std::mutex Scheduler::scheduler_mutex;
 
-Scheduler::Scheduler(Core::ARM_Interface* cpu_core) : cpu_core(cpu_core) {}
+Scheduler::Scheduler(Core::ARM_Interface& cpu_core) : cpu_core(cpu_core) {}
 
 Scheduler::~Scheduler() {
     for (auto& thread : thread_list) {
@@ -59,9 +59,9 @@ void Scheduler::SwitchContext(Thread* new_thread) {
     // Save context for previous thread
     if (previous_thread) {
         previous_thread->last_running_ticks = CoreTiming::GetTicks();
-        cpu_core->SaveContext(previous_thread->context);
+        cpu_core.SaveContext(previous_thread->context);
         // Save the TPIDR_EL0 system register in case it was modified.
-        previous_thread->tpidr_el0 = cpu_core->GetTPIDR_EL0();
+        previous_thread->tpidr_el0 = cpu_core.GetTPIDR_EL0();
 
         if (previous_thread->status == ThreadStatus::Running) {
             // This is only the case when a reschedule is triggered without the current thread
@@ -88,13 +88,13 @@ void Scheduler::SwitchContext(Thread* new_thread) {
 
         if (previous_process != current_thread->owner_process) {
             Core::CurrentProcess() = current_thread->owner_process;
-            SetCurrentPageTable(&Core::CurrentProcess()->vm_manager.page_table);
+            SetCurrentPageTable(&Core::CurrentProcess()->VMManager().page_table);
         }
 
-        cpu_core->LoadContext(new_thread->context);
-        cpu_core->SetTlsAddress(new_thread->GetTLSAddress());
-        cpu_core->SetTPIDR_EL0(new_thread->GetTPIDR_EL0());
-        cpu_core->ClearExclusiveState();
+        cpu_core.LoadContext(new_thread->context);
+        cpu_core.SetTlsAddress(new_thread->GetTLSAddress());
+        cpu_core.SetTPIDR_EL0(new_thread->GetTPIDR_EL0());
+        cpu_core.ClearExclusiveState();
     } else {
         current_thread = nullptr;
         // Note: We do not reset the current process and current page table when idling because

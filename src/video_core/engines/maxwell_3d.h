@@ -41,6 +41,7 @@ public:
         static constexpr std::size_t NumCBData = 16;
         static constexpr std::size_t NumVertexArrays = 32;
         static constexpr std::size_t NumVertexAttributes = 32;
+        static constexpr std::size_t NumTextureSamplers = 32;
         static constexpr std::size_t MaxShaderProgram = 6;
         static constexpr std::size_t MaxShaderStage = 5;
         // Maximum number of const buffers per shader stage.
@@ -461,7 +462,11 @@ public:
                     u32 entry;
                 } macros;
 
-                INSERT_PADDING_WORDS(0x1B8);
+                INSERT_PADDING_WORDS(0x189);
+
+                u32 tfb_enabled;
+
+                INSERT_PADDING_WORDS(0x2E);
 
                 RenderTargetConfig rt[NumRenderTargets];
 
@@ -594,7 +599,9 @@ public:
 
                 u32 depth_write_enabled;
 
-                INSERT_PADDING_WORDS(0x7);
+                u32 alpha_test_enabled;
+
+                INSERT_PADDING_WORDS(0x6);
 
                 u32 d3d_cull_mode;
 
@@ -635,7 +642,11 @@ public:
 
                 u32 vb_element_base;
 
-                INSERT_PADDING_WORDS(0x40);
+                INSERT_PADDING_WORDS(0x38);
+
+                float point_size;
+
+                INSERT_PADDING_WORDS(0x7);
 
                 u32 zeta_enable;
 
@@ -977,6 +988,7 @@ private:
                   "Field " #field_name " has invalid position")
 
 ASSERT_REG_POSITION(macros, 0x45);
+ASSERT_REG_POSITION(tfb_enabled, 0x1D1);
 ASSERT_REG_POSITION(rt, 0x200);
 ASSERT_REG_POSITION(viewport_transform[0], 0x280);
 ASSERT_REG_POSITION(viewport, 0x300);
@@ -996,6 +1008,7 @@ ASSERT_REG_POSITION(zeta_height, 0x48b);
 ASSERT_REG_POSITION(depth_test_enable, 0x4B3);
 ASSERT_REG_POSITION(independent_blend_enable, 0x4B9);
 ASSERT_REG_POSITION(depth_write_enabled, 0x4BA);
+ASSERT_REG_POSITION(alpha_test_enabled, 0x4BB);
 ASSERT_REG_POSITION(d3d_cull_mode, 0x4C2);
 ASSERT_REG_POSITION(depth_test_func, 0x4C3);
 ASSERT_REG_POSITION(blend, 0x4CF);
@@ -1009,6 +1022,7 @@ ASSERT_REG_POSITION(stencil_front_func_mask, 0x4E6);
 ASSERT_REG_POSITION(stencil_front_mask, 0x4E7);
 ASSERT_REG_POSITION(screen_y_control, 0x4EB);
 ASSERT_REG_POSITION(vb_element_base, 0x50D);
+ASSERT_REG_POSITION(point_size, 0x546);
 ASSERT_REG_POSITION(zeta_enable, 0x54E);
 ASSERT_REG_POSITION(tsc, 0x557);
 ASSERT_REG_POSITION(tic, 0x55D);

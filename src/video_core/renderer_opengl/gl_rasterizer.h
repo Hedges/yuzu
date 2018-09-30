@@ -158,6 +158,15 @@ private:
     /// Syncs the LogicOp state to match the guest state
     void SyncLogicOpState();
 
+    /// Syncs the alpha test state to match the guest state
+    void SyncAlphaTest();
+
+    /// Syncs the transform feedback state to match the guest state
+    void SyncTransformFeedback();
+
+    /// Syncs the point state to match the guest state
+    void SyncPointState();
+
     bool has_ARB_direct_state_access = false;
     bool has_ARB_multi_bind = false;
     bool has_ARB_separate_shader_objects = false;
@@ -178,7 +187,7 @@ private:
              OGLVertexArray>
         vertex_array_cache;
 
-    std::array<SamplerInfo, GLShader::NumTextureSamplers> texture_samplers;
+    std::array<SamplerInfo, Tegra::Engines::Maxwell3D::Regs::NumTextureSamplers> texture_samplers;
 
     static constexpr std::size_t STREAM_BUFFER_SIZE = 128 * 1024 * 1024;
     OGLBufferCache buffer_cache;
