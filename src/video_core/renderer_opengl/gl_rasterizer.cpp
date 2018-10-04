@@ -561,9 +561,9 @@ void RasterizerOpenGL::DrawArrays() {
 
 void RasterizerOpenGL::FlushAll() {
     MICROPROFILE_SCOPE(OpenGL_CacheManagement);
-    res_cache.FlushRegion(0, Kernel::VMManager::MAX_ADDRESS);
-    shader_cache.FlushRegion(0, Kernel::VMManager::MAX_ADDRESS);
-    buffer_cache.FlushRegion(0, Kernel::VMManager::MAX_ADDRESS);
+    res_cache.FlushRegion(0, Tegra::MemoryManager::MAX_ADDRESS);
+    shader_cache.FlushRegion(0, Tegra::MemoryManager::MAX_ADDRESS);
+    buffer_cache.FlushRegion(0, Tegra::MemoryManager::MAX_ADDRESS);
 }
 
 void RasterizerOpenGL::FlushRegion(VAddr addr, u64 size) {
