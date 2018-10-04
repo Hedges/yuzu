@@ -561,9 +561,9 @@ void RasterizerOpenGL::DrawArrays() {
 
 void RasterizerOpenGL::FlushAll() {
     MICROPROFILE_SCOPE(OpenGL_CacheManagement);
-    res_cache.FlushRegion(0, Kernel::VMManager::MAX_ADDRESS);
-    shader_cache.FlushRegion(0, Kernel::VMManager::MAX_ADDRESS);
-    buffer_cache.FlushRegion(0, Kernel::VMManager::MAX_ADDRESS);
+    res_cache.FlushRegion(0, Tegra::MemoryManager::MAX_ADDRESS);
+    shader_cache.FlushRegion(0, Tegra::MemoryManager::MAX_ADDRESS);
+    buffer_cache.FlushRegion(0, Tegra::MemoryManager::MAX_ADDRESS);
 }
 
 void RasterizerOpenGL::FlushRegion(VAddr addr, u64 size) {
@@ -767,7 +767,7 @@ u32 RasterizerOpenGL::SetupTextures(Maxwell::ShaderStage stage, Shader& shader, 
         }
 
         texture_samplers[current_bindpoint].SyncWithConfig(texture.tsc);
-        Surface surface = res_cache.GetTextureSurface(texture);
+        Surface surface = res_cache.GetTextureSurface(texture, entry);
         if (surface != nullptr) {
             state.texture_units[current_bindpoint].texture = surface->Texture().handle;
             state.texture_units[current_bindpoint].target = surface->Target();
@@ -941,7 +941,10 @@ void RasterizerOpenGL::SyncTransformFeedback() {
 void RasterizerOpenGL::SyncPointState() {
     const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
 
-    state.point.size = regs.point_size;
+    // TODO(Rodrigo): Most games do not set a point size. I think this is a case of a
+    // register carrying a default value. For now, if the point size is zero, assume it's
+    // OpenGL's default (1).
+    state.point.size = regs.point_size == 0 ? 1 : regs.point_size;
 }
 
 } // namespace OpenGL
