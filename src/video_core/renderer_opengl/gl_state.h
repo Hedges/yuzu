@@ -6,6 +6,7 @@
 
 #include <array>
 #include <glad/glad.h>
+#include "video_core/engines/maxwell_3d.h"
 
 namespace OpenGL {
 
@@ -114,7 +115,7 @@ public:
             target = GL_TEXTURE_2D;
         }
     };
-    std::array<TextureUnit, 32> texture_units;
+    std::array<TextureUnit, Tegra::Engines::Maxwell3D::Regs::NumTextureSamplers> texture_units;
 
     struct {
         GLuint read_framebuffer; // GL_READ_FRAMEBUFFER_BINDING
@@ -140,6 +141,10 @@ public:
         GLsizei width;
         GLsizei height;
     } viewport;
+
+    struct {
+        float size; // GL_POINT_SIZE
+    } point;
 
     std::array<bool, 2> clip_distance; // GL_CLIP_DISTANCE
 

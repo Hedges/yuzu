@@ -3,7 +3,6 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
-#include <array>
 #include <cstring>
 #include <utility>
 
@@ -15,11 +14,11 @@
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
 #include "core/hle/kernel/process.h"
+#include "core/hle/kernel/vm_manager.h"
 #include "core/hle/lock.h"
 #include "core/memory.h"
 #include "core/memory_setup.h"
 #include "video_core/renderer_base.h"
-#include "video_core/video_core.h"
 
 namespace Memory {
 
@@ -41,6 +40,21 @@ PageTable* GetCurrentPageTable() {
     return current_page_table;
 }
 
+PageTable::PageTable() = default;
+
+PageTable::PageTable(std::size_t address_space_width_in_bits) {
+    Resize(address_space_width_in_bits);
+}
+
+PageTable::~PageTable() = default;
+
+void PageTable::Resize(std::size_t address_space_width_in_bits) {
+    const std::size_t num_page_table_entries = 1ULL << (address_space_width_in_bits - PAGE_BITS);
+
+    pointers.resize(num_page_table_entries);
+    attributes.resize(num_page_table_entries);
+}
+
 static void MapPages(PageTable& page_table, VAddr base, u64 size, u8* memory, PageType type) {
     LOG_DEBUG(HW_Memory, "Mapping {} onto {:016X}-{:016X}", fmt::ptr(memory), base * PAGE_SIZE,
               (base + size) * PAGE_SIZE);
@@ -50,7 +64,7 @@ static void MapPages(PageTable& page_table, VAddr base, u64 size, u8* memory, Pa
 
     VAddr end = base + size;
     while (base != end) {
-        ASSERT_MSG(base < PAGE_TABLE_NUM_ENTRIES, "out of range mapping at {:016X}", base);
+        ASSERT_MSG(base < page_table.pointers.size(), "out of range mapping at {:016X}", base);
 
         page_table.attributes[base] = type;
         page_table.pointers[base] = memory;
@@ -105,7 +119,7 @@ void RemoveDebugHook(PageTable& page_table, VAddr base, u64 size, MemoryHookPoin
 static u8* GetPointerFromVMA(const Kernel::Process& process, VAddr vaddr) {
     u8* direct_pointer = nullptr;
 
-    auto& vm_manager = process.vm_manager;
+    auto& vm_manager = process.VMManager();
 
     auto it = vm_manager.FindVMA(vaddr);
     ASSERT(it != vm_manager.vma_map.end());
@@ -200,7 +214,7 @@ void Write(const VAddr vaddr, const T data) {
 }
 
 bool IsValidVirtualAddress(const Kernel::Process& process, const VAddr vaddr) {
-    auto& page_table = process.vm_manager.page_table;
+    const auto& page_table = process.VMManager().page_table;
 
     const u8* page_pointer = page_table.pointers[vaddr >> PAGE_BITS];
     if (page_pointer)
@@ -323,7 +337,7 @@ void RasterizerFlushVirtualRegion(VAddr start, u64 size, FlushMode mode) {
         return;
     }
 
-    VAddr end = start + size;
+    const VAddr end = start + size;
 
     const auto CheckRegion = [&](VAddr region_start, VAddr region_end) {
         if (start >= region_end || end <= region_start) {
@@ -333,7 +347,7 @@ void RasterizerFlushVirtualRegion(VAddr start, u64 size, FlushMode mode) {
 
         const VAddr overlap_start = std::max(start, region_start);
         const VAddr overlap_end = std::min(end, region_end);
-        const u64 overlap_size = overlap_end - overlap_start;
+        const VAddr overlap_size = overlap_end - overlap_start;
 
         auto& rasterizer = system_instance.Renderer().Rasterizer();
         switch (mode) {
@@ -349,8 +363,10 @@ void RasterizerFlushVirtualRegion(VAddr start, u64 size, FlushMode mode) {
         }
     };
 
-    CheckRegion(PROCESS_IMAGE_VADDR, PROCESS_IMAGE_VADDR_END);
-    CheckRegion(HEAP_VADDR, HEAP_VADDR_END);
+    const auto& vm_manager = Core::CurrentProcess()->VMManager();
+
+    CheckRegion(vm_manager.GetCodeRegionBaseAddress(), vm_manager.GetCodeRegionEndAddress());
+    CheckRegion(vm_manager.GetHeapRegionBaseAddress(), vm_manager.GetHeapRegionEndAddress());
 }
 
 u8 Read8(const VAddr addr) {
@@ -371,7 +387,7 @@ u64 Read64(const VAddr addr) {
 
 void ReadBlock(const Kernel::Process& process, const VAddr src_addr, void* dest_buffer,
                const std::size_t size) {
-    auto& page_table = process.vm_manager.page_table;
+    const auto& page_table = process.VMManager().page_table;
 
     std::size_t remaining_size = size;
     std::size_t page_index = src_addr >> PAGE_BITS;
@@ -436,7 +452,7 @@ void Write64(const VAddr addr, const u64 data) {
 
 void WriteBlock(const Kernel::Process& process, const VAddr dest_addr, const void* src_buffer,
                 const std::size_t size) {
-    auto& page_table = process.vm_manager.page_table;
+    const auto& page_table = process.VMManager().page_table;
     std::size_t remaining_size = size;
     std::size_t page_index = dest_addr >> PAGE_BITS;
     std::size_t page_offset = dest_addr & PAGE_MASK;
@@ -482,7 +498,7 @@ void WriteBlock(const VAddr dest_addr, const void* src_buffer, const std::size_t
 }
 
 void ZeroBlock(const Kernel::Process& process, const VAddr dest_addr, const std::size_t size) {
-    auto& page_table = process.vm_manager.page_table;
+    const auto& page_table = process.VMManager().page_table;
     std::size_t remaining_size = size;
     std::size_t page_index = dest_addr >> PAGE_BITS;
     std::size_t page_offset = dest_addr & PAGE_MASK;
@@ -524,7 +540,7 @@ void ZeroBlock(const Kernel::Process& process, const VAddr dest_addr, const std:
 
 void CopyBlock(const Kernel::Process& process, VAddr dest_addr, VAddr src_addr,
                const std::size_t size) {
-    auto& page_table = process.vm_manager.page_table;
+    const auto& page_table = process.VMManager().page_table;
     std::size_t remaining_size = size;
     std::size_t page_index = src_addr >> PAGE_BITS;
     std::size_t page_offset = src_addr & PAGE_MASK;

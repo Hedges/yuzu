@@ -55,8 +55,9 @@ static ResultCode SetHeapSize(VAddr* heap_addr, u64 heap_size) {
     }
 
     auto& process = *Core::CurrentProcess();
+    const VAddr heap_base = process.VMManager().GetHeapRegionBaseAddress();
     CASCADE_RESULT(*heap_addr,
-                   process.HeapAllocate(Memory::HEAP_VADDR, heap_size, VMAPermission::ReadWrite));
+                   process.HeapAllocate(heap_base, heap_size, VMAPermission::ReadWrite));
     return RESULT_SUCCESS;
 }
 
@@ -332,26 +333,27 @@ static ResultCode GetInfo(u64* result, u64 info_id, u64 handle, u64 info_sub_id)
     LOG_TRACE(Kernel_SVC, "called info_id=0x{:X}, info_sub_id=0x{:X}, handle=0x{:08X}", info_id,
               info_sub_id, handle);
 
-    const auto& vm_manager = Core::CurrentProcess()->vm_manager;
+    const auto& current_process = Core::CurrentProcess();
+    const auto& vm_manager = current_process->VMManager();
 
     switch (static_cast<GetInfoType>(info_id)) {
     case GetInfoType::AllowedCpuIdBitmask:
-        *result = Core::CurrentProcess()->allowed_processor_mask;
+        *result = current_process->GetAllowedProcessorMask();
         break;
     case GetInfoType::AllowedThreadPrioBitmask:
-        *result = Core::CurrentProcess()->allowed_thread_priority_mask;
+        *result = current_process->GetAllowedThreadPriorityMask();
         break;
     case GetInfoType::MapRegionBaseAddr:
-        *result = Memory::MAP_REGION_VADDR;
+        *result = vm_manager.GetMapRegionBaseAddress();
         break;
     case GetInfoType::MapRegionSize:
-        *result = Memory::MAP_REGION_SIZE;
+        *result = vm_manager.GetMapRegionSize();
         break;
     case GetInfoType::HeapRegionBaseAddr:
-        *result = Memory::HEAP_VADDR;
+        *result = vm_manager.GetHeapRegionBaseAddress();
         break;
     case GetInfoType::HeapRegionSize:
-        *result = Memory::HEAP_SIZE;
+        *result = vm_manager.GetHeapRegionSize();
         break;
     case GetInfoType::TotalMemoryUsage:
         *result = vm_manager.GetTotalMemoryUsage();
@@ -366,22 +368,35 @@ static ResultCode GetInfo(u64* result, u64 info_id, u64 handle, u64 info_sub_id)
         *result = 0;
         break;
     case GetInfoType::AddressSpaceBaseAddr:
-        *result = vm_manager.GetAddressSpaceBaseAddr();
+        *result = vm_manager.GetCodeRegionBaseAddress();
         break;
-    case GetInfoType::AddressSpaceSize:
-        *result = vm_manager.GetAddressSpaceSize();
+    case GetInfoType::AddressSpaceSize: {
+        const u64 width = vm_manager.GetAddressSpaceWidth();
+
+        switch (width) {
+        case 32:
+            *result = 0xFFE00000;
+            break;
+        case 36:
+            *result = 0xFF8000000;
+            break;
+        case 39:
+            *result = 0x7FF8000000;
+            break;
+        }
         break;
+    }
     case GetInfoType::NewMapRegionBaseAddr:
-        *result = Memory::NEW_MAP_REGION_VADDR;
+        *result = vm_manager.GetNewMapRegionBaseAddress();
         break;
     case GetInfoType::NewMapRegionSize:
-        *result = Memory::NEW_MAP_REGION_SIZE;
+        *result = vm_manager.GetNewMapRegionSize();
         break;
     case GetInfoType::IsVirtualAddressMemoryEnabled:
-        *result = Core::CurrentProcess()->is_virtual_address_memory_enabled;
+        *result = current_process->IsVirtualMemoryEnabled();
         break;
     case GetInfoType::TitleId:
-        *result = Core::CurrentProcess()->program_id;
+        *result = current_process->GetTitleID();
         break;
     case GetInfoType::PrivilegedProcessId:
         LOG_WARNING(Kernel_SVC,
@@ -407,8 +422,36 @@ static ResultCode SetThreadActivity(Handle handle, u32 unknown) {
 }
 
 /// Gets the thread context
-static ResultCode GetThreadContext(Handle handle, VAddr addr) {
-    LOG_WARNING(Kernel_SVC, "(STUBBED) called, handle=0x{:08X}, addr=0x{:X}", handle, addr);
+static ResultCode GetThreadContext(VAddr thread_context, Handle handle) {
+    LOG_DEBUG(Kernel_SVC, "called, context=0x{:08X}, thread=0x{:X}", thread_context, handle);
+
+    auto& kernel = Core::System::GetInstance().Kernel();
+    const SharedPtr<Thread> thread = kernel.HandleTable().Get<Thread>(handle);
+    if (!thread) {
+        return ERR_INVALID_HANDLE;
+    }
+
+    const auto current_process = Core::CurrentProcess();
+    if (thread->owner_process != current_process) {
+        return ERR_INVALID_HANDLE;
+    }
+
+    if (thread == GetCurrentThread()) {
+        return ERR_ALREADY_REGISTERED;
+    }
+
+    Core::ARM_Interface::ThreadContext ctx = thread->context;
+    // Mask away mode bits, interrupt bits, IL bit, and other reserved bits.
+    ctx.pstate &= 0xFF0FFE20;
+
+    // If 64-bit, we can just write the context registers directly and we're good.
+    // However, if 32-bit, we have to ensure some registers are zeroed out.
+    if (!current_process->Is64BitProcess()) {
+        std::fill(ctx.cpu_registers.begin() + 15, ctx.cpu_registers.end(), 0);
+        std::fill(ctx.vector_registers.begin() + 16, ctx.vector_registers.end(), u128{});
+    }
+
+    Memory::WriteBlock(thread_context, &ctx, sizeof(ctx));
     return RESULT_SUCCESS;
 }
 
@@ -436,8 +479,8 @@ static ResultCode SetThreadPriority(Handle handle, u32 priority) {
 
     // Note: The kernel uses the current process's resource limit instead of
     // the one from the thread owner's resource limit.
-    SharedPtr<ResourceLimit>& resource_limit = Core::CurrentProcess()->resource_limit;
-    if (resource_limit->GetMaxResourceValue(ResourceType::Priority) > priority) {
+    const ResourceLimit& resource_limit = Core::CurrentProcess()->GetResourceLimit();
+    if (resource_limit.GetMaxResourceValue(ResourceType::Priority) > priority) {
         return ERR_NOT_AUTHORIZED;
     }
 
@@ -511,9 +554,9 @@ static ResultCode QueryProcessMemory(MemoryInfo* memory_info, PageInfo* /*page_i
     if (!process) {
         return ERR_INVALID_HANDLE;
     }
-    auto vma = process->vm_manager.FindVMA(addr);
+    auto vma = process->VMManager().FindVMA(addr);
     memory_info->attributes = 0;
-    if (vma == Core::CurrentProcess()->vm_manager.vma_map.end()) {
+    if (vma == Core::CurrentProcess()->VMManager().vma_map.end()) {
         memory_info->base_address = 0;
         memory_info->permission = static_cast<u32>(VMAPermission::None);
         memory_info->size = 0;
@@ -560,14 +603,14 @@ static ResultCode CreateThread(Handle* out_handle, VAddr entry_point, u64 arg, V
         return ERR_INVALID_THREAD_PRIORITY;
     }
 
-    SharedPtr<ResourceLimit>& resource_limit = Core::CurrentProcess()->resource_limit;
-    if (resource_limit->GetMaxResourceValue(ResourceType::Priority) > priority) {
+    const ResourceLimit& resource_limit = Core::CurrentProcess()->GetResourceLimit();
+    if (resource_limit.GetMaxResourceValue(ResourceType::Priority) > priority) {
         return ERR_NOT_AUTHORIZED;
     }
 
     if (processor_id == THREADPROCESSORID_DEFAULT) {
         // Set the target CPU to the one specified in the process' exheader.
-        processor_id = Core::CurrentProcess()->ideal_processor;
+        processor_id = Core::CurrentProcess()->GetDefaultProcessorID();
         ASSERT(processor_id != THREADPROCESSORID_DEFAULT);
     }
 
@@ -897,10 +940,10 @@ static ResultCode SetThreadCoreMask(Handle thread_handle, u32 core, u64 mask) {
     }
 
     if (core == static_cast<u32>(THREADPROCESSORID_DEFAULT)) {
-        ASSERT(thread->owner_process->ideal_processor !=
+        ASSERT(thread->owner_process->GetDefaultProcessorID() !=
                static_cast<u8>(THREADPROCESSORID_DEFAULT));
         // Set the target CPU to the one specified in the process' exheader.
-        core = thread->owner_process->ideal_processor;
+        core = thread->owner_process->GetDefaultProcessorID();
         mask = 1ull << core;
     }
 

@@ -37,7 +37,9 @@
 #include "core/core.h"
 #include "core/core_cpu.h"
 #include "core/gdbstub/gdbstub.h"
+#include "core/hle/kernel/process.h"
 #include "core/hle/kernel/scheduler.h"
+#include "core/hle/kernel/vm_manager.h"
 #include "core/loader/loader.h"
 #include "core/memory.h"
 
@@ -245,7 +247,7 @@ static void RegWrite(std::size_t id, u64 val, Kernel::Thread* thread = nullptr) 
     } else if (id == PC_REGISTER) {
         thread->context.pc = val;
     } else if (id == PSTATE_REGISTER) {
-        thread->context.pstate = val;
+        thread->context.pstate = static_cast<u32>(val);
     } else if (id > PSTATE_REGISTER && id < FPCR_REGISTER) {
         thread->context.vector_registers[id - (PSTATE_REGISTER + 1)][0] = val;
     }
@@ -592,7 +594,8 @@ static void HandleQuery() {
                        strlen("Xfer:features:read:target.xml:")) == 0) {
         SendReply(target_xml);
     } else if (strncmp(query, "Offsets", strlen("Offsets")) == 0) {
-        std::string buffer = fmt::format("TextSeg={:0x}", Memory::PROCESS_IMAGE_VADDR);
+        const VAddr base_address = Core::CurrentProcess()->VMManager().GetCodeRegionBaseAddress();
+        std::string buffer = fmt::format("TextSeg={:0x}", base_address);
         SendReply(buffer.c_str());
     } else if (strncmp(query, "fThreadInfo", strlen("fThreadInfo")) == 0) {
         std::string val = "m";
@@ -906,11 +909,11 @@ static void ReadMemory() {
     static u8 reply[GDB_BUFFER_SIZE - 4];
 
     auto start_offset = command_buffer + 1;
-    auto addr_pos = std::find(start_offset, command_buffer + command_length, ',');
-    VAddr addr = HexToLong(start_offset, static_cast<u64>(addr_pos - start_offset));
+    const auto addr_pos = std::find(start_offset, command_buffer + command_length, ',');
+    const VAddr addr = HexToLong(start_offset, static_cast<u64>(addr_pos - start_offset));
 
     start_offset = addr_pos + 1;
-    u64 len =
+    const u64 len =
         HexToLong(start_offset, static_cast<u64>((command_buffer + command_length) - start_offset));
 
     LOG_DEBUG(Debug_GDBStub, "gdb: addr: {:016X} len: {:016X}", addr, len);
@@ -919,7 +922,9 @@ static void ReadMemory() {
         SendReply("E01");
     }
 
-    if (addr < Memory::PROCESS_IMAGE_VADDR || addr >= Memory::MAP_REGION_VADDR_END) {
+    const auto& vm_manager = Core::CurrentProcess()->VMManager();
+    if (addr < vm_manager.GetCodeRegionBaseAddress() ||
+        addr >= vm_manager.GetMapRegionEndAddress()) {
         return SendReply("E00");
     }
 

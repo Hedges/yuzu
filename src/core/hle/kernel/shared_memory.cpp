@@ -8,6 +8,7 @@
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "core/hle/kernel/errors.h"
+#include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/shared_memory.h"
 #include "core/memory.h"
 
@@ -34,11 +35,11 @@ SharedPtr<SharedMemory> SharedMemory::Create(KernelCore& kernel, SharedPtr<Proce
 
         // Refresh the address mappings for the current process.
         if (Core::CurrentProcess() != nullptr) {
-            Core::CurrentProcess()->vm_manager.RefreshMemoryBlockMappings(
+            Core::CurrentProcess()->VMManager().RefreshMemoryBlockMappings(
                 shared_memory->backing_block.get());
         }
     } else {
-        auto& vm_manager = shared_memory->owner_process->vm_manager;
+        auto& vm_manager = shared_memory->owner_process->VMManager();
 
         // The memory is already available and mapped in the owner process.
         auto vma = vm_manager.FindVMA(address);
@@ -71,7 +72,8 @@ SharedPtr<SharedMemory> SharedMemory::CreateForApplet(
     shared_memory->other_permissions = other_permissions;
     shared_memory->backing_block = std::move(heap_block);
     shared_memory->backing_block_offset = offset;
-    shared_memory->base_address = Memory::HEAP_VADDR + offset;
+    shared_memory->base_address =
+        kernel.CurrentProcess()->VMManager().GetHeapRegionBaseAddress() + offset;
 
     return shared_memory;
 }
@@ -105,7 +107,7 @@ ResultCode SharedMemory::Map(Process* target_process, VAddr address, MemoryPermi
     VAddr target_address = address;
 
     // Map the memory block into the target process
-    auto result = target_process->vm_manager.MapMemoryBlock(
+    auto result = target_process->VMManager().MapMemoryBlock(
         target_address, backing_block, backing_block_offset, size, MemoryState::Shared);
     if (result.Failed()) {
         LOG_ERROR(
@@ -115,14 +117,14 @@ ResultCode SharedMemory::Map(Process* target_process, VAddr address, MemoryPermi
         return result.Code();
     }
 
-    return target_process->vm_manager.ReprotectRange(target_address, size,
-                                                     ConvertPermissions(permissions));
+    return target_process->VMManager().ReprotectRange(target_address, size,
+                                                      ConvertPermissions(permissions));
 }
 
 ResultCode SharedMemory::Unmap(Process* target_process, VAddr address) {
     // TODO(Subv): Verify what happens if the application tries to unmap an address that is not
     // mapped to a SharedMemory.
-    return target_process->vm_manager.UnmapRange(address, size);
+    return target_process->VMManager().UnmapRange(address, size);
 }
 
 VMAPermission SharedMemory::ConvertPermissions(MemoryPermission permission) {

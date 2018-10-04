@@ -470,6 +470,7 @@ void RasterizerOpenGL::DrawArrays() {
     SyncCullMode();
     SyncAlphaTest();
     SyncTransformFeedback();
+    SyncPointState();
 
     // TODO(bunnei): Sync framebuffer_scale uniform here
     // TODO(bunnei): Sync scissorbox uniform(s) here
@@ -766,7 +767,7 @@ u32 RasterizerOpenGL::SetupTextures(Maxwell::ShaderStage stage, Shader& shader, 
         }
 
         texture_samplers[current_bindpoint].SyncWithConfig(texture.tsc);
-        Surface surface = res_cache.GetTextureSurface(texture);
+        Surface surface = res_cache.GetTextureSurface(texture, entry);
         if (surface != nullptr) {
             state.texture_units[current_bindpoint].texture = surface->Texture().handle;
             state.texture_units[current_bindpoint].target = surface->Target();
@@ -935,6 +936,15 @@ void RasterizerOpenGL::SyncTransformFeedback() {
         LOG_CRITICAL(Render_OpenGL, "Transform feedbacks are not implemented");
         UNREACHABLE();
     }
+}
+
+void RasterizerOpenGL::SyncPointState() {
+    const auto& regs = Core::System::GetInstance().GPU().Maxwell3D().regs;
+
+    // TODO(Rodrigo): Most games do not set a point size. I think this is a case of a
+    // register carrying a default value. For now, if the point size is zero, assume it's
+    // OpenGL's default (1).
+    state.point.size = regs.point_size == 0 ? 1 : regs.point_size;
 }
 
 } // namespace OpenGL

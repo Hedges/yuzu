@@ -2000,6 +2000,14 @@ private:
                     }
                     break;
                 }
+                case Tegra::Shader::TextureType::TextureCube: {
+                    ASSERT_MSG(!is_array, "Unimplemented");
+                    std::string x = regs.GetRegisterAsFloat(instr.gpr8);
+                    std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                    std::string z = regs.GetRegisterAsFloat(instr.gpr20);
+                    coord = "vec3 coords = vec3(" + x + ", " + y + ", " + z + ");";
+                    break;
+                }
                 default:
                     LOG_CRITICAL(HW_GPU, "Unhandled texture type {}",
                                  static_cast<u32>(texture_type));
@@ -2018,9 +2026,12 @@ private:
                 break;
             }
             case OpCode::Id::TLDS: {
-                ASSERT(instr.tlds.GetTextureType() == Tegra::Shader::TextureType::Texture2D);
-                ASSERT(instr.tlds.IsArrayTexture() == false);
                 std::string coord;
+                const Tegra::Shader::TextureType texture_type{instr.tlds.GetTextureType()};
+                const bool is_array{instr.tlds.IsArrayTexture()};
+
+                ASSERT(texture_type == Tegra::Shader::TextureType::Texture2D);
+                ASSERT(is_array == false);
 
                 ASSERT_MSG(!instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
                            "NODEP is not implemented");
@@ -2029,9 +2040,14 @@ private:
                 ASSERT_MSG(!instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::MZ),
                            "MZ is not implemented");
 
-                switch (instr.tlds.GetTextureType()) {
+                switch (texture_type) {
+                case Tegra::Shader::TextureType::Texture1D: {
+                    const std::string x = regs.GetRegisterAsInteger(instr.gpr8);
+                    coord = "int coords = " + x + ';';
+                    break;
+                }
                 case Tegra::Shader::TextureType::Texture2D: {
-                    if (instr.tlds.IsArrayTexture()) {
+                    if (is_array) {
                         LOG_CRITICAL(HW_GPU, "Unhandled 2d array texture");
                         UNREACHABLE();
                     } else {
@@ -2043,11 +2059,11 @@ private:
                 }
                 default:
                     LOG_CRITICAL(HW_GPU, "Unhandled texture type {}",
-                                 static_cast<u32>(instr.tlds.GetTextureType()));
+                                 static_cast<u32>(texture_type));
                     UNREACHABLE();
                 }
-                const std::string sampler = GetSampler(instr.sampler, instr.tlds.GetTextureType(),
-                                                       instr.tlds.IsArrayTexture());
+
+                const std::string sampler = GetSampler(instr.sampler, texture_type, is_array);
                 const std::string texture = "texelFetch(" + sampler + ", coords, 0)";
                 WriteTexsInstruction(instr, coord, texture);
                 break;
