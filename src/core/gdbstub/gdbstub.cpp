@@ -921,11 +921,11 @@ static void ReadMemory() {
         SendReply("E01");
     }
 
-    const auto& vm_manager = Core::CurrentProcess()->VMManager();
-    if (addr < vm_manager.GetCodeRegionBaseAddress() ||
-        addr >= vm_manager.GetMapRegionEndAddress()) {
-        return SendReply("E00");
-    }
+    //const auto& vm_manager = Core::CurrentProcess()->VMManager();
+    //if (addr < vm_manager.GetCodeRegionBaseAddress() ||
+    //    addr >= vm_manager.GetMapRegionEndAddress()) {
+    //    return SendReply("E00");
+    //}
 
     if (!Memory::IsValidVirtualAddress(addr)) {
         return SendReply("E00");
