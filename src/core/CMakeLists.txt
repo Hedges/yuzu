@@ -34,6 +34,8 @@ add_library(core STATIC
     file_sys/errors.h
     file_sys/fsmitm_romfsbuild.cpp
     file_sys/fsmitm_romfsbuild.h
+    file_sys/ips_layer.cpp
+    file_sys/ips_layer.h
     file_sys/mode.h
     file_sys/nca_metadata.cpp
     file_sys/nca_metadata.h
@@ -394,6 +396,10 @@ create_target_directory_groups(core)
 
 target_link_libraries(core PUBLIC common PRIVATE audio_core video_core)
 target_link_libraries(core PUBLIC Boost::boost PRIVATE fmt lz4_static mbedtls opus unicorn open_source_archives)
+if (ENABLE_WEB_SERVICE)
+    add_definitions(-DENABLE_WEB_SERVICE)
+    target_link_libraries(core PUBLIC json-headers web_service)
+endif()
 
 if (ARCHITECTURE_x86_64)
     target_sources(core PRIVATE

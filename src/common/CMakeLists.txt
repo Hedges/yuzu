@@ -29,7 +29,7 @@ if ($ENV{CI})
       if (BUILD_VERSION)
         # This leaves a trailing space on the last word, but we actually want that
         # because of how it's styled in the title bar.
-        set(BUILD_FULLNAME "${REPO_NAME} #${BUILD_VERSION} ")
+        set(BUILD_FULLNAME "${REPO_NAME} ${BUILD_VERSION} ")
       else()
         set(BUILD_FULLNAME "")
       endif()
@@ -41,6 +41,8 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/scm_rev.cpp.in" "${CMAKE_CURRENT_SOU
 add_library(common STATIC
     alignment.h
     assert.h
+    detached_tasks.cpp
+    detached_tasks.h
     bit_field.h
     bit_set.h
     cityhash.cpp
@@ -87,6 +89,7 @@ add_library(common STATIC
     timer.cpp
     timer.h
     vector_math.h
+    web_result.h
 )
 
 if(ARCHITECTURE_x86_64)

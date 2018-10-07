@@ -24,14 +24,6 @@ enum class TitleVersionFormat : u8 {
 std::string FormatTitleVersion(u32 version,
                                TitleVersionFormat format = TitleVersionFormat::ThreeElements);
 
-enum class PatchType {
-    Update,
-    LayeredFS,
-    DLC,
-};
-
-std::string FormatPatchTypeName(PatchType type);
-
 // A centralized class to manage patches to games.
 class PatchManager {
 public:
@@ -42,15 +34,25 @@ public:
     // - Game Updates
     VirtualDir PatchExeFS(VirtualDir exefs) const;
 
+    // Currently tracked NSO patches:
+    // - IPS
+    std::vector<u8> PatchNSO(const std::vector<u8>& nso) const;
+
+    // Checks to see if PatchNSO() will have any effect given the NSO's build ID.
+    // Used to prevent expensive copies in NSO loader.
+    bool HasNSOPatch(const std::array<u8, 0x20>& build_id) const;
+
     // Currently tracked RomFS patches:
     // - Game Updates
     // - LayeredFS
     VirtualFile PatchRomFS(VirtualFile base, u64 ivfc_offset,
-                           ContentRecordType type = ContentRecordType::Program) const;
+                           ContentRecordType type = ContentRecordType::Program,
+                           VirtualFile update_raw = nullptr) const;
 
     // Returns a vector of pairs between patch names and patch versions.
-    // i.e. Update v80 will return {Update, 80}
-    std::map<PatchType, std::string> GetPatchVersionNames() const;
+    // i.e. Update 3.2.2 will return {"Update", "3.2.2"}
+    std::map<std::string, std::string, std::less<>> GetPatchVersionNames(
+        VirtualFile update_raw = nullptr) const;
 
     // Given title_id of the program, attempts to get the control data of the update and parse it,
     // falling back to the base control data.
