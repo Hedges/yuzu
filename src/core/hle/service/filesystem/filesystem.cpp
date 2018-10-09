@@ -237,7 +237,7 @@ static std::unique_ptr<FileSys::SDMCFactory> sdmc_factory;
 static std::unique_ptr<FileSys::BISFactory> bis_factory;
 
 ResultCode RegisterRomFS(std::unique_ptr<FileSys::RomFSFactory>&& factory) {
-    ASSERT_MSG(romfs_factory == nullptr, "Tried to register a second RomFS");
+    //ASSERT_MSG(romfs_factory == nullptr, "Tried to register a second RomFS");
     romfs_factory = std::move(factory);
     LOG_DEBUG(Service_FS, "Registered RomFS");
     return RESULT_SUCCESS;
@@ -382,13 +382,13 @@ void CreateFactories(const FileSys::VirtualFilesystem& vfs, bool overwrite) {
     if (sdmc_factory == nullptr)
         sdmc_factory = std::make_unique<FileSys::SDMCFactory>(std::move(sd_directory));
 
-    if (romfs_factory == nullptr) {
-        if (&(Core::System::GetInstance().GetAppLoader()) != nullptr) {
-            auto romfs =
-                std::make_unique<FileSys::RomFSFactory>(Core::System::GetInstance().GetAppLoader());
-            romfs_factory = std::move(romfs);
-        }
-    }
+    //if (romfs_factory == nullptr) {
+    //    if (&(Core::System::GetInstance().GetAppLoader()) != nullptr) {
+    //        auto romfs =
+    //            std::make_unique<FileSys::RomFSFactory>(Core::System::GetInstance().GetAppLoader());
+    //        romfs_factory = std::move(romfs);
+    //    }
+    //}
 }
 
 void InstallInterfaces(SM::ServiceManager& service_manager, const FileSys::VirtualFilesystem& vfs) {
