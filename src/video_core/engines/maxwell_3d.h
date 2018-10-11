@@ -347,6 +347,16 @@ public:
             DecrWrap = 8,
         };
 
+        enum class MemoryLayout : u32 {
+            Linear = 0,
+            BlockLinear = 1,
+        };
+
+        enum class InvMemoryLayout : u32 {
+            BlockLinear = 0,
+            Linear = 1,
+        };
+
         struct Cull {
             enum class FrontFace : u32 {
                 ClockWise = 0x0900,
@@ -432,7 +442,12 @@ public:
             u32 width;
             u32 height;
             Tegra::RenderTargetFormat format;
-            u32 block_dimensions;
+            union {
+                BitField<0, 3, u32> block_width;
+                BitField<4, 3, u32> block_height;
+                BitField<8, 3, u32> block_depth;
+                BitField<12, 1, InvMemoryLayout> type;
+            } memory_layout;
             u32 array_mode;
             u32 layer_stride;
             u32 base_layer;
@@ -532,7 +547,21 @@ public:
                 INSERT_PADDING_WORDS(0x3);
                 s32 clear_stencil;
 
-                INSERT_PADDING_WORDS(0x6C);
+                INSERT_PADDING_WORDS(0x17);
+
+                struct {
+                    u32 enable;
+                    union {
+                        BitField<0, 16, u32> min_x;
+                        BitField<16, 16, u32> max_x;
+                    };
+                    union {
+                        BitField<0, 16, u32> min_y;
+                        BitField<16, 16, u32> max_y;
+                    };
+                } scissor_test;
+
+                INSERT_PADDING_WORDS(0x52);
 
                 s32 stencil_back_func_ref;
                 u32 stencil_back_mask;
@@ -548,7 +577,12 @@ public:
                     u32 address_high;
                     u32 address_low;
                     Tegra::DepthFormat format;
-                    u32 block_dimensions;
+                    union {
+                        BitField<0, 4, u32> block_width;
+                        BitField<4, 4, u32> block_height;
+                        BitField<8, 4, u32> block_depth;
+                        BitField<20, 1, InvMemoryLayout> type;
+                    } memory_layout;
                     u32 layer_stride;
 
                     GPUVAddr Address() const {
@@ -1002,6 +1036,7 @@ ASSERT_REG_POSITION(vertex_buffer, 0x35D);
 ASSERT_REG_POSITION(clear_color[0], 0x360);
 ASSERT_REG_POSITION(clear_depth, 0x364);
 ASSERT_REG_POSITION(clear_stencil, 0x368);
+ASSERT_REG_POSITION(scissor_test, 0x380);
 ASSERT_REG_POSITION(stencil_back_func_ref, 0x3D5);
 ASSERT_REG_POSITION(stencil_back_mask, 0x3D6);
 ASSERT_REG_POSITION(stencil_back_func_mask, 0x3D7);
