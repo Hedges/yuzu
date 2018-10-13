@@ -43,6 +43,73 @@ namespace {
 constexpr bool Is4KBAligned(VAddr address) {
     return (address & 0xFFF) == 0;
 }
+
+// Checks if address + size is greater than the given address
+// This can return false if the size causes an overflow of a 64-bit type
+// or if the given size is zero.
+constexpr bool IsValidAddressRange(VAddr address, u64 size) {
+    return address + size > address;
+}
+
+// Checks if a given address range lies within a larger address range.
+constexpr bool IsInsideAddressRange(VAddr address, u64 size, VAddr address_range_begin,
+                                    VAddr address_range_end) {
+    const VAddr end_address = address + size - 1;
+    return address_range_begin <= address && end_address <= address_range_end - 1;
+}
+
+bool IsInsideAddressSpace(const VMManager& vm, VAddr address, u64 size) {
+    return IsInsideAddressRange(address, size, vm.GetAddressSpaceBaseAddress(),
+                                vm.GetAddressSpaceEndAddress());
+}
+
+bool IsInsideNewMapRegion(const VMManager& vm, VAddr address, u64 size) {
+    return IsInsideAddressRange(address, size, vm.GetNewMapRegionBaseAddress(),
+                                vm.GetNewMapRegionEndAddress());
+}
+
+// Helper function that performs the common sanity checks for svcMapMemory
+// and svcUnmapMemory. This is doable, as both functions perform their sanitizing
+// in the same order.
+ResultCode MapUnmapMemorySanityChecks(const VMManager& vm_manager, VAddr dst_addr, VAddr src_addr,
+                                      u64 size) {
+    if (!Is4KBAligned(dst_addr) || !Is4KBAligned(src_addr)) {
+        return ERR_INVALID_ADDRESS;
+    }
+
+    if (size == 0 || !Is4KBAligned(size)) {
+        return ERR_INVALID_SIZE;
+    }
+
+    if (!IsValidAddressRange(dst_addr, size)) {
+        return ERR_INVALID_ADDRESS_STATE;
+    }
+
+    if (!IsValidAddressRange(src_addr, size)) {
+        return ERR_INVALID_ADDRESS_STATE;
+    }
+
+    if (!IsInsideAddressSpace(vm_manager, src_addr, size)) {
+        return ERR_INVALID_ADDRESS_STATE;
+    }
+
+    if (!IsInsideNewMapRegion(vm_manager, dst_addr, size)) {
+        return ERR_INVALID_MEMORY_RANGE;
+    }
+
+    const VAddr dst_end_address = dst_addr + size;
+    if (dst_end_address > vm_manager.GetHeapRegionBaseAddress() &&
+        vm_manager.GetHeapRegionEndAddress() > dst_addr) {
+        return ERR_INVALID_MEMORY_RANGE;
+    }
+
+    if (dst_end_address > vm_manager.GetMapRegionBaseAddress() &&
+        vm_manager.GetMapRegionEndAddress() > dst_addr) {
+        return ERR_INVALID_MEMORY_RANGE;
+    }
+
+    return RESULT_SUCCESS;
+}
 } // Anonymous namespace
 
 /// Set the process heap to a given Size. It can both extend and shrink the heap.
@@ -73,15 +140,15 @@ static ResultCode MapMemory(VAddr dst_addr, VAddr src_addr, u64 size) {
     LOG_TRACE(Kernel_SVC, "called, dst_addr=0x{:X}, src_addr=0x{:X}, size=0x{:X}", dst_addr,
               src_addr, size);
 
-    if (!Is4KBAligned(dst_addr) || !Is4KBAligned(src_addr)) {
-        return ERR_INVALID_ADDRESS;
+    auto* const current_process = Core::CurrentProcess();
+    const auto& vm_manager = current_process->VMManager();
+
+    const auto result = MapUnmapMemorySanityChecks(vm_manager, dst_addr, src_addr, size);
+    if (result != RESULT_SUCCESS) {
+        return result;
     }
 
-    if (size == 0 || !Is4KBAligned(size)) {
-        return ERR_INVALID_SIZE;
-    }
-
-    return Core::CurrentProcess()->MirrorMemory(dst_addr, src_addr, size);
+    return current_process->MirrorMemory(dst_addr, src_addr, size);
 }
 
 /// Unmaps a region that was previously mapped with svcMapMemory
@@ -89,15 +156,15 @@ static ResultCode UnmapMemory(VAddr dst_addr, VAddr src_addr, u64 size) {
     LOG_TRACE(Kernel_SVC, "called, dst_addr=0x{:X}, src_addr=0x{:X}, size=0x{:X}", dst_addr,
               src_addr, size);
 
-    if (!Is4KBAligned(dst_addr) || !Is4KBAligned(src_addr)) {
-        return ERR_INVALID_ADDRESS;
+    auto* const current_process = Core::CurrentProcess();
+    const auto& vm_manager = current_process->VMManager();
+
+    const auto result = MapUnmapMemorySanityChecks(vm_manager, dst_addr, src_addr, size);
+    if (result != RESULT_SUCCESS) {
+        return result;
     }
 
-    if (size == 0 || !Is4KBAligned(size)) {
-        return ERR_INVALID_SIZE;
-    }
-
-    return Core::CurrentProcess()->UnmapMemory(dst_addr, src_addr, size);
+    return current_process->UnmapMemory(dst_addr, src_addr, size);
 }
 
 /// Connect to an OS service given the port name, returns the handle to the port to out
@@ -305,13 +372,28 @@ static ResultCode ArbitrateUnlock(VAddr mutex_addr) {
     return Mutex::Release(mutex_addr);
 }
 
+struct BreakReason {
+    union {
+        u32 raw;
+        BitField<31, 1, u32> signal_debugger;
+    };
+};
+
 /// Break program execution
-static void Break(u64 reason, u64 info1, u64 info2) {
-    LOG_CRITICAL(
-        Debug_Emulated,
-        "Emulated program broke execution! reason=0x{:016X}, info1=0x{:016X}, info2=0x{:016X}",
-        reason, info1, info2);
-    ASSERT(false);
+static void Break(u32 reason, u64 info1, u64 info2) {
+    BreakReason break_reason{reason};
+    if (break_reason.signal_debugger) {
+        LOG_ERROR(
+            Debug_Emulated,
+            "Emulated program broke execution! reason=0x{:016X}, info1=0x{:016X}, info2=0x{:016X}",
+            reason, info1, info2);
+    } else {
+        LOG_CRITICAL(
+            Debug_Emulated,
+            "Emulated program broke execution! reason=0x{:016X}, info1=0x{:016X}, info2=0x{:016X}",
+            reason, info1, info2);
+        ASSERT(false);
+    }
 }
 
 /// Used to output a message on a debug hardware unit - does nothing on a retail unit
@@ -333,7 +415,7 @@ static ResultCode GetInfo(u64* result, u64 info_id, u64 handle, u64 info_sub_id)
     LOG_TRACE(Kernel_SVC, "called info_id=0x{:X}, info_sub_id=0x{:X}, handle=0x{:08X}", info_id,
               info_sub_id, handle);
 
-    const auto& current_process = Core::CurrentProcess();
+    const auto* current_process = Core::CurrentProcess();
     const auto& vm_manager = current_process->VMManager();
 
     switch (static_cast<GetInfoType>(info_id)) {
@@ -431,7 +513,7 @@ static ResultCode GetThreadContext(VAddr thread_context, Handle handle) {
         return ERR_INVALID_HANDLE;
     }
 
-    const auto current_process = Core::CurrentProcess();
+    const auto* current_process = Core::CurrentProcess();
     if (thread->GetOwnerProcess() != current_process) {
         return ERR_INVALID_HANDLE;
     }
@@ -523,7 +605,7 @@ static ResultCode MapSharedMemory(Handle shared_memory_handle, VAddr addr, u64 s
         return ERR_INVALID_HANDLE;
     }
 
-    return shared_memory->Map(Core::CurrentProcess().get(), addr, permissions_type,
+    return shared_memory->Map(Core::CurrentProcess(), addr, permissions_type,
                               MemoryPermission::DontCare);
 }
 
@@ -542,7 +624,7 @@ static ResultCode UnmapSharedMemory(Handle shared_memory_handle, VAddr addr, u64
     auto& kernel = Core::System::GetInstance().Kernel();
     auto shared_memory = kernel.HandleTable().Get<SharedMemory>(shared_memory_handle);
 
-    return shared_memory->Unmap(Core::CurrentProcess().get(), addr);
+    return shared_memory->Unmap(Core::CurrentProcess(), addr);
 }
 
 /// Query process memory
@@ -580,7 +662,7 @@ static ResultCode QueryMemory(MemoryInfo* memory_info, PageInfo* page_info, VAdd
 
 /// Exits the current process
 static void ExitProcess() {
-    auto& current_process = Core::CurrentProcess();
+    auto* current_process = Core::CurrentProcess();
 
     LOG_INFO(Kernel_SVC, "Process {} exiting", current_process->GetProcessID());
     ASSERT_MSG(current_process->GetStatus() == ProcessStatus::Running,
@@ -628,7 +710,7 @@ static ResultCode CreateThread(Handle* out_handle, VAddr entry_point, u64 arg, V
     auto& kernel = Core::System::GetInstance().Kernel();
     CASCADE_RESULT(SharedPtr<Thread> thread,
                    Thread::Create(kernel, name, entry_point, priority, arg, processor_id, stack_top,
-                                  Core::CurrentProcess()));
+                                  *Core::CurrentProcess()));
     const auto new_guest_handle = kernel.HandleTable().Create(thread);
     if (new_guest_handle.Failed()) {
         return new_guest_handle.Code();

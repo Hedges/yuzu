@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 
+#include <boost/optional.hpp>
 #include <fmt/format.h>
 
 #include "common/assert.h"
@@ -29,10 +30,31 @@ using Tegra::Shader::SubOp;
 constexpr u32 PROGRAM_END = MAX_PROGRAM_CODE_LENGTH;
 constexpr u32 PROGRAM_HEADER_SIZE = sizeof(Tegra::Shader::Header);
 
+enum : u32 { POSITION_VARYING_LOCATION = 0, GENERIC_VARYING_START_LOCATION = 1 };
+
+constexpr u32 MAX_GEOMETRY_BUFFERS = 6;
+constexpr u32 MAX_ATTRIBUTES = 0x100; // Size in vec4s, this value is untested
+
 class DecompileFail : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
+
+/// Translate topology
+static std::string GetTopologyName(Tegra::Shader::OutputTopology topology) {
+    switch (topology) {
+    case Tegra::Shader::OutputTopology::PointList:
+        return "points";
+    case Tegra::Shader::OutputTopology::LineStrip:
+        return "line_strip";
+    case Tegra::Shader::OutputTopology::TriangleStrip:
+        return "triangle_strip";
+    default:
+        LOG_CRITICAL(Render_OpenGL, "Unknown output topology {}", static_cast<u32>(topology));
+        UNREACHABLE();
+        return "points";
+    }
+}
 
 /// Describes the behaviour of code path of a given entry point and a return point.
 enum class ExitMethod {
@@ -253,8 +275,9 @@ enum class InternalFlag : u64 {
 class GLSLRegisterManager {
 public:
     GLSLRegisterManager(ShaderWriter& shader, ShaderWriter& declarations,
-                        const Maxwell3D::Regs::ShaderStage& stage, const std::string& suffix)
-        : shader{shader}, declarations{declarations}, stage{stage}, suffix{suffix} {
+                        const Maxwell3D::Regs::ShaderStage& stage, const std::string& suffix,
+                        const Tegra::Shader::Header& header)
+        : shader{shader}, declarations{declarations}, stage{stage}, suffix{suffix}, header{header} {
         BuildRegisterList();
         BuildInputList();
     }
@@ -358,11 +381,13 @@ public:
      * @param reg The destination register to use.
      * @param elem The element to use for the operation.
      * @param attribute The input attribute to use as the source value.
+     * @param vertex The register that decides which vertex to read from (used in GS).
      */
     void SetRegisterToInputAttibute(const Register& reg, u64 elem, Attribute::Index attribute,
-                                    const Tegra::Shader::IpaMode& input_mode) {
+                                    const Tegra::Shader::IpaMode& input_mode,
+                                    boost::optional<Register> vertex = {}) {
         const std::string dest = GetRegisterAsFloat(reg);
-        const std::string src = GetInputAttribute(attribute, input_mode) + GetSwizzle(elem);
+        const std::string src = GetInputAttribute(attribute, input_mode, vertex) + GetSwizzle(elem);
         shader.AddLine(dest + " = " + src + ';');
     }
 
@@ -391,16 +416,29 @@ public:
      * are stored as floats, so this may require conversion.
      * @param attribute The destination output attribute.
      * @param elem The element to use for the operation.
-     * @param reg The register to use as the source value.
+     * @param val_reg The register to use as the source value.
+     * @param buf_reg The register that tells which buffer to write to (used in geometry shaders).
      */
-    void SetOutputAttributeToRegister(Attribute::Index attribute, u64 elem, const Register& reg) {
+    void SetOutputAttributeToRegister(Attribute::Index attribute, u64 elem, const Register& val_reg,
+                                      const Register& buf_reg) {
         const std::string dest = GetOutputAttribute(attribute);
-        const std::string src = GetRegisterAsFloat(reg);
+        const std::string src = GetRegisterAsFloat(val_reg);
 
         if (!dest.empty()) {
             // Can happen with unknown/unimplemented output attributes, in which case we ignore the
             // instruction for now.
-            shader.AddLine(dest + GetSwizzle(elem) + " = " + src + ';');
+            if (stage == Maxwell3D::Regs::ShaderStage::Geometry) {
+                // TODO(Rodrigo): nouveau sets some attributes after setting emitting a geometry
+                // shader. These instructions use a dirty register as buffer index. To avoid some
+                // drivers from complaining for the out of boundary writes, guard them.
+                const std::string buf_index{"min(" + GetRegisterAsInteger(buf_reg) + ", " +
+                                            std::to_string(MAX_GEOMETRY_BUFFERS - 1) + ')'};
+                shader.AddLine("amem[" + buf_index + "][" +
+                               std::to_string(static_cast<u32>(attribute)) + ']' +
+                               GetSwizzle(elem) + " = " + src + ';');
+            } else {
+                shader.AddLine(dest + GetSwizzle(elem) + " = " + src + ';');
+            }
         }
     }
 
@@ -441,58 +479,18 @@ public:
         }
     }
 
-    /// Add declarations for registers
+    /// Add declarations.
     void GenerateDeclarations(const std::string& suffix) {
-        for (const auto& reg : regs) {
-            declarations.AddLine(GLSLRegister::GetTypeString() + ' ' + reg.GetPrefixString() +
-                                 std::to_string(reg.GetIndex()) + '_' + suffix + " = 0;");
-        }
-        declarations.AddNewLine();
-
-        for (u32 ii = 0; ii < static_cast<u64>(InternalFlag::Amount); ii++) {
-            const InternalFlag code = static_cast<InternalFlag>(ii);
-            declarations.AddLine("bool " + GetInternalFlag(code) + " = false;");
-        }
-        declarations.AddNewLine();
-
-        for (const auto element : declr_input_attribute) {
-            // TODO(bunnei): Use proper number of elements for these
-            u32 idx =
-                static_cast<u32>(element.first) - static_cast<u32>(Attribute::Index::Attribute_0);
-            declarations.AddLine("layout(location = " + std::to_string(idx) + ")" +
-                                 GetInputFlags(element.first) + "in vec4 " +
-                                 GetInputAttribute(element.first, element.second) + ';');
-        }
-        declarations.AddNewLine();
-
-        for (const auto& index : declr_output_attribute) {
-            // TODO(bunnei): Use proper number of elements for these
-            declarations.AddLine("layout(location = " +
-                                 std::to_string(static_cast<u32>(index) -
-                                                static_cast<u32>(Attribute::Index::Attribute_0)) +
-                                 ") out vec4 " + GetOutputAttribute(index) + ';');
-        }
-        declarations.AddNewLine();
-
-        for (const auto& entry : GetConstBuffersDeclarations()) {
-            declarations.AddLine("layout(std140) uniform " + entry.GetName());
-            declarations.AddLine('{');
-            declarations.AddLine("    vec4 c" + std::to_string(entry.GetIndex()) +
-                                 "[MAX_CONSTBUFFER_ELEMENTS];");
-            declarations.AddLine("};");
-            declarations.AddNewLine();
-        }
-        declarations.AddNewLine();
-
-        const auto& samplers = GetSamplers();
-        for (const auto& sampler : samplers) {
-            declarations.AddLine("uniform " + sampler.GetTypeString() + ' ' + sampler.GetName() +
-                                 ';');
-        }
-        declarations.AddNewLine();
+        GenerateRegisters(suffix);
+        GenerateInternalFlags();
+        GenerateInputAttrs();
+        GenerateOutputAttrs();
+        GenerateConstBuffers();
+        GenerateSamplers();
+        GenerateGeometry();
     }
 
-    /// Returns a list of constant buffer declarations
+    /// Returns a list of constant buffer declarations.
     std::vector<ConstBufferEntry> GetConstBuffersDeclarations() const {
         std::vector<ConstBufferEntry> result;
         std::copy_if(declr_const_buffers.begin(), declr_const_buffers.end(),
@@ -500,7 +498,7 @@ public:
         return result;
     }
 
-    /// Returns a list of samplers used in the shader
+    /// Returns a list of samplers used in the shader.
     const std::vector<SamplerEntry>& GetSamplers() const {
         return used_samplers;
     }
@@ -509,7 +507,7 @@ public:
     /// necessary.
     std::string AccessSampler(const Sampler& sampler, Tegra::Shader::TextureType type,
                               bool is_array, bool is_shadow) {
-        const std::size_t offset = static_cast<std::size_t>(sampler.index.Value());
+        const auto offset = static_cast<std::size_t>(sampler.index.Value());
 
         // If this sampler has already been used, return the existing mapping.
         const auto itr =
@@ -530,6 +528,129 @@ public:
     }
 
 private:
+    /// Generates declarations for registers.
+    void GenerateRegisters(const std::string& suffix) {
+        for (const auto& reg : regs) {
+            declarations.AddLine(GLSLRegister::GetTypeString() + ' ' + reg.GetPrefixString() +
+                                 std::to_string(reg.GetIndex()) + '_' + suffix + " = 0;");
+        }
+        declarations.AddNewLine();
+    }
+
+    /// Generates declarations for internal flags.
+    void GenerateInternalFlags() {
+        for (u32 ii = 0; ii < static_cast<u64>(InternalFlag::Amount); ii++) {
+            const InternalFlag code = static_cast<InternalFlag>(ii);
+            declarations.AddLine("bool " + GetInternalFlag(code) + " = false;");
+        }
+        declarations.AddNewLine();
+    }
+
+    /// Generates declarations for input attributes.
+    void GenerateInputAttrs() {
+        if (stage != Maxwell3D::Regs::ShaderStage::Vertex) {
+            const std::string attr =
+                stage == Maxwell3D::Regs::ShaderStage::Geometry ? "gs_position[]" : "position";
+            declarations.AddLine("layout (location = " + std::to_string(POSITION_VARYING_LOCATION) +
+                                 ") in vec4 " + attr + ';');
+        }
+
+        for (const auto element : declr_input_attribute) {
+            // TODO(bunnei): Use proper number of elements for these
+            u32 idx =
+                static_cast<u32>(element.first) - static_cast<u32>(Attribute::Index::Attribute_0);
+            if (stage != Maxwell3D::Regs::ShaderStage::Vertex) {
+                // If inputs are varyings, add an offset
+                idx += GENERIC_VARYING_START_LOCATION;
+            }
+
+            std::string attr{GetInputAttribute(element.first, element.second)};
+            if (stage == Maxwell3D::Regs::ShaderStage::Geometry) {
+                attr = "gs_" + attr + "[]";
+            }
+            declarations.AddLine("layout (location = " + std::to_string(idx) + ") " +
+                                 GetInputFlags(element.first) + "in vec4 " + attr + ';');
+        }
+
+        declarations.AddNewLine();
+    }
+
+    /// Generates declarations for output attributes.
+    void GenerateOutputAttrs() {
+        if (stage != Maxwell3D::Regs::ShaderStage::Fragment) {
+            declarations.AddLine("layout (location = " + std::to_string(POSITION_VARYING_LOCATION) +
+                                 ") out vec4 position;");
+        }
+        for (const auto& index : declr_output_attribute) {
+            // TODO(bunnei): Use proper number of elements for these
+            const u32 idx = static_cast<u32>(index) -
+                            static_cast<u32>(Attribute::Index::Attribute_0) +
+                            GENERIC_VARYING_START_LOCATION;
+            declarations.AddLine("layout (location = " + std::to_string(idx) + ") out vec4 " +
+                                 GetOutputAttribute(index) + ';');
+        }
+        declarations.AddNewLine();
+    }
+
+    /// Generates declarations for constant buffers.
+    void GenerateConstBuffers() {
+        for (const auto& entry : GetConstBuffersDeclarations()) {
+            declarations.AddLine("layout (std140) uniform " + entry.GetName());
+            declarations.AddLine('{');
+            declarations.AddLine("    vec4 c" + std::to_string(entry.GetIndex()) +
+                                 "[MAX_CONSTBUFFER_ELEMENTS];");
+            declarations.AddLine("};");
+            declarations.AddNewLine();
+        }
+        declarations.AddNewLine();
+    }
+
+    /// Generates declarations for samplers.
+    void GenerateSamplers() {
+        const auto& samplers = GetSamplers();
+        for (const auto& sampler : samplers) {
+            declarations.AddLine("uniform " + sampler.GetTypeString() + ' ' + sampler.GetName() +
+                                 ';');
+        }
+        declarations.AddNewLine();
+    }
+
+    /// Generates declarations used for geometry shaders.
+    void GenerateGeometry() {
+        if (stage != Maxwell3D::Regs::ShaderStage::Geometry)
+            return;
+
+        declarations.AddLine(
+            "layout (" + GetTopologyName(header.common3.output_topology) +
+            ", max_vertices = " + std::to_string(header.common4.max_output_vertices) + ") out;");
+        declarations.AddNewLine();
+
+        declarations.AddLine("vec4 amem[" + std::to_string(MAX_GEOMETRY_BUFFERS) + "][" +
+                             std::to_string(MAX_ATTRIBUTES) + "];");
+        declarations.AddNewLine();
+
+        constexpr char buffer[] = "amem[output_buffer]";
+        declarations.AddLine("void emit_vertex(uint output_buffer) {");
+        ++declarations.scope;
+        for (const auto element : declr_output_attribute) {
+            declarations.AddLine(GetOutputAttribute(element) + " = " + buffer + '[' +
+                                 std::to_string(static_cast<u32>(element)) + "];");
+        }
+
+        declarations.AddLine("position = " + std::string(buffer) + '[' +
+                             std::to_string(static_cast<u32>(Attribute::Index::Position)) + "];");
+
+        // If a geometry shader is attached, it will always flip (it's the last stage before
+        // fragment). For more info about flipping, refer to gl_shader_gen.cpp.
+        declarations.AddLine("position.xy *= viewport_flip.xy;");
+        declarations.AddLine("gl_Position = position;");
+        declarations.AddLine("position.w = 1.0;");
+        declarations.AddLine("EmitVertex();");
+        --declarations.scope;
+        declarations.AddLine('}');
+        declarations.AddNewLine();
+    }
+
     /// Generates code representing a temporary (GPR) register.
     std::string GetRegister(const Register& reg, unsigned elem) {
         if (reg == Register::ZeroIndex) {
@@ -586,11 +707,19 @@ private:
 
     /// Generates code representing an input attribute register.
     std::string GetInputAttribute(Attribute::Index attribute,
-                                  const Tegra::Shader::IpaMode& input_mode) {
+                                  const Tegra::Shader::IpaMode& input_mode,
+                                  boost::optional<Register> vertex = {}) {
+        auto GeometryPass = [&](const std::string& name) {
+            if (stage == Maxwell3D::Regs::ShaderStage::Geometry && vertex) {
+                return "gs_" + name + '[' + GetRegisterAsInteger(vertex.value(), 0, false) + ']';
+            }
+            return name;
+        };
+
         switch (attribute) {
         case Attribute::Index::Position:
             if (stage != Maxwell3D::Regs::ShaderStage::Fragment) {
-                return "position";
+                return GeometryPass("position");
             } else {
                 return "vec4(gl_FragCoord.x, gl_FragCoord.y, gl_FragCoord.z, 1.0)";
             }
@@ -619,7 +748,7 @@ private:
                         UNREACHABLE();
                     }
                 }
-                return "input_attribute_" + std::to_string(index);
+                return GeometryPass("input_attribute_" + std::to_string(index));
             }
 
             LOG_CRITICAL(HW_GPU, "Unhandled input attribute: {}", static_cast<u32>(attribute));
@@ -672,7 +801,7 @@ private:
         return out;
     }
 
-    /// Generates code representing an output attribute register.
+    /// Generates code representing the declaration name of an output attribute register.
     std::string GetOutputAttribute(Attribute::Index attribute) {
         switch (attribute) {
         case Attribute::Index::Position:
@@ -708,6 +837,7 @@ private:
     std::vector<SamplerEntry> used_samplers;
     const Maxwell3D::Regs::ShaderStage& stage;
     const std::string& suffix;
+    const Tegra::Shader::Header& header;
 };
 
 class GLSLGenerator {
@@ -1103,8 +1233,8 @@ private:
             return offset + 1;
         }
 
-        shader.AddLine("// " + std::to_string(offset) + ": " + opcode->GetName() + " (" +
-                       std::to_string(instr.value) + ')');
+        shader.AddLine(
+            fmt::format("// {}: {} (0x{:016x})", offset, opcode->GetName(), instr.value));
 
         using Tegra::Shader::Pred;
         ASSERT_MSG(instr.pred.full_pred != Pred::NeverExecute,
@@ -1826,7 +1956,7 @@ private:
                 const auto LoadNextElement = [&](u32 reg_offset) {
                     regs.SetRegisterToInputAttibute(instr.gpr0.Value() + reg_offset, next_element,
                                                     static_cast<Attribute::Index>(next_index),
-                                                    input_mode);
+                                                    input_mode, instr.gpr39.Value());
 
                     // Load the next attribute element into the following register. If the element
                     // to load goes beyond the vec4 size, load the first element of the next
@@ -1890,8 +2020,8 @@ private:
 
                 const auto StoreNextElement = [&](u32 reg_offset) {
                     regs.SetOutputAttributeToRegister(static_cast<Attribute::Index>(next_index),
-                                                      next_element,
-                                                      instr.gpr0.Value() + reg_offset);
+                                                      next_element, instr.gpr0.Value() + reg_offset,
+                                                      instr.gpr39.Value());
 
                     // Load the next attribute element into the following register. If the element
                     // to load goes beyond the vec4 size, load the first element of the next
@@ -2299,8 +2429,7 @@ private:
                 ASSERT_MSG(!instr.tmml.UsesMiscMode(Tegra::Shader::TextureMiscMode::NDV),
                            "NDV is not implemented");
 
-                const std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
-                const std::string op_b = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
                 const bool is_array = instr.tmml.array != 0;
                 auto texture_type = instr.tmml.texture_type.Value();
                 const std::string sampler =
@@ -2311,13 +2440,11 @@ private:
                 std::string coord;
                 switch (texture_type) {
                 case Tegra::Shader::TextureType::Texture1D: {
-                    std::string x = regs.GetRegisterAsFloat(instr.gpr8);
                     coord = "float coords = " + x + ';';
                     break;
                 }
                 case Tegra::Shader::TextureType::Texture2D: {
-                    std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                    std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                    const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
                     coord = "vec2 coords = vec2(" + x + ", " + y + ");";
                     break;
                 }
@@ -2327,8 +2454,7 @@ private:
                     UNREACHABLE();
 
                     // Fallback to interpreting as a 2D texture for now
-                    std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                    std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                    const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
                     coord = "vec2 coords = vec2(" + x + ", " + y + ");";
                     texture_type = Tegra::Shader::TextureType::Texture2D;
                 }
@@ -2738,6 +2864,52 @@ private:
 
                 break;
             }
+            case OpCode::Id::OUT_R: {
+                ASSERT(instr.gpr20.Value() == Register::ZeroIndex);
+                ASSERT_MSG(stage == Maxwell3D::Regs::ShaderStage::Geometry,
+                           "OUT is expected to be used in a geometry shader.");
+
+                if (instr.out.emit) {
+                    // gpr0 is used to store the next address. Hardware returns a pointer but
+                    // we just return the next index with a cyclic cap.
+                    const std::string current{regs.GetRegisterAsInteger(instr.gpr8, 0, false)};
+                    const std::string next = "((" + current + " + 1" + ") % " +
+                                             std::to_string(MAX_GEOMETRY_BUFFERS) + ')';
+                    shader.AddLine("emit_vertex(" + current + ");");
+                    regs.SetRegisterToInteger(instr.gpr0, false, 0, next, 1, 1);
+                }
+                if (instr.out.cut) {
+                    shader.AddLine("EndPrimitive();");
+                }
+
+                break;
+            }
+            case OpCode::Id::MOV_SYS: {
+                switch (instr.sys20) {
+                case Tegra::Shader::SystemVariable::InvocationInfo: {
+                    LOG_WARNING(HW_GPU, "MOV_SYS instruction with InvocationInfo is incomplete");
+                    regs.SetRegisterToInteger(instr.gpr0, false, 0, "0u", 1, 1);
+                    break;
+                }
+                default: {
+                    LOG_CRITICAL(HW_GPU, "Unhandled system move: {}",
+                                 static_cast<u32>(instr.sys20.Value()));
+                    UNREACHABLE();
+                }
+                }
+                break;
+            }
+            case OpCode::Id::ISBERD: {
+                ASSERT(instr.isberd.o == 0);
+                ASSERT(instr.isberd.skew == 0);
+                ASSERT(instr.isberd.shift == Tegra::Shader::IsberdShift::None);
+                ASSERT(instr.isberd.mode == Tegra::Shader::IsberdMode::None);
+                ASSERT_MSG(stage == Maxwell3D::Regs::ShaderStage::Geometry,
+                           "ISBERD is expected to be used in a geometry shader.");
+                LOG_WARNING(HW_GPU, "ISBERD instruction is incomplete");
+                regs.SetRegisterToFloat(instr.gpr0, 0, regs.GetRegisterAsFloat(instr.gpr8), 1, 1);
+                break;
+            }
             case OpCode::Id::BRA: {
                 ASSERT_MSG(instr.bra.constant_buffer == 0,
                            "BRA with constant buffers are not implemented");
@@ -2779,6 +2951,88 @@ private:
                 // TODO(Subv): Find out if we actually have to care about this instruction or if
                 // the GLSL compiler takes care of that for us.
                 LOG_WARNING(HW_GPU, "DEPBAR instruction is stubbed");
+                break;
+            }
+            case OpCode::Id::VMAD: {
+                const bool signed_a = instr.vmad.signed_a == 1;
+                const bool signed_b = instr.vmad.signed_b == 1;
+                const bool result_signed = signed_a || signed_b;
+                boost::optional<std::string> forced_result;
+
+                auto Unpack = [&](const std::string& op, bool is_chunk, bool is_signed,
+                                  Tegra::Shader::VmadType type, u64 byte_height) {
+                    const std::string value = [&]() {
+                        if (!is_chunk) {
+                            const auto offset = static_cast<u32>(byte_height * 8);
+                            return "((" + op + " >> " + std::to_string(offset) + ") & 0xff)";
+                        }
+                        const std::string zero = "0";
+
+                        switch (type) {
+                        case Tegra::Shader::VmadType::Size16_Low:
+                            return '(' + op + " & 0xffff)";
+                        case Tegra::Shader::VmadType::Size16_High:
+                            return '(' + op + " >> 16)";
+                        case Tegra::Shader::VmadType::Size32:
+                            // TODO(Rodrigo): From my hardware tests it becomes a bit "mad" when
+                            // this type is used (1 * 1 + 0 == 0x5b800000). Until a better
+                            // explanation is found: assert.
+                            UNREACHABLE_MSG("Unimplemented");
+                            return zero;
+                        case Tegra::Shader::VmadType::Invalid:
+                            // Note(Rodrigo): This flag is invalid according to nvdisasm. From my
+                            // testing (even though it's invalid) this makes the whole instruction
+                            // assign zero to target register.
+                            forced_result = boost::make_optional(zero);
+                            return zero;
+                        default:
+                            UNREACHABLE();
+                            return zero;
+                        }
+                    }();
+
+                    if (is_signed) {
+                        return "int(" + value + ')';
+                    }
+                    return value;
+                };
+
+                const std::string op_a = Unpack(regs.GetRegisterAsInteger(instr.gpr8, 0, false),
+                                                instr.vmad.is_byte_chunk_a != 0, signed_a,
+                                                instr.vmad.type_a, instr.vmad.byte_height_a);
+
+                std::string op_b;
+                if (instr.vmad.use_register_b) {
+                    op_b = Unpack(regs.GetRegisterAsInteger(instr.gpr20, 0, false),
+                                  instr.vmad.is_byte_chunk_b != 0, signed_b, instr.vmad.type_b,
+                                  instr.vmad.byte_height_b);
+                } else {
+                    op_b = '(' +
+                           std::to_string(signed_b ? static_cast<s16>(instr.alu.GetImm20_16())
+                                                   : instr.alu.GetImm20_16()) +
+                           ')';
+                }
+
+                const std::string op_c = regs.GetRegisterAsInteger(instr.gpr39, 0, result_signed);
+
+                std::string result;
+                if (forced_result) {
+                    result = *forced_result;
+                } else {
+                    result = '(' + op_a + " * " + op_b + " + " + op_c + ')';
+
+                    switch (instr.vmad.shr) {
+                    case Tegra::Shader::VmadShr::Shr7:
+                        result = '(' + result + " >> 7)";
+                        break;
+                    case Tegra::Shader::VmadShr::Shr15:
+                        result = '(' + result + " >> 15)";
+                        break;
+                    }
+                }
+                regs.SetRegisterToInteger(instr.gpr0, result_signed, 1, result, 1, 1,
+                                          instr.vmad.saturate == 1, 0, Register::Size::Word,
+                                          instr.vmad.cc);
                 break;
             }
             default: {
@@ -2911,7 +3165,7 @@ private:
 
     ShaderWriter shader;
     ShaderWriter declarations;
-    GLSLRegisterManager regs{shader, declarations, stage, suffix};
+    GLSLRegisterManager regs{shader, declarations, stage, suffix, header};
 
     // Declarations
     std::set<std::string> declr_predicates;
