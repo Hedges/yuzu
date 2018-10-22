@@ -2254,6 +2254,8 @@ private:
                 ASSERT_MSG(!instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::MZ),
                            "MZ is not implemented");
 
+                u32 op_c_offset = 0;
+
                 switch (texture_type) {
                 case Tegra::Shader::TextureType::Texture1D: {
                     const std::string x = regs.GetRegisterAsInteger(instr.gpr8);
@@ -2268,6 +2270,7 @@ private:
                         const std::string x = regs.GetRegisterAsInteger(instr.gpr8);
                         const std::string y = regs.GetRegisterAsInteger(instr.gpr20);
                         coord = "ivec2 coords = ivec2(" + x + ", " + y + ");";
+                        op_c_offset = 1;
                     }
                     break;
                 }
@@ -2279,13 +2282,14 @@ private:
                 const std::string sampler =
                     GetSampler(instr.sampler, texture_type, is_array, false);
                 std::string texture = "texelFetch(" + sampler + ", coords, 0)";
-                const std::string op_c = regs.GetRegisterAsInteger(instr.gpr20.Value() + 1);
                 switch (instr.tlds.GetTextureProcessMode()) {
                 case Tegra::Shader::TextureProcessMode::LZ: {
                     texture = "texelFetch(" + sampler + ", coords, 0)";
                     break;
                 }
                 case Tegra::Shader::TextureProcessMode::LL: {
+                    const std::string op_c =
+                        regs.GetRegisterAsInteger(instr.gpr20.Value() + op_c_offset);
                     texture = "texelFetch(" + sampler + ", coords, " + op_c + ')';
                     break;
                 }
@@ -2951,6 +2955,88 @@ private:
                 // TODO(Subv): Find out if we actually have to care about this instruction or if
                 // the GLSL compiler takes care of that for us.
                 LOG_WARNING(HW_GPU, "DEPBAR instruction is stubbed");
+                break;
+            }
+            case OpCode::Id::VMAD: {
+                const bool signed_a = instr.vmad.signed_a == 1;
+                const bool signed_b = instr.vmad.signed_b == 1;
+                const bool result_signed = signed_a || signed_b;
+                boost::optional<std::string> forced_result;
+
+                auto Unpack = [&](const std::string& op, bool is_chunk, bool is_signed,
+                                  Tegra::Shader::VmadType type, u64 byte_height) {
+                    const std::string value = [&]() {
+                        if (!is_chunk) {
+                            const auto offset = static_cast<u32>(byte_height * 8);
+                            return "((" + op + " >> " + std::to_string(offset) + ") & 0xff)";
+                        }
+                        const std::string zero = "0";
+
+                        switch (type) {
+                        case Tegra::Shader::VmadType::Size16_Low:
+                            return '(' + op + " & 0xffff)";
+                        case Tegra::Shader::VmadType::Size16_High:
+                            return '(' + op + " >> 16)";
+                        case Tegra::Shader::VmadType::Size32:
+                            // TODO(Rodrigo): From my hardware tests it becomes a bit "mad" when
+                            // this type is used (1 * 1 + 0 == 0x5b800000). Until a better
+                            // explanation is found: assert.
+                            UNREACHABLE_MSG("Unimplemented");
+                            return zero;
+                        case Tegra::Shader::VmadType::Invalid:
+                            // Note(Rodrigo): This flag is invalid according to nvdisasm. From my
+                            // testing (even though it's invalid) this makes the whole instruction
+                            // assign zero to target register.
+                            forced_result = boost::make_optional(zero);
+                            return zero;
+                        default:
+                            UNREACHABLE();
+                            return zero;
+                        }
+                    }();
+
+                    if (is_signed) {
+                        return "int(" + value + ')';
+                    }
+                    return value;
+                };
+
+                const std::string op_a = Unpack(regs.GetRegisterAsInteger(instr.gpr8, 0, false),
+                                                instr.vmad.is_byte_chunk_a != 0, signed_a,
+                                                instr.vmad.type_a, instr.vmad.byte_height_a);
+
+                std::string op_b;
+                if (instr.vmad.use_register_b) {
+                    op_b = Unpack(regs.GetRegisterAsInteger(instr.gpr20, 0, false),
+                                  instr.vmad.is_byte_chunk_b != 0, signed_b, instr.vmad.type_b,
+                                  instr.vmad.byte_height_b);
+                } else {
+                    op_b = '(' +
+                           std::to_string(signed_b ? static_cast<s16>(instr.alu.GetImm20_16())
+                                                   : instr.alu.GetImm20_16()) +
+                           ')';
+                }
+
+                const std::string op_c = regs.GetRegisterAsInteger(instr.gpr39, 0, result_signed);
+
+                std::string result;
+                if (forced_result) {
+                    result = *forced_result;
+                } else {
+                    result = '(' + op_a + " * " + op_b + " + " + op_c + ')';
+
+                    switch (instr.vmad.shr) {
+                    case Tegra::Shader::VmadShr::Shr7:
+                        result = '(' + result + " >> 7)";
+                        break;
+                    case Tegra::Shader::VmadShr::Shr15:
+                        result = '(' + result + " >> 15)";
+                        break;
+                    }
+                }
+                regs.SetRegisterToInteger(instr.gpr0, result_signed, 1, result, 1, 1,
+                                          instr.vmad.saturate == 1, 0, Register::Size::Word,
+                                          instr.vmad.cc);
                 break;
             }
             default: {
