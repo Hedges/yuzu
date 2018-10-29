@@ -17,8 +17,6 @@ class ARM_Interface;
 
 namespace Kernel {
 
-class Process;
-
 class Scheduler final {
 public:
     explicit Scheduler(Core::ARM_Interface& cpu_core);
@@ -32,9 +30,6 @@ public:
 
     /// Gets the current running thread
     Thread* GetCurrentThread() const;
-
-    /// Gets the timestamp for the last context switch in ticks.
-    u64 GetLastContextSwitchTicks() const;
 
     /// Adds a new thread to the scheduler
     void AddThread(SharedPtr<Thread> thread, u32 priority);
@@ -69,19 +64,6 @@ private:
      */
     void SwitchContext(Thread* new_thread);
 
-    /**
-     * Called on every context switch to update the internal timestamp
-     * This also updates the running time ticks for the given thread and
-     * process using the following difference:
-     *
-     * ticks += most_recent_ticks - last_context_switch_ticks
-     *
-     * The internal tick timestamp for the scheduler is simply the
-     * most recent tick count retrieved. No special arithmetic is
-     * applied to it.
-     */
-    void UpdateLastContextSwitchTime(Thread* thread, Process* process);
-
     /// Lists all thread ids that aren't deleted/etc.
     std::vector<SharedPtr<Thread>> thread_list;
 
@@ -91,7 +73,6 @@ private:
     SharedPtr<Thread> current_thread = nullptr;
 
     Core::ARM_Interface& cpu_core;
-    u64 last_context_switch_time = 0;
 
     static std::mutex scheduler_mutex;
 };
