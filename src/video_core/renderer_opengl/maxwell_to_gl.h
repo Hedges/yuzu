@@ -115,6 +115,7 @@ inline GLenum PrimitiveTopology(Maxwell::PrimitiveTopology topology) {
     case Maxwell::PrimitiveTopology::LineStrip:
         return GL_LINE_STRIP;
     case Maxwell::PrimitiveTopology::Triangles:
+    default:
         return GL_TRIANGLES;
     case Maxwell::PrimitiveTopology::TriangleStrip:
         return GL_TRIANGLE_STRIP;
