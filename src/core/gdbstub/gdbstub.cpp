@@ -805,10 +805,10 @@ static void ReadRegister() {
         LongToGdbHex(reply + 16, r[1]);
     } else if (id == FPCR_REGISTER) {
         u128 r = FpuRead(id, current_thread);
-        IntToGdbHex(reply, (u32)r[0]);
+        IntToGdbHex(reply, static_cast<u32>(r[0]));
     } else if (id == FPCR_REGISTER + 1) {
         u128 r = FpuRead(id, current_thread);
-        IntToGdbHex(reply, (u32)(r[0] >> 32));
+        IntToGdbHex(reply, static_cast<u32>(r[0] >> 32));
     }
 
     SendReply(reinterpret_cast<char*>(reply));
@@ -846,7 +846,7 @@ static void ReadRegisters() {
     bufptr += 32 * 32;
 
     r = FpuRead(FPCR_REGISTER, current_thread);
-    IntToGdbHex(bufptr, (u32)r[0]);
+    IntToGdbHex(bufptr, static_cast<u32>(r[0]));
 
     bufptr += 8;
 
