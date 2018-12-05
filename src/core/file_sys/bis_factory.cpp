@@ -8,21 +8,22 @@
 
 namespace FileSys {
 
-BISFactory::BISFactory(VirtualDir nand_root_, VirtualDir load_root_)
+BISFactory::BISFactory(VirtualDir nand_root_, VirtualDir load_root_, VirtualDir dump_root_)
     : nand_root(std::move(nand_root_)), load_root(std::move(load_root_)),
-      sysnand_cache(std::make_shared<RegisteredCache>(
+      dump_root(std::move(dump_root_)),
+      sysnand_cache(std::make_unique<RegisteredCache>(
           GetOrCreateDirectoryRelative(nand_root, "/system/Contents/registered"))),
-      usrnand_cache(std::make_shared<RegisteredCache>(
+      usrnand_cache(std::make_unique<RegisteredCache>(
           GetOrCreateDirectoryRelative(nand_root, "/user/Contents/registered"))) {}
 
 BISFactory::~BISFactory() = default;
 
-std::shared_ptr<RegisteredCache> BISFactory::GetSystemNANDContents() const {
-    return sysnand_cache;
+RegisteredCache* BISFactory::GetSystemNANDContents() const {
+    return sysnand_cache.get();
 }
 
-std::shared_ptr<RegisteredCache> BISFactory::GetUserNANDContents() const {
-    return usrnand_cache;
+RegisteredCache* BISFactory::GetUserNANDContents() const {
+    return usrnand_cache.get();
 }
 
 VirtualDir BISFactory::GetModificationLoadRoot(u64 title_id) const {
@@ -30,6 +31,12 @@ VirtualDir BISFactory::GetModificationLoadRoot(u64 title_id) const {
     if (title_id == 0 || (title_id & 0x800) > 0)
         return nullptr;
     return GetOrCreateDirectoryRelative(load_root, fmt::format("/{:016X}", title_id));
+}
+
+VirtualDir BISFactory::GetModificationDumpRoot(u64 title_id) const {
+    if (title_id == 0)
+        return nullptr;
+    return GetOrCreateDirectoryRelative(dump_root, fmt::format("/{:016X}", title_id));
 }
 
 } // namespace FileSys

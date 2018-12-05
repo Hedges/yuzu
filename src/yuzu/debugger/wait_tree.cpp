@@ -7,10 +7,10 @@
 
 #include "common/assert.h"
 #include "core/core.h"
-#include "core/hle/kernel/event.h"
 #include "core/hle/kernel/handle_table.h"
-#include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/mutex.h"
+#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/readable_event.h"
 #include "core/hle/kernel/scheduler.h"
 #include "core/hle/kernel/thread.h"
 #include "core/hle/kernel/timer.h"
@@ -66,10 +66,11 @@ std::vector<std::unique_ptr<WaitTreeThread>> WaitTreeItem::MakeThreadItemList() 
         }
     };
 
-    add_threads(Core::System::GetInstance().Scheduler(0)->GetThreadList());
-    add_threads(Core::System::GetInstance().Scheduler(1)->GetThreadList());
-    add_threads(Core::System::GetInstance().Scheduler(2)->GetThreadList());
-    add_threads(Core::System::GetInstance().Scheduler(3)->GetThreadList());
+    const auto& system = Core::System::GetInstance();
+    add_threads(system.Scheduler(0).GetThreadList());
+    add_threads(system.Scheduler(1).GetThreadList());
+    add_threads(system.Scheduler(2).GetThreadList());
+    add_threads(system.Scheduler(3).GetThreadList());
 
     return item_list;
 }
@@ -82,7 +83,7 @@ QString WaitTreeText::GetText() const {
 }
 
 WaitTreeMutexInfo::WaitTreeMutexInfo(VAddr mutex_address) : mutex_address(mutex_address) {
-    auto& handle_table = Core::System::GetInstance().Kernel().HandleTable();
+    const auto& handle_table = Core::CurrentProcess()->GetHandleTable();
 
     mutex_value = Memory::Read32(mutex_address);
     owner_handle = static_cast<Kernel::Handle>(mutex_value & Kernel::Mutex::MutexOwnerMask);
@@ -152,8 +153,8 @@ QString WaitTreeWaitObject::GetText() const {
 
 std::unique_ptr<WaitTreeWaitObject> WaitTreeWaitObject::make(const Kernel::WaitObject& object) {
     switch (object.GetHandleType()) {
-    case Kernel::HandleType::Event:
-        return std::make_unique<WaitTreeEvent>(static_cast<const Kernel::Event&>(object));
+    case Kernel::HandleType::ReadableEvent:
+        return std::make_unique<WaitTreeEvent>(static_cast<const Kernel::ReadableEvent&>(object));
     case Kernel::HandleType::Timer:
         return std::make_unique<WaitTreeTimer>(static_cast<const Kernel::Timer&>(object));
     case Kernel::HandleType::Thread:
@@ -331,7 +332,7 @@ std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeThread::GetChildren() const {
     return list;
 }
 
-WaitTreeEvent::WaitTreeEvent(const Kernel::Event& object) : WaitTreeWaitObject(object) {}
+WaitTreeEvent::WaitTreeEvent(const Kernel::ReadableEvent& object) : WaitTreeWaitObject(object) {}
 WaitTreeEvent::~WaitTreeEvent() = default;
 
 std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeEvent::GetChildren() const {
@@ -339,7 +340,8 @@ std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeEvent::GetChildren() const {
 
     list.push_back(std::make_unique<WaitTreeText>(
         tr("reset type = %1")
-            .arg(GetResetTypeQString(static_cast<const Kernel::Event&>(object).GetResetType()))));
+            .arg(GetResetTypeQString(
+                static_cast<const Kernel::ReadableEvent&>(object).GetResetType()))));
     return list;
 }
 

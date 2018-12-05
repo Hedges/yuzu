@@ -3,11 +3,12 @@
 // Refer to the license.txt file included.
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 
-#include <boost/optional.hpp>
 #include <fmt/format.h>
 
 #include "common/assert.h"
@@ -30,10 +31,19 @@ using Tegra::Shader::SubOp;
 constexpr u32 PROGRAM_END = MAX_PROGRAM_CODE_LENGTH;
 constexpr u32 PROGRAM_HEADER_SIZE = sizeof(Tegra::Shader::Header);
 
-enum : u32 { POSITION_VARYING_LOCATION = 0, GENERIC_VARYING_START_LOCATION = 1 };
-
 constexpr u32 MAX_GEOMETRY_BUFFERS = 6;
 constexpr u32 MAX_ATTRIBUTES = 0x100; // Size in vec4s, this value is untested
+
+static const char* INTERNAL_FLAG_NAMES[] = {"zero_flag", "sign_flag", "carry_flag",
+                                            "overflow_flag"};
+
+enum class InternalFlag : u64 {
+    ZeroFlag = 0,
+    SignFlag = 1,
+    CarryFlag = 2,
+    OverflowFlag = 3,
+    Amount
+};
 
 class DecompileFail : public std::runtime_error {
 public:
@@ -50,8 +60,7 @@ static std::string GetTopologyName(Tegra::Shader::OutputTopology topology) {
     case Tegra::Shader::OutputTopology::TriangleStrip:
         return "triangle_strip";
     default:
-        LOG_CRITICAL(Render_OpenGL, "Unknown output topology {}", static_cast<u32>(topology));
-        UNREACHABLE();
+        UNIMPLEMENTED_MSG("Unknown output topology: {}", static_cast<u32>(topology));
         return "points";
     }
 }
@@ -86,7 +95,8 @@ struct Subroutine {
 class ControlFlowAnalyzer {
 public:
     ControlFlowAnalyzer(const ProgramCode& program_code, u32 main_offset, const std::string& suffix)
-        : program_code(program_code) {
+        : program_code(program_code), shader_coverage_begin(main_offset),
+          shader_coverage_end(main_offset + 1) {
 
         // Recursively finds all subroutines.
         const Subroutine& program_main = AddSubroutine(main_offset, PROGRAM_END, suffix);
@@ -98,10 +108,16 @@ public:
         return std::move(subroutines);
     }
 
+    std::size_t GetShaderLength() const {
+        return shader_coverage_end * sizeof(u64);
+    }
+
 private:
     const ProgramCode& program_code;
     std::set<Subroutine> subroutines;
     std::map<std::pair<u32, u32>, ExitMethod> exit_method_map;
+    u32 shader_coverage_begin;
+    u32 shader_coverage_end;
 
     /// Adds and analyzes a new subroutine if it is not added yet.
     const Subroutine& AddSubroutine(u32 begin, u32 end, const std::string& suffix) {
@@ -143,9 +159,12 @@ private:
             return exit_method;
 
         for (u32 offset = begin; offset != end && offset != PROGRAM_END; ++offset) {
+            shader_coverage_begin = std::min(shader_coverage_begin, offset);
+            shader_coverage_end = std::max(shader_coverage_end, offset + 1);
+
             const Instruction instr = {program_code[offset]};
             if (const auto opcode = OpCode::Decode(instr)) {
-                switch (opcode->GetId()) {
+                switch (opcode->get().GetId()) {
                 case OpCode::Id::EXIT: {
                     // The EXIT instruction can be predicated, which means that the shader can
                     // conditionally end on this instruction. We have to consider the case where the
@@ -165,10 +184,11 @@ private:
                     const ExitMethod jmp = Scan(target, end, labels);
                     return exit_method = ParallelExit(no_jmp, jmp);
                 }
-                case OpCode::Id::SSY: {
-                    // The SSY instruction uses a similar encoding as the BRA instruction.
-                    ASSERT_MSG(instr.bra.constant_buffer == 0,
-                               "Constant buffer SSY is not supported");
+                case OpCode::Id::SSY:
+                case OpCode::Id::PBK: {
+                    // The SSY and PBK use a similar encoding as the BRA instruction.
+                    UNIMPLEMENTED_IF_MSG(instr.bra.constant_buffer != 0,
+                                         "Constant buffer branching is not supported");
                     const u32 target = offset + instr.bra.GetBranchTarget();
                     labels.insert(target);
                     // Continue scanning for an exit method.
@@ -181,14 +201,53 @@ private:
     }
 };
 
+template <typename T>
+class ShaderScopedScope {
+public:
+    explicit ShaderScopedScope(T& writer, std::string_view begin_expr, std::string end_expr)
+        : writer(writer), end_expr(std::move(end_expr)) {
+
+        if (begin_expr.empty()) {
+            writer.AddLine('{');
+        } else {
+            writer.AddExpression(begin_expr);
+            writer.AddLine(" {");
+        }
+        ++writer.scope;
+    }
+
+    ShaderScopedScope(const ShaderScopedScope&) = delete;
+
+    ~ShaderScopedScope() {
+        --writer.scope;
+        if (end_expr.empty()) {
+            writer.AddLine('}');
+        } else {
+            writer.AddExpression("} ");
+            writer.AddExpression(end_expr);
+            writer.AddLine(';');
+        }
+    }
+
+    ShaderScopedScope& operator=(const ShaderScopedScope&) = delete;
+
+private:
+    T& writer;
+    std::string end_expr;
+};
+
 class ShaderWriter {
 public:
-    void AddLine(std::string_view text) {
+    void AddExpression(std::string_view text) {
         DEBUG_ASSERT(scope >= 0);
         if (!text.empty()) {
             AppendIndentation();
         }
         shader_source += text;
+    }
+
+    void AddLine(std::string_view text) {
+        AddExpression(text);
         AddNewLine();
     }
 
@@ -206,6 +265,11 @@ public:
 
     std::string GetResult() {
         return std::move(shader_source);
+    }
+
+    ShaderScopedScope<ShaderWriter> Scope(std::string_view begin_expr = {},
+                                          std::string end_expr = {}) {
+        return ShaderScopedScope(*this, begin_expr, end_expr);
     }
 
     int scope = 0;
@@ -258,14 +322,6 @@ private:
     const std::string& suffix;
 };
 
-enum class InternalFlag : u64 {
-    ZeroFlag = 0,
-    CarryFlag = 1,
-    OverflowFlag = 2,
-    NaNFlag = 3,
-    Amount
-};
-
 /**
  * Used to manage shader registers that are emulated with GLSL. This class keeps track of the state
  * of all registers (e.g. whether they are currently being used as Floats or Integers), and
@@ -277,7 +333,8 @@ public:
     GLSLRegisterManager(ShaderWriter& shader, ShaderWriter& declarations,
                         const Maxwell3D::Regs::ShaderStage& stage, const std::string& suffix,
                         const Tegra::Shader::Header& header)
-        : shader{shader}, declarations{declarations}, stage{stage}, suffix{suffix}, header{header} {
+        : shader{shader}, declarations{declarations}, stage{stage}, suffix{suffix}, header{header},
+          fixed_pipeline_output_attributes_used{}, local_memory_size{0} {
         BuildRegisterList();
         BuildInputList();
     }
@@ -298,8 +355,7 @@ public:
             // Default - do nothing
             return value;
         default:
-            LOG_CRITICAL(HW_GPU, "Unimplemented conversion size {}", static_cast<u32>(size));
-            UNREACHABLE();
+            UNREACHABLE_MSG("Unimplemented conversion size: {}", static_cast<u32>(size));
         }
     }
 
@@ -340,10 +396,10 @@ public:
      */
     void SetRegisterToFloat(const Register& reg, u64 elem, const std::string& value,
                             u64 dest_num_components, u64 value_num_components,
-                            bool is_saturated = false, u64 dest_elem = 0) {
+                            bool is_saturated = false, u64 dest_elem = 0, bool precise = false) {
 
         SetRegister(reg, elem, is_saturated ? "clamp(" + value + ", 0.0, 1.0)" : value,
-                    dest_num_components, value_num_components, dest_elem);
+                    dest_num_components, value_num_components, dest_elem, precise);
     }
 
     /**
@@ -362,17 +418,61 @@ public:
                               u64 value_num_components, bool is_saturated = false,
                               u64 dest_elem = 0, Register::Size size = Register::Size::Word,
                               bool sets_cc = false) {
-        ASSERT_MSG(!is_saturated, "Unimplemented");
+        UNIMPLEMENTED_IF(is_saturated);
 
         const std::string func{is_signed ? "intBitsToFloat" : "uintBitsToFloat"};
 
         SetRegister(reg, elem, func + '(' + ConvertIntegerSize(value, size) + ')',
-                    dest_num_components, value_num_components, dest_elem);
+                    dest_num_components, value_num_components, dest_elem, false);
 
         if (sets_cc) {
             const std::string zero_condition = "( " + ConvertIntegerSize(value, size) + " == 0 )";
             SetInternalFlag(InternalFlag::ZeroFlag, zero_condition);
+            LOG_WARNING(HW_GPU, "Condition codes implementation is incomplete.");
         }
+    }
+
+    /**
+     * Writes code that does a register assignment to a half float value operation.
+     * @param reg The destination register to use.
+     * @param elem The element to use for the operation.
+     * @param value The code representing the value to assign. Type has to be half float.
+     * @param merge Half float kind of assignment.
+     * @param dest_num_components Number of components in the destination.
+     * @param value_num_components Number of components in the value.
+     * @param is_saturated Optional, when True, saturates the provided value.
+     * @param dest_elem Optional, the destination element to use for the operation.
+     */
+    void SetRegisterToHalfFloat(const Register& reg, u64 elem, const std::string& value,
+                                Tegra::Shader::HalfMerge merge, u64 dest_num_components,
+                                u64 value_num_components, bool is_saturated = false,
+                                u64 dest_elem = 0) {
+        UNIMPLEMENTED_IF(is_saturated);
+
+        const std::string result = [&]() {
+            switch (merge) {
+            case Tegra::Shader::HalfMerge::H0_H1:
+                return "uintBitsToFloat(packHalf2x16(" + value + "))";
+            case Tegra::Shader::HalfMerge::F32:
+                // Half float instructions take the first component when doing a float cast.
+                return "float(" + value + ".x)";
+            case Tegra::Shader::HalfMerge::Mrg_H0:
+                // TODO(Rodrigo): I guess Mrg_H0 and Mrg_H1 take their respective component from the
+                // pack. I couldn't test this on hardware but it shouldn't really matter since most
+                // of the time when a Mrg_* flag is used both components will be mirrored. That
+                // being said, it deserves a test.
+                return "((" + GetRegisterAsInteger(reg, 0, false) +
+                       " & 0xffff0000) | (packHalf2x16(" + value + ") & 0x0000ffff))";
+            case Tegra::Shader::HalfMerge::Mrg_H1:
+                return "((" + GetRegisterAsInteger(reg, 0, false) +
+                       " & 0x0000ffff) | (packHalf2x16(" + value + ") & 0xffff0000))";
+            default:
+                UNREACHABLE();
+                return std::string("0");
+            }
+        }();
+
+        SetRegister(reg, elem, result, dest_num_components, value_num_components, dest_elem, false);
     }
 
     /**
@@ -381,34 +481,55 @@ public:
      * @param reg The destination register to use.
      * @param elem The element to use for the operation.
      * @param attribute The input attribute to use as the source value.
+     * @param input_mode The input mode.
      * @param vertex The register that decides which vertex to read from (used in GS).
      */
     void SetRegisterToInputAttibute(const Register& reg, u64 elem, Attribute::Index attribute,
                                     const Tegra::Shader::IpaMode& input_mode,
-                                    boost::optional<Register> vertex = {}) {
+                                    std::optional<Register> vertex = {}) {
         const std::string dest = GetRegisterAsFloat(reg);
         const std::string src = GetInputAttribute(attribute, input_mode, vertex) + GetSwizzle(elem);
         shader.AddLine(dest + " = " + src + ';');
     }
 
-    std::string GetControlCode(const Tegra::Shader::ControlCode cc) const {
+    std::string GetLocalMemoryAsFloat(const std::string& index) {
+        return "lmem[" + index + ']';
+    }
+
+    std::string GetLocalMemoryAsInteger(const std::string& index, bool is_signed = false) {
+        const std::string func{is_signed ? "floatToIntBits" : "floatBitsToUint"};
+        return func + "(lmem[" + index + "])";
+    }
+
+    void SetLocalMemoryAsFloat(const std::string& index, const std::string& value) {
+        shader.AddLine("lmem[" + index + "] = " + value + ';');
+    }
+
+    void SetLocalMemoryAsInteger(const std::string& index, const std::string& value,
+                                 bool is_signed = false) {
+        const std::string func{is_signed ? "intBitsToFloat" : "uintBitsToFloat"};
+        shader.AddLine("lmem[" + index + "] = " + func + '(' + value + ");");
+    }
+
+    std::string GetConditionCode(const Tegra::Shader::ConditionCode cc) const {
         switch (cc) {
-        case Tegra::Shader::ControlCode::NEU:
+        case Tegra::Shader::ConditionCode::NEU:
             return "!(" + GetInternalFlag(InternalFlag::ZeroFlag) + ')';
         default:
-            LOG_CRITICAL(HW_GPU, "Unimplemented Control Code {}", static_cast<u32>(cc));
-            UNREACHABLE();
+            UNIMPLEMENTED_MSG("Unimplemented condition code: {}", static_cast<u32>(cc));
             return "false";
         }
     }
 
-    std::string GetInternalFlag(const InternalFlag ii) const {
-        const u32 code = static_cast<u32>(ii);
-        return "internalFlag_" + std::to_string(code) + suffix;
+    std::string GetInternalFlag(const InternalFlag flag) const {
+        const auto index = static_cast<u32>(flag);
+        ASSERT(index < static_cast<u32>(InternalFlag::Amount));
+
+        return std::string(INTERNAL_FLAG_NAMES[index]) + '_' + suffix;
     }
 
-    void SetInternalFlag(const InternalFlag ii, const std::string& value) const {
-        shader.AddLine(GetInternalFlag(ii) + " = " + value + ';');
+    void SetInternalFlag(const InternalFlag flag, const std::string& value) const {
+        shader.AddLine(GetInternalFlag(flag) + " = " + value + ';');
     }
 
     /**
@@ -423,22 +544,43 @@ public:
                                       const Register& buf_reg) {
         const std::string dest = GetOutputAttribute(attribute);
         const std::string src = GetRegisterAsFloat(val_reg);
+        if (dest.empty())
+            return;
 
-        if (!dest.empty()) {
-            // Can happen with unknown/unimplemented output attributes, in which case we ignore the
-            // instruction for now.
-            if (stage == Maxwell3D::Regs::ShaderStage::Geometry) {
-                // TODO(Rodrigo): nouveau sets some attributes after setting emitting a geometry
-                // shader. These instructions use a dirty register as buffer index. To avoid some
-                // drivers from complaining for the out of boundary writes, guard them.
-                const std::string buf_index{"min(" + GetRegisterAsInteger(buf_reg) + ", " +
-                                            std::to_string(MAX_GEOMETRY_BUFFERS - 1) + ')'};
-                shader.AddLine("amem[" + buf_index + "][" +
-                               std::to_string(static_cast<u32>(attribute)) + ']' +
-                               GetSwizzle(elem) + " = " + src + ';');
-            } else {
-                shader.AddLine(dest + GetSwizzle(elem) + " = " + src + ';');
-            }
+        // Can happen with unknown/unimplemented output attributes, in which case we ignore the
+        // instruction for now.
+        if (stage == Maxwell3D::Regs::ShaderStage::Geometry) {
+            // TODO(Rodrigo): nouveau sets some attributes after setting emitting a geometry
+            // shader. These instructions use a dirty register as buffer index, to avoid some
+            // drivers from complaining about out of boundary writes, guard them.
+            const std::string buf_index{"((" + GetRegisterAsInteger(buf_reg) + ") % " +
+                                        std::to_string(MAX_GEOMETRY_BUFFERS) + ')'};
+            shader.AddLine("amem[" + buf_index + "][" +
+                           std::to_string(static_cast<u32>(attribute)) + ']' + GetSwizzle(elem) +
+                           " = " + src + ';');
+            return;
+        }
+
+        switch (attribute) {
+        case Attribute::Index::ClipDistances0123:
+        case Attribute::Index::ClipDistances4567: {
+            const u64 index = (attribute == Attribute::Index::ClipDistances4567 ? 4 : 0) + elem;
+            UNIMPLEMENTED_IF_MSG(
+                ((header.vtg.clip_distances >> index) & 1) == 0,
+                "Shader is setting gl_ClipDistance{} without enabling it in the header", index);
+
+            clip_distances[index] = true;
+            fixed_pipeline_output_attributes_used.insert(attribute);
+            shader.AddLine(dest + '[' + std::to_string(index) + "] = " + src + ';');
+            break;
+        }
+        case Attribute::Index::PointSize:
+            fixed_pipeline_output_attributes_used.insert(attribute);
+            shader.AddLine(dest + " = " + src + ';');
+            break;
+        default:
+            shader.AddLine(dest + GetSwizzle(elem) + " = " + src + ';');
+            break;
         }
     }
 
@@ -481,7 +623,9 @@ public:
 
     /// Add declarations.
     void GenerateDeclarations(const std::string& suffix) {
+        GenerateVertex();
         GenerateRegisters(suffix);
+        GenerateLocalMemory();
         GenerateInternalFlags();
         GenerateInputAttrs();
         GenerateOutputAttrs();
@@ -501,6 +645,11 @@ public:
     /// Returns a list of samplers used in the shader.
     const std::vector<SamplerEntry>& GetSamplers() const {
         return used_samplers;
+    }
+
+    /// Returns an array of the used clip distances.
+    const std::array<bool, Maxwell::NumClipDistances>& GetClipDistances() const {
+        return clip_distances;
     }
 
     /// Returns the GLSL sampler used for the input shader sampler, and creates a new one if
@@ -527,6 +676,10 @@ public:
         return entry.GetName();
     }
 
+    void SetLocalMemory(u64 lmem) {
+        local_memory_size = lmem;
+    }
+
 private:
     /// Generates declarations for registers.
     void GenerateRegisters(const std::string& suffix) {
@@ -537,10 +690,19 @@ private:
         declarations.AddNewLine();
     }
 
+    /// Generates declarations for local memory.
+    void GenerateLocalMemory() {
+        if (local_memory_size > 0) {
+            declarations.AddLine("float lmem[" + std::to_string((local_memory_size - 1 + 4) / 4) +
+                                 "];");
+            declarations.AddNewLine();
+        }
+    }
+
     /// Generates declarations for internal flags.
     void GenerateInternalFlags() {
-        for (u32 ii = 0; ii < static_cast<u64>(InternalFlag::Amount); ii++) {
-            const InternalFlag code = static_cast<InternalFlag>(ii);
+        for (u32 flag = 0; flag < static_cast<u32>(InternalFlag::Amount); flag++) {
+            const InternalFlag code = static_cast<InternalFlag>(flag);
             declarations.AddLine("bool " + GetInternalFlag(code) + " = false;");
         }
         declarations.AddNewLine();
@@ -548,13 +710,6 @@ private:
 
     /// Generates declarations for input attributes.
     void GenerateInputAttrs() {
-        if (stage != Maxwell3D::Regs::ShaderStage::Vertex) {
-            const std::string attr =
-                stage == Maxwell3D::Regs::ShaderStage::Geometry ? "gs_position[]" : "position";
-            declarations.AddLine("layout (location = " + std::to_string(POSITION_VARYING_LOCATION) +
-                                 ") in vec4 " + attr + ';');
-        }
-
         for (const auto element : declr_input_attribute) {
             // TODO(bunnei): Use proper number of elements for these
             u32 idx =
@@ -577,10 +732,6 @@ private:
 
     /// Generates declarations for output attributes.
     void GenerateOutputAttrs() {
-        if (stage != Maxwell3D::Regs::ShaderStage::Fragment) {
-            declarations.AddLine("layout (location = " + std::to_string(POSITION_VARYING_LOCATION) +
-                                 ") out vec4 position;");
-        }
         for (const auto& index : declr_output_attribute) {
             // TODO(bunnei): Use proper number of elements for these
             const u32 idx = static_cast<u32>(index) -
@@ -651,6 +802,27 @@ private:
         declarations.AddNewLine();
     }
 
+    void GenerateVertex() {
+        if (stage != Maxwell3D::Regs::ShaderStage::Vertex)
+            return;
+        bool clip_distances_declared = false;
+
+        declarations.AddLine("out gl_PerVertex {");
+        ++declarations.scope;
+        declarations.AddLine("vec4 gl_Position;");
+        for (auto& o : fixed_pipeline_output_attributes_used) {
+            if (o == Attribute::Index::PointSize)
+                declarations.AddLine("float gl_PointSize;");
+            if (!clip_distances_declared && (o == Attribute::Index::ClipDistances0123 ||
+                                             o == Attribute::Index::ClipDistances4567)) {
+                declarations.AddLine("float gl_ClipDistance[];");
+                clip_distances_declared = true;
+            }
+        }
+        --declarations.scope;
+        declarations.AddLine("};");
+    }
+
     /// Generates code representing a temporary (GPR) register.
     std::string GetRegister(const Register& reg, unsigned elem) {
         if (reg == Register::ZeroIndex) {
@@ -670,10 +842,10 @@ private:
      * @param dest_elem Optional, the destination element to use for the operation.
      */
     void SetRegister(const Register& reg, u64 elem, const std::string& value,
-                     u64 dest_num_components, u64 value_num_components, u64 dest_elem) {
+                     u64 dest_num_components, u64 value_num_components, u64 dest_elem,
+                     bool precise) {
         if (reg == Register::ZeroIndex) {
-            LOG_CRITICAL(HW_GPU, "Cannot set Register::ZeroIndex");
-            UNREACHABLE();
+            // Setting RZ is a nop in hardware.
             return;
         }
 
@@ -687,7 +859,16 @@ private:
             src += GetSwizzle(elem);
         }
 
-        shader.AddLine(dest + " = " + src + ';');
+        if (precise && stage != Maxwell3D::Regs::ShaderStage::Fragment) {
+            const auto scope = shader.Scope();
+
+            // This avoids optimizations of constant propagation and keeps the code as the original
+            // Sadly using the precise keyword causes "linking" errors on fragment shaders.
+            shader.AddLine("precise float tmp = " + src + ';');
+            shader.AddLine(dest + " = tmp;");
+        } else {
+            shader.AddLine(dest + " = " + src + ';');
+        }
     }
 
     /// Build the GLSL register list.
@@ -708,10 +889,14 @@ private:
     /// Generates code representing an input attribute register.
     std::string GetInputAttribute(Attribute::Index attribute,
                                   const Tegra::Shader::IpaMode& input_mode,
-                                  boost::optional<Register> vertex = {}) {
+                                  std::optional<Register> vertex = {}) {
         auto GeometryPass = [&](const std::string& name) {
             if (stage == Maxwell3D::Regs::ShaderStage::Geometry && vertex) {
-                return "gs_" + name + '[' + GetRegisterAsInteger(vertex.value(), 0, false) + ']';
+                // TODO(Rodrigo): Guard geometry inputs against out of bound reads. Some games set
+                // an 0x80000000 index for those and the shader fails to build. Find out why this
+                // happens and what's its intent.
+                return "gs_" + name + '[' + GetRegisterAsInteger(*vertex, 0, false) +
+                       " % MAX_VERTEX_INPUT]";
             }
             return name;
         };
@@ -730,7 +915,8 @@ private:
             // vertex shader, and what's the value of the fourth element when inside a Tess Eval
             // shader.
             ASSERT(stage == Maxwell3D::Regs::ShaderStage::Vertex);
-            return "vec4(0, 0, uintBitsToFloat(instance_id.x), uintBitsToFloat(gl_VertexID))";
+            // Config pack's first value is instance_id.
+            return "vec4(0, 0, uintBitsToFloat(config_pack[0]), uintBitsToFloat(gl_VertexID))";
         case Attribute::Index::FrontFacing:
             // TODO(Subv): Find out what the values are for the other elements.
             ASSERT(stage == Maxwell3D::Regs::ShaderStage::Fragment);
@@ -743,16 +929,13 @@ private:
                 if (declr_input_attribute.count(attribute) == 0) {
                     declr_input_attribute[attribute] = input_mode;
                 } else {
-                    if (declr_input_attribute[attribute] != input_mode) {
-                        LOG_CRITICAL(HW_GPU, "Same Input multiple input modes");
-                        UNREACHABLE();
-                    }
+                    UNIMPLEMENTED_IF_MSG(declr_input_attribute[attribute] != input_mode,
+                                         "Multiple input modes for the same attribute");
                 }
                 return GeometryPass("input_attribute_" + std::to_string(index));
             }
 
-            LOG_CRITICAL(HW_GPU, "Unhandled input attribute: {}", static_cast<u32>(attribute));
-            UNREACHABLE();
+            UNIMPLEMENTED_MSG("Unhandled input attribute: {}", static_cast<u32>(attribute));
         }
 
         return "vec4(0, 0, 0, 0)";
@@ -778,24 +961,20 @@ private:
             break;
         }
         default: {
-            LOG_CRITICAL(HW_GPU, "Unhandled Ipa InterpMode: {}", static_cast<u32>(interp_mode));
-            UNREACHABLE();
+            UNIMPLEMENTED_MSG("Unhandled IPA interp mode: {}", static_cast<u32>(interp_mode));
         }
         }
         switch (sample_mode) {
-        case Tegra::Shader::IpaSampleMode::Centroid: {
-            // Note not implemented, it can be implemented with the "centroid " keyword in glsl;
-            LOG_CRITICAL(HW_GPU, "Ipa Sampler Mode: centroid, not implemented");
-            UNREACHABLE();
+        case Tegra::Shader::IpaSampleMode::Centroid:
+            // It can be implemented with the "centroid " keyword in glsl
+            UNIMPLEMENTED_MSG("Unimplemented IPA sampler mode centroid");
             break;
-        }
-        case Tegra::Shader::IpaSampleMode::Default: {
+        case Tegra::Shader::IpaSampleMode::Default:
             // Default, n/a
             break;
-        }
         default: {
-            LOG_CRITICAL(HW_GPU, "Unhandled Ipa SampleMode: {}", static_cast<u32>(sample_mode));
-            UNREACHABLE();
+            UNIMPLEMENTED_MSG("Unimplemented IPA sampler mode: {}", static_cast<u32>(sample_mode));
+            break;
         }
         }
         return out;
@@ -804,8 +983,14 @@ private:
     /// Generates code representing the declaration name of an output attribute register.
     std::string GetOutputAttribute(Attribute::Index attribute) {
         switch (attribute) {
+        case Attribute::Index::PointSize:
+            return "gl_PointSize";
         case Attribute::Index::Position:
             return "position";
+        case Attribute::Index::ClipDistances0123:
+        case Attribute::Index::ClipDistances4567: {
+            return "gl_ClipDistance";
+        }
         default:
             const u32 index{static_cast<u32>(attribute) -
                             static_cast<u32>(Attribute::Index::Attribute_0)};
@@ -814,8 +999,7 @@ private:
                 return "output_attribute_" + std::to_string(index);
             }
 
-            LOG_CRITICAL(HW_GPU, "Unhandled output attribute: {}", index);
-            UNREACHABLE();
+            UNIMPLEMENTED_MSG("Unhandled output attribute={}", index);
             return {};
         }
     }
@@ -838,15 +1022,21 @@ private:
     const Maxwell3D::Regs::ShaderStage& stage;
     const std::string& suffix;
     const Tegra::Shader::Header& header;
+    std::unordered_set<Attribute::Index> fixed_pipeline_output_attributes_used;
+    std::array<bool, Maxwell::NumClipDistances> clip_distances{};
+    u64 local_memory_size;
 };
 
 class GLSLGenerator {
 public:
     GLSLGenerator(const std::set<Subroutine>& subroutines, const ProgramCode& program_code,
-                  u32 main_offset, Maxwell3D::Regs::ShaderStage stage, const std::string& suffix)
+                  u32 main_offset, Maxwell3D::Regs::ShaderStage stage, const std::string& suffix,
+                  std::size_t shader_length)
         : subroutines(subroutines), program_code(program_code), main_offset(main_offset),
-          stage(stage), suffix(suffix) {
+          stage(stage), suffix(suffix), shader_length(shader_length) {
         std::memcpy(&header, program_code.data(), sizeof(Tegra::Shader::Header));
+        local_memory_size = header.GetLocalMemorySize();
+        regs.SetLocalMemory(local_memory_size);
         Generate(suffix);
     }
 
@@ -856,7 +1046,8 @@ public:
 
     /// Returns entries in the shader that are useful for external functions
     ShaderEntries GetEntries() const {
-        return {regs.GetConstBuffersDeclarations(), regs.GetSamplers()};
+        return {regs.GetConstBuffersDeclarations(), regs.GetSamplers(), regs.GetClipDistances(),
+                shader_length};
     }
 
 private:
@@ -875,6 +1066,19 @@ private:
     /// Generates code representing a 32-bit immediate value
     static std::string GetImmediate32(const Instruction& instr) {
         return fmt::format("uintBitsToFloat({})", instr.alu.GetImm20_32());
+    }
+
+    /// Generates code representing a vec2 pair unpacked from a half float immediate
+    static std::string UnpackHalfImmediate(const Instruction& instr, bool negate) {
+        const std::string immediate = GetHalfFloat(std::to_string(instr.half_imm.PackImmediates()));
+        if (!negate) {
+            return immediate;
+        }
+        const std::string negate_first = instr.half_imm.first_negate != 0 ? "-" : "";
+        const std::string negate_second = instr.half_imm.second_negate != 0 ? "-" : "";
+        const std::string negate_vec = "vec2(" + negate_first + "1, " + negate_second + "1)";
+
+        return '(' + immediate + " * " + negate_vec + ')';
     }
 
     /// Generates code representing a texture sampler.
@@ -908,7 +1112,7 @@ private:
         // Can't assign to the constant predicate.
         ASSERT(pred != static_cast<u64>(Pred::UnusedIndex));
 
-        const std::string variable = 'p' + std::to_string(pred) + '_' + suffix;
+        std::string variable = 'p' + std::to_string(pred) + '_' + suffix;
         shader.AddLine(variable + " = " + value + ';');
         declr_predicates.insert(std::move(variable));
     }
@@ -948,19 +1152,26 @@ private:
                                        const std::string& op_a, const std::string& op_b) const {
         using Tegra::Shader::PredCondition;
         static const std::unordered_map<PredCondition, const char*> PredicateComparisonStrings = {
-            {PredCondition::LessThan, "<"},           {PredCondition::Equal, "=="},
-            {PredCondition::LessEqual, "<="},         {PredCondition::GreaterThan, ">"},
-            {PredCondition::NotEqual, "!="},          {PredCondition::GreaterEqual, ">="},
-            {PredCondition::LessThanWithNan, "<"},    {PredCondition::NotEqualWithNan, "!="},
-            {PredCondition::GreaterThanWithNan, ">"}, {PredCondition::GreaterEqualWithNan, ">="}};
+            {PredCondition::LessThan, "<"},
+            {PredCondition::Equal, "=="},
+            {PredCondition::LessEqual, "<="},
+            {PredCondition::GreaterThan, ">"},
+            {PredCondition::NotEqual, "!="},
+            {PredCondition::GreaterEqual, ">="},
+            {PredCondition::LessThanWithNan, "<"},
+            {PredCondition::NotEqualWithNan, "!="},
+            {PredCondition::LessEqualWithNan, "<="},
+            {PredCondition::GreaterThanWithNan, ">"},
+            {PredCondition::GreaterEqualWithNan, ">="}};
 
         const auto& comparison{PredicateComparisonStrings.find(condition)};
-        ASSERT_MSG(comparison != PredicateComparisonStrings.end(),
-                   "Unknown predicate comparison operation");
+        UNIMPLEMENTED_IF_MSG(comparison == PredicateComparisonStrings.end(),
+                             "Unknown predicate comparison operation");
 
         std::string predicate{'(' + op_a + ") " + comparison->second + " (" + op_b + ')'};
         if (condition == PredCondition::LessThanWithNan ||
             condition == PredCondition::NotEqualWithNan ||
+            condition == PredCondition::LessEqualWithNan ||
             condition == PredCondition::GreaterThanWithNan ||
             condition == PredCondition::GreaterEqualWithNan) {
             predicate += " || isnan(" + op_a + ") || isnan(" + op_b + ')';
@@ -984,7 +1195,7 @@ private:
         };
 
         auto op = PredicateOperationStrings.find(operation);
-        ASSERT_MSG(op != PredicateOperationStrings.end(), "Unknown predicate operation");
+        UNIMPLEMENTED_IF_MSG(op == PredicateOperationStrings.end(), "Unknown predicate operation");
         return op->second;
     }
 
@@ -1010,6 +1221,41 @@ private:
         }
 
         return result;
+    }
+
+    /*
+     * Transforms the input string GLSL operand into an unpacked half float pair.
+     * @note This function returns a float type pair instead of a half float pair. This is because
+     * real half floats are not standardized in GLSL but unpackHalf2x16 (which returns a vec2) is.
+     * @param operand Input operand. It has to be an unsigned integer.
+     * @param type How to unpack the unsigned integer to a half float pair.
+     * @param abs Get the absolute value of unpacked half floats.
+     * @param neg Get the negative value of unpacked half floats.
+     * @returns String corresponding to a half float pair.
+     */
+    static std::string GetHalfFloat(const std::string& operand,
+                                    Tegra::Shader::HalfType type = Tegra::Shader::HalfType::H0_H1,
+                                    bool abs = false, bool neg = false) {
+        // "vec2" calls emitted in this function are intended to alias components.
+        const std::string value = [&]() {
+            switch (type) {
+            case Tegra::Shader::HalfType::H0_H1:
+                return "unpackHalf2x16(" + operand + ')';
+            case Tegra::Shader::HalfType::F32:
+                return "vec2(uintBitsToFloat(" + operand + "))";
+            case Tegra::Shader::HalfType::H0_H0:
+            case Tegra::Shader::HalfType::H1_H1: {
+                const bool high = type == Tegra::Shader::HalfType::H1_H1;
+                const char unpack_index = "xy"[high ? 1 : 0];
+                return "vec2(unpackHalf2x16(" + operand + ")." + unpack_index + ')';
+            }
+            default:
+                UNREACHABLE();
+                return std::string("vec2(0)");
+            }
+        }();
+
+        return GetOperandAbsNeg(value, abs, neg);
     }
 
     /*
@@ -1047,8 +1293,7 @@ private:
             break;
         }
         default:
-            LOG_CRITICAL(HW_GPU, "Unimplemented logic operation: {}", static_cast<u32>(logic_op));
-            UNREACHABLE();
+            UNIMPLEMENTED_MSG("Unimplemented logic operation={}", static_cast<u32>(logic_op));
         }
 
         if (dest != Tegra::Shader::Register::ZeroIndex) {
@@ -1066,9 +1311,8 @@ private:
             SetPredicate(static_cast<u64>(predicate), '(' + result + ") != 0");
             break;
         default:
-            LOG_CRITICAL(HW_GPU, "Unimplemented predicate result mode: {}",
-                         static_cast<u32>(predicate_mode));
-            UNREACHABLE();
+            UNIMPLEMENTED_MSG("Unimplemented predicate result mode: {}",
+                              static_cast<u32>(predicate_mode));
         }
     }
 
@@ -1099,14 +1343,7 @@ private:
         regs.SetRegisterToInteger(dest, true, 0, result, 1, 1);
     }
 
-    void WriteTexsInstruction(const Instruction& instr, const std::string& coord,
-                              const std::string& texture) {
-        // Add an extra scope and declare the texture coords inside to prevent
-        // overwriting them in case they are used as outputs of the texs instruction.
-        shader.AddLine('{');
-        ++shader.scope;
-        shader.AddLine(coord);
-
+    void WriteTexsInstruction(const Instruction& instr, const std::string& texture) {
         // TEXS has two destination registers and a swizzle. The first two elements in the swizzle
         // go into gpr0+0 and gpr0+1, and the rest goes into gpr28+0 and gpr28+1
 
@@ -1129,65 +1366,75 @@ private:
 
             ++written_components;
         }
-
-        --shader.scope;
-        shader.AddLine('}');
     }
 
     static u32 TextureCoordinates(Tegra::Shader::TextureType texture_type) {
         switch (texture_type) {
-        case Tegra::Shader::TextureType::Texture1D: {
+        case Tegra::Shader::TextureType::Texture1D:
             return 1;
-        }
-        case Tegra::Shader::TextureType::Texture2D: {
+        case Tegra::Shader::TextureType::Texture2D:
             return 2;
-        }
-        case Tegra::Shader::TextureType::TextureCube: {
+        case Tegra::Shader::TextureType::Texture3D:
+        case Tegra::Shader::TextureType::TextureCube:
             return 3;
-        }
         default:
-            LOG_CRITICAL(HW_GPU, "Unhandled texture type {}", static_cast<u32>(texture_type));
-            UNREACHABLE();
+            UNIMPLEMENTED_MSG("Unhandled texture type: {}", static_cast<u32>(texture_type));
             return 0;
         }
     }
 
     /*
-     * Emits code to push the input target address to the SSY address stack, incrementing the stack
+     * Emits code to push the input target address to the flow address stack, incrementing the stack
      * top.
      */
-    void EmitPushToSSYStack(u32 target) {
-        shader.AddLine('{');
-        ++shader.scope;
-        shader.AddLine("ssy_stack[ssy_stack_top] = " + std::to_string(target) + "u;");
-        shader.AddLine("ssy_stack_top++;");
-        --shader.scope;
-        shader.AddLine('}');
+    void EmitPushToFlowStack(u32 target) {
+        const auto scope = shader.Scope();
+
+        shader.AddLine("flow_stack[flow_stack_top] = " + std::to_string(target) + "u;");
+        shader.AddLine("flow_stack_top++;");
     }
 
     /*
-     * Emits code to pop an address from the SSY address stack, setting the jump address to the
+     * Emits code to pop an address from the flow address stack, setting the jump address to the
      * popped address and decrementing the stack top.
      */
-    void EmitPopFromSSYStack() {
-        shader.AddLine('{');
-        ++shader.scope;
-        shader.AddLine("ssy_stack_top--;");
-        shader.AddLine("jmp_to = ssy_stack[ssy_stack_top];");
+    void EmitPopFromFlowStack() {
+        const auto scope = shader.Scope();
+
+        shader.AddLine("flow_stack_top--;");
+        shader.AddLine("jmp_to = flow_stack[flow_stack_top];");
         shader.AddLine("break;");
-        --shader.scope;
-        shader.AddLine('}');
     }
 
     /// Writes the output values from a fragment shader to the corresponding GLSL output variables.
     void EmitFragmentOutputsWrite() {
         ASSERT(stage == Maxwell3D::Regs::ShaderStage::Fragment);
 
-        ASSERT_MSG(header.ps.omap.sample_mask == 0, "Samplemask write is unimplemented");
+        UNIMPLEMENTED_IF_MSG(header.ps.omap.sample_mask != 0, "Samplemask write is unimplemented");
+
+        shader.AddLine("if (alpha_test[0] != 0) {");
+        ++shader.scope;
+        // We start on the register containing the alpha value in the first RT.
+        u32 current_reg = 3;
+        for (u32 render_target = 0; render_target < Maxwell3D::Regs::NumRenderTargets;
+             ++render_target) {
+            // TODO(Blinkhawk): verify the behavior of alpha testing on hardware when
+            // multiple render targets are used.
+            if (header.ps.IsColorComponentOutputEnabled(render_target, 0) ||
+                header.ps.IsColorComponentOutputEnabled(render_target, 1) ||
+                header.ps.IsColorComponentOutputEnabled(render_target, 2) ||
+                header.ps.IsColorComponentOutputEnabled(render_target, 3)) {
+                shader.AddLine(fmt::format("if (!AlphaFunc({})) discard;",
+                                           regs.GetRegisterAsFloat(current_reg)));
+                current_reg += 4;
+            }
+        }
+        --shader.scope;
+        shader.AddLine('}');
 
         // Write the color outputs using the data in the shader registers, disabled
         // rendertargets/components are skipped in the register assignment.
-        u32 current_reg = 0;
+        current_reg = 0;
         for (u32 render_target = 0; render_target < Maxwell3D::Regs::NumRenderTargets;
              ++render_target) {
             // TODO(Subv): Figure out how dual-source blending is configured in the Switch.
@@ -1211,6 +1458,218 @@ private:
         }
     }
 
+    /// Unpacks a video instruction operand (e.g. VMAD).
+    std::string GetVideoOperand(const std::string& op, bool is_chunk, bool is_signed,
+                                Tegra::Shader::VideoType type, u64 byte_height) {
+        const std::string value = [&]() {
+            if (!is_chunk) {
+                const auto offset = static_cast<u32>(byte_height * 8);
+                return "((" + op + " >> " + std::to_string(offset) + ") & 0xff)";
+            }
+            const std::string zero = "0";
+
+            switch (type) {
+            case Tegra::Shader::VideoType::Size16_Low:
+                return '(' + op + " & 0xffff)";
+            case Tegra::Shader::VideoType::Size16_High:
+                return '(' + op + " >> 16)";
+            case Tegra::Shader::VideoType::Size32:
+                // TODO(Rodrigo): From my hardware tests it becomes a bit "mad" when
+                // this type is used (1 * 1 + 0 == 0x5b800000). Until a better
+                // explanation is found: abort.
+                UNIMPLEMENTED();
+                return zero;
+            case Tegra::Shader::VideoType::Invalid:
+                UNREACHABLE_MSG("Invalid instruction encoding");
+                return zero;
+            default:
+                UNREACHABLE();
+                return zero;
+            }
+        }();
+
+        if (is_signed) {
+            return "int(" + value + ')';
+        }
+        return value;
+    };
+
+    /// Gets the A operand for a video instruction.
+    std::string GetVideoOperandA(Instruction instr) {
+        return GetVideoOperand(regs.GetRegisterAsInteger(instr.gpr8, 0, false),
+                               instr.video.is_byte_chunk_a != 0, instr.video.signed_a,
+                               instr.video.type_a, instr.video.byte_height_a);
+    }
+
+    /// Gets the B operand for a video instruction.
+    std::string GetVideoOperandB(Instruction instr) {
+        if (instr.video.use_register_b) {
+            return GetVideoOperand(regs.GetRegisterAsInteger(instr.gpr20, 0, false),
+                                   instr.video.is_byte_chunk_b != 0, instr.video.signed_b,
+                                   instr.video.type_b, instr.video.byte_height_b);
+        } else {
+            return '(' +
+                   std::to_string(instr.video.signed_b ? static_cast<s16>(instr.alu.GetImm20_16())
+                                                       : instr.alu.GetImm20_16()) +
+                   ')';
+        }
+    }
+
+    std::pair<size_t, std::string> ValidateAndGetCoordinateElement(
+        const Tegra::Shader::TextureType texture_type, const bool depth_compare,
+        const bool is_array, const bool lod_bias_enabled, size_t max_coords, size_t max_inputs) {
+        const size_t coord_count = TextureCoordinates(texture_type);
+
+        size_t total_coord_count = coord_count + (is_array ? 1 : 0) + (depth_compare ? 1 : 0);
+        const size_t total_reg_count = total_coord_count + (lod_bias_enabled ? 1 : 0);
+        if (total_coord_count > max_coords || total_reg_count > max_inputs) {
+            UNIMPLEMENTED_MSG("Unsupported Texture operation");
+            total_coord_count = std::min(total_coord_count, max_coords);
+        }
+        // 1D.DC opengl is using a vec3 but 2nd component is ignored later.
+        total_coord_count +=
+            (depth_compare && !is_array && texture_type == Tegra::Shader::TextureType::Texture1D)
+                ? 1
+                : 0;
+
+        constexpr std::array<const char*, 5> coord_container{
+            {"", "float coord = (", "vec2 coord = vec2(", "vec3 coord = vec3(",
+             "vec4 coord = vec4("}};
+
+        return std::pair<size_t, std::string>(coord_count, coord_container[total_coord_count]);
+    }
+
+    std::string GetTextureCode(const Tegra::Shader::Instruction& instr,
+                               const Tegra::Shader::TextureType texture_type,
+                               const Tegra::Shader::TextureProcessMode process_mode,
+                               const bool depth_compare, const bool is_array,
+                               const size_t bias_offset) {
+
+        if ((texture_type == Tegra::Shader::TextureType::Texture3D &&
+             (is_array || depth_compare)) ||
+            (texture_type == Tegra::Shader::TextureType::TextureCube && is_array &&
+             depth_compare)) {
+            UNIMPLEMENTED_MSG("This method is not supported.");
+        }
+
+        const std::string sampler =
+            GetSampler(instr.sampler, texture_type, is_array, depth_compare);
+
+        const bool lod_needed = process_mode == Tegra::Shader::TextureProcessMode::LZ ||
+                                process_mode == Tegra::Shader::TextureProcessMode::LL ||
+                                process_mode == Tegra::Shader::TextureProcessMode::LLA;
+
+        const bool gl_lod_supported = !(
+            (texture_type == Tegra::Shader::TextureType::Texture2D && is_array && depth_compare) ||
+            (texture_type == Tegra::Shader::TextureType::TextureCube && !is_array &&
+             depth_compare));
+
+        const std::string read_method = lod_needed && gl_lod_supported ? "textureLod(" : "texture(";
+        std::string texture = read_method + sampler + ", coord";
+
+        if (process_mode != Tegra::Shader::TextureProcessMode::None) {
+            if (process_mode == Tegra::Shader::TextureProcessMode::LZ) {
+                if (gl_lod_supported) {
+                    texture += ", 0";
+                } else {
+                    // Lod 0 is emulated by a big negative bias
+                    // in scenarios that are not supported by glsl
+                    texture += ", -1000";
+                }
+            } else {
+                // If present, lod or bias are always stored in the register indexed by the
+                // gpr20
+                // field with an offset depending on the usage of the other registers
+                texture += ',' + regs.GetRegisterAsFloat(instr.gpr20.Value() + bias_offset);
+            }
+        }
+        texture += ")";
+        return texture;
+    }
+
+    std::pair<std::string, std::string> GetTEXCode(
+        const Instruction& instr, const Tegra::Shader::TextureType texture_type,
+        const Tegra::Shader::TextureProcessMode process_mode, const bool depth_compare,
+        const bool is_array) {
+        const bool lod_bias_enabled = (process_mode != Tegra::Shader::TextureProcessMode::None &&
+                                       process_mode != Tegra::Shader::TextureProcessMode::LZ);
+
+        const auto [coord_count, coord_dcl] = ValidateAndGetCoordinateElement(
+            texture_type, depth_compare, is_array, lod_bias_enabled, 4, 5);
+        // If enabled arrays index is always stored in the gpr8 field
+        const u64 array_register = instr.gpr8.Value();
+        // First coordinate index is the gpr8 or gpr8 + 1 when arrays are used
+        const u64 coord_register = array_register + (is_array ? 1 : 0);
+
+        std::string coord = coord_dcl;
+        for (size_t i = 0; i < coord_count;) {
+            coord += regs.GetRegisterAsFloat(coord_register + i);
+            ++i;
+            if (i != coord_count) {
+                coord += ',';
+            }
+        }
+        // 1D.DC in opengl the 2nd component is ignored.
+        if (depth_compare && !is_array && texture_type == Tegra::Shader::TextureType::Texture1D) {
+            coord += ",0.0";
+        }
+        if (depth_compare) {
+            // Depth is always stored in the register signaled by gpr20
+            // or in the next register if lod or bias are used
+            const u64 depth_register = instr.gpr20.Value() + (lod_bias_enabled ? 1 : 0);
+            coord += ',' + regs.GetRegisterAsFloat(depth_register);
+        }
+        if (is_array) {
+            coord += ',' + regs.GetRegisterAsInteger(array_register);
+        }
+        coord += ");";
+        return std::make_pair(
+            coord, GetTextureCode(instr, texture_type, process_mode, depth_compare, is_array, 0));
+    }
+
+    std::pair<std::string, std::string> GetTEXSCode(
+        const Instruction& instr, const Tegra::Shader::TextureType texture_type,
+        const Tegra::Shader::TextureProcessMode process_mode, const bool depth_compare,
+        const bool is_array) {
+        const bool lod_bias_enabled = (process_mode != Tegra::Shader::TextureProcessMode::None &&
+                                       process_mode != Tegra::Shader::TextureProcessMode::LZ);
+
+        const auto [coord_count, coord_dcl] = ValidateAndGetCoordinateElement(
+            texture_type, depth_compare, is_array, lod_bias_enabled, 4, 4);
+        // If enabled arrays index is always stored in the gpr8 field
+        const u64 array_register = instr.gpr8.Value();
+        // First coordinate index is stored in gpr8 field or (gpr8 + 1) when arrays are used
+        const u64 coord_register = array_register + (is_array ? 1 : 0);
+        const u64 last_coord_register =
+            (is_array || !(lod_bias_enabled || depth_compare) || (coord_count > 2))
+                ? static_cast<u64>(instr.gpr20.Value())
+                : coord_register + 1;
+
+        std::string coord = coord_dcl;
+        for (size_t i = 0; i < coord_count; ++i) {
+            const bool last = (i == (coord_count - 1)) && (coord_count > 1);
+            coord += regs.GetRegisterAsFloat(last ? last_coord_register : coord_register + i);
+            if (!last) {
+                coord += ',';
+            }
+        }
+
+        if (depth_compare) {
+            // Depth is always stored in the register signaled by gpr20
+            // or in the next register if lod or bias are used
+            const u64 depth_register = instr.gpr20.Value() + (lod_bias_enabled ? 1 : 0);
+            coord += ',' + regs.GetRegisterAsFloat(depth_register);
+        }
+        if (is_array) {
+            coord += ',' + regs.GetRegisterAsInteger(array_register);
+        }
+        coord += ");";
+
+        return std::make_pair(coord,
+                              GetTextureCode(instr, texture_type, process_mode, depth_compare,
+                                             is_array, (coord_count > 2 ? 1 : 0)));
+    }
+
     /**
      * Compiles a single instruction from Tegra to GLSL.
      * @param offset the offset of the Tegra shader instruction.
@@ -1228,21 +1687,20 @@ private:
 
         // Decoding failure
         if (!opcode) {
-            LOG_CRITICAL(HW_GPU, "Unhandled instruction: {0:x}", instr.value);
-            UNREACHABLE();
+            UNIMPLEMENTED_MSG("Unhandled instruction: {0:x}", instr.value);
             return offset + 1;
         }
 
         shader.AddLine(
-            fmt::format("// {}: {} (0x{:016x})", offset, opcode->GetName(), instr.value));
+            fmt::format("// {}: {} (0x{:016x})", offset, opcode->get().GetName(), instr.value));
 
         using Tegra::Shader::Pred;
-        ASSERT_MSG(instr.pred.full_pred != Pred::NeverExecute,
-                   "NeverExecute predicate not implemented");
+        UNIMPLEMENTED_IF_MSG(instr.pred.full_pred == Pred::NeverExecute,
+                             "NeverExecute predicate not implemented");
 
         // Some instructions (like SSY) don't have a predicate field, they are always
         // unconditionally executed.
-        bool can_be_predicated = OpCode::IsPredicatedInstruction(opcode->GetId());
+        bool can_be_predicated = OpCode::IsPredicatedInstruction(opcode->get().GetId());
 
         if (can_be_predicated && instr.pred.pred_index != static_cast<u64>(Pred::UnusedIndex)) {
             shader.AddLine("if (" +
@@ -1252,7 +1710,7 @@ private:
             ++shader.scope;
         }
 
-        switch (opcode->GetType()) {
+        switch (opcode->get().GetType()) {
         case OpCode::Type::Arithmetic: {
             std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
 
@@ -1269,7 +1727,7 @@ private:
                 }
             }
 
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::MOV_C:
             case OpCode::Id::MOV_R: {
                 // MOV does not have neither 'abs' nor 'neg' bits.
@@ -1281,27 +1739,36 @@ private:
             case OpCode::Id::FMUL_R:
             case OpCode::Id::FMUL_IMM: {
                 // FMUL does not have 'abs' bits and only the second operand has a 'neg' bit.
-                //ASSERT_MSG(instr.fmul.tab5cb8_2 == 0, "FMUL tab5cb8_2({}) is not implemented",
-                //           instr.fmul.tab5cb8_2.Value());
-                //ASSERT_MSG(instr.fmul.tab5c68_1 == 0, "FMUL tab5cb8_1({}) is not implemented",
-                //           instr.fmul.tab5c68_1.Value());
-                //ASSERT_MSG(instr.fmul.tab5c68_0 == 1, "FMUL tab5cb8_0({}) is not implemented",
-                //           instr.fmul.tab5c68_0
-                //               .Value()); // SMO typical sends 1 here which seems to be the default
-                //ASSERT_MSG(instr.fmul.cc == 0, "FMUL cc is not implemented");
+                //UNIMPLEMENTED_IF_MSG(instr.fmul.tab5cb8_2 != 0,
+                //                     "FMUL tab5cb8_2({}) is not implemented",
+                //                     instr.fmul.tab5cb8_2.Value());
+                //UNIMPLEMENTED_IF_MSG(instr.fmul.tab5c68_1 != 0,
+                //                     "FMUL tab5cb8_1({}) is not implemented",
+                //                     instr.fmul.tab5c68_1.Value());
+                //UNIMPLEMENTED_IF_MSG(
+                //    instr.fmul.tab5c68_0 != 1, "FMUL tab5cb8_0({}) is not implemented",
+                //    instr.fmul.tab5c68_0
+                //        .Value()); // SMO typical sends 1 here which seems to be the default
+                //UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                //                     "Condition codes generation in FMUL is not implemented");
 
                 op_b = GetOperandAbsNeg(op_b, false, instr.fmul.negate_b);
+
                 regs.SetRegisterToFloat(instr.gpr0, 0, op_a + " * " + op_b, 1, 1,
-                                        instr.alu.saturate_d);
+                                        instr.alu.saturate_d, 0, true);
                 break;
             }
             case OpCode::Id::FADD_C:
             case OpCode::Id::FADD_R:
             case OpCode::Id::FADD_IMM: {
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in FADD is not implemented");
+
                 op_a = GetOperandAbsNeg(op_a, instr.alu.abs_a, instr.alu.negate_a);
                 op_b = GetOperandAbsNeg(op_b, instr.alu.abs_b, instr.alu.negate_b);
+
                 regs.SetRegisterToFloat(instr.gpr0, 0, op_a + " + " + op_b, 1, 1,
-                                        instr.alu.saturate_d);
+                                        instr.alu.saturate_d, 0, true);
                 break;
             }
             case OpCode::Id::MUFU: {
@@ -1309,42 +1776,44 @@ private:
                 switch (instr.sub_op) {
                 case SubOp::Cos:
                     regs.SetRegisterToFloat(instr.gpr0, 0, "cos(" + op_a + ')', 1, 1,
-                                            instr.alu.saturate_d);
+                                            instr.alu.saturate_d, 0, true);
                     break;
                 case SubOp::Sin:
                     regs.SetRegisterToFloat(instr.gpr0, 0, "sin(" + op_a + ')', 1, 1,
-                                            instr.alu.saturate_d);
+                                            instr.alu.saturate_d, 0, true);
                     break;
                 case SubOp::Ex2:
                     regs.SetRegisterToFloat(instr.gpr0, 0, "exp2(" + op_a + ')', 1, 1,
-                                            instr.alu.saturate_d);
+                                            instr.alu.saturate_d, 0, true);
                     break;
                 case SubOp::Lg2:
                     regs.SetRegisterToFloat(instr.gpr0, 0, "log2(" + op_a + ')', 1, 1,
-                                            instr.alu.saturate_d);
+                                            instr.alu.saturate_d, 0, true);
                     break;
                 case SubOp::Rcp:
                     regs.SetRegisterToFloat(instr.gpr0, 0, "1.0 / " + op_a, 1, 1,
-                                            instr.alu.saturate_d);
+                                            instr.alu.saturate_d, 0, true);
                     break;
                 case SubOp::Rsq:
                     regs.SetRegisterToFloat(instr.gpr0, 0, "inversesqrt(" + op_a + ')', 1, 1,
-                                            instr.alu.saturate_d);
+                                            instr.alu.saturate_d, 0, true);
                     break;
                 case SubOp::Sqrt:
                     regs.SetRegisterToFloat(instr.gpr0, 0, "sqrt(" + op_a + ')', 1, 1,
-                                            instr.alu.saturate_d);
+                                            instr.alu.saturate_d, 0, true);
                     break;
                 default:
-                    LOG_CRITICAL(HW_GPU, "Unhandled MUFU sub op: {0:x}",
-                                 static_cast<unsigned>(instr.sub_op.Value()));
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unhandled MUFU sub op={0:x}",
+                                      static_cast<unsigned>(instr.sub_op.Value()));
                 }
                 break;
             }
             case OpCode::Id::FMNMX_C:
             case OpCode::Id::FMNMX_R:
             case OpCode::Id::FMNMX_IMM: {
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in FMNMX is not implemented");
+
                 op_a = GetOperandAbsNeg(op_a, instr.alu.abs_a, instr.alu.negate_a);
                 op_b = GetOperandAbsNeg(op_b, instr.alu.abs_b, instr.alu.negate_b);
 
@@ -1354,7 +1823,7 @@ private:
                 regs.SetRegisterToFloat(instr.gpr0, 0,
                                         '(' + condition + ") ? min(" + parameters + ") : max(" +
                                             parameters + ')',
-                                        1, 1);
+                                        1, 1, false, 0, true);
                 break;
             }
             case OpCode::Id::RRO_C:
@@ -1367,25 +1836,31 @@ private:
                 break;
             }
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled arithmetic instruction: {}", opcode->GetName());
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled arithmetic instruction: {}", opcode->get().GetName());
             }
             }
             break;
         }
         case OpCode::Type::ArithmeticImmediate: {
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::MOV32_IMM: {
                 regs.SetRegisterToFloat(instr.gpr0, 0, GetImmediate32(instr), 1, 1);
                 break;
             }
             case OpCode::Id::FMUL32_IMM: {
-                regs.SetRegisterToFloat(
-                    instr.gpr0, 0,
-                    regs.GetRegisterAsFloat(instr.gpr8) + " * " + GetImmediate32(instr), 1, 1);
+                UNIMPLEMENTED_IF_MSG(instr.op_32.generates_cc,
+                                     "Condition codes generation in FMUL32 is not implemented");
+
+                regs.SetRegisterToFloat(instr.gpr0, 0,
+                                        regs.GetRegisterAsFloat(instr.gpr8) + " * " +
+                                            GetImmediate32(instr),
+                                        1, 1, instr.fmul32.saturate, 0, true);
                 break;
             }
             case OpCode::Id::FADD32I: {
+                UNIMPLEMENTED_IF_MSG(instr.op_32.generates_cc,
+                                     "Condition codes generation in FADD32I is not implemented");
+
                 std::string op_a = regs.GetRegisterAsFloat(instr.gpr8);
                 std::string op_b = GetImmediate32(instr);
 
@@ -1405,20 +1880,23 @@ private:
                     op_b = "-(" + op_b + ')';
                 }
 
-                regs.SetRegisterToFloat(instr.gpr0, 0, op_a + " + " + op_b, 1, 1);
+                regs.SetRegisterToFloat(instr.gpr0, 0, op_a + " + " + op_b, 1, 1, false, 0, true);
                 break;
             }
             }
             break;
         }
         case OpCode::Type::Bfe: {
-            ASSERT_MSG(!instr.bfe.negate_b, "Unimplemented");
+            UNIMPLEMENTED_IF(instr.bfe.negate_b);
 
             std::string op_a = instr.bfe.negate_a ? "-" : "";
             op_a += regs.GetRegisterAsInteger(instr.gpr8);
 
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::BFE_IMM: {
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in BFE is not implemented");
+
                 std::string inner_shift =
                     '(' + op_a + " << " + std::to_string(instr.bfe.GetLeftShiftValue()) + ')';
                 std::string outer_shift =
@@ -1429,14 +1907,32 @@ private:
                 break;
             }
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled BFE instruction: {}", opcode->GetName());
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled BFE instruction: {}", opcode->get().GetName());
             }
             }
 
             break;
         }
+        case OpCode::Type::Bfi: {
+            UNIMPLEMENTED_IF(instr.generates_cc);
 
+            const auto [base, packed_shift] = [&]() -> std::tuple<std::string, std::string> {
+                switch (opcode->get().GetId()) {
+                case OpCode::Id::BFI_IMM_R:
+                    return {regs.GetRegisterAsInteger(instr.gpr39, 0, false),
+                            std::to_string(instr.alu.GetSignedImm20_20())};
+                default:
+                    UNREACHABLE();
+                }
+            }();
+            const std::string offset = '(' + packed_shift + " & 0xff)";
+            const std::string bits = "((" + packed_shift + " >> 8) & 0xff)";
+            const std::string insert = regs.GetRegisterAsInteger(instr.gpr8, 0, false);
+            regs.SetRegisterToInteger(
+                instr.gpr0, false, 0,
+                "bitfieldInsert(" + base + ", " + insert + ", " + offset + ", " + bits + ')', 1, 1);
+            break;
+        }
         case OpCode::Type::Shift: {
             std::string op_a = regs.GetRegisterAsInteger(instr.gpr8, 0, true);
             std::string op_b;
@@ -1452,10 +1948,13 @@ private:
                 }
             }
 
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::SHR_C:
             case OpCode::Id::SHR_R:
             case OpCode::Id::SHR_IMM: {
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in SHR is not implemented");
+
                 if (!instr.shift.is_signed) {
                     // Logical shift right
                     op_a = "uint(" + op_a + ')';
@@ -1469,22 +1968,25 @@ private:
             case OpCode::Id::SHL_C:
             case OpCode::Id::SHL_R:
             case OpCode::Id::SHL_IMM:
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in SHL is not implemented");
                 regs.SetRegisterToInteger(instr.gpr0, true, 0, op_a + " << " + op_b, 1, 1);
                 break;
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled shift instruction: {}", opcode->GetName());
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled shift instruction: {}", opcode->get().GetName());
             }
             }
             break;
         }
-
         case OpCode::Type::ArithmeticIntegerImmediate: {
             std::string op_a = regs.GetRegisterAsInteger(instr.gpr8);
             std::string op_b = std::to_string(instr.alu.imm20_32.Value());
 
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::IADD32I:
+                UNIMPLEMENTED_IF_MSG(instr.op_32.generates_cc,
+                                     "Condition codes generation in IADD32I is not implemented");
+
                 if (instr.iadd32i.negate_a)
                     op_a = "-(" + op_a + ')';
 
@@ -1492,6 +1994,9 @@ private:
                                           instr.iadd32i.saturate != 0);
                 break;
             case OpCode::Id::LOP32I: {
+                UNIMPLEMENTED_IF_MSG(instr.op_32.generates_cc,
+                                     "Condition codes generation in LOP32I is not implemented");
+
                 if (instr.alu.lop32i.invert_a)
                     op_a = "~(" + op_a + ')';
 
@@ -1504,9 +2009,8 @@ private:
                 break;
             }
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled ArithmeticIntegerImmediate instruction: {}",
-                             opcode->GetName());
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled ArithmeticIntegerImmediate instruction: {}",
+                                  opcode->get().GetName());
             }
             }
             break;
@@ -1525,10 +2029,13 @@ private:
                 }
             }
 
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::IADD_C:
             case OpCode::Id::IADD_R:
             case OpCode::Id::IADD_IMM: {
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in IADD is not implemented");
+
                 if (instr.alu_integer.negate_a)
                     op_a = "-(" + op_a + ')';
 
@@ -1542,6 +2049,9 @@ private:
             case OpCode::Id::IADD3_C:
             case OpCode::Id::IADD3_R:
             case OpCode::Id::IADD3_IMM: {
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in IADD3 is not implemented");
+
                 std::string op_c = regs.GetRegisterAsInteger(instr.gpr39);
 
                 auto apply_height = [](auto height, auto& oprand) {
@@ -1555,13 +2065,12 @@ private:
                         oprand = "((" + oprand + ") >> 16)";
                         break;
                     default:
-                        LOG_CRITICAL(HW_GPU, "Unhandled IADD3 height: {}",
-                                     static_cast<u32>(height.Value()));
-                        UNREACHABLE();
+                        UNIMPLEMENTED_MSG("Unhandled IADD3 height: {}",
+                                          static_cast<u32>(height.Value()));
                     }
                 };
 
-                if (opcode->GetId() == OpCode::Id::IADD3_R) {
+                if (opcode->get().GetId() == OpCode::Id::IADD3_R) {
                     apply_height(instr.iadd3.height_a, op_a);
                     apply_height(instr.iadd3.height_b, op_b);
                     apply_height(instr.iadd3.height_c, op_c);
@@ -1577,7 +2086,7 @@ private:
                     op_c = "-(" + op_c + ')';
 
                 std::string result;
-                if (opcode->GetId() == OpCode::Id::IADD3_R) {
+                if (opcode->get().GetId() == OpCode::Id::IADD3_R) {
                     switch (instr.iadd3.mode) {
                     case Tegra::Shader::IAdd3Mode::RightShift:
                         // TODO(tech4me): According to
@@ -1603,6 +2112,9 @@ private:
             case OpCode::Id::ISCADD_C:
             case OpCode::Id::ISCADD_R:
             case OpCode::Id::ISCADD_IMM: {
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in ISCADD is not implemented");
+
                 if (instr.alu_integer.negate_a)
                     op_a = "-(" + op_a + ')';
 
@@ -1636,6 +2148,9 @@ private:
             case OpCode::Id::LOP_C:
             case OpCode::Id::LOP_R:
             case OpCode::Id::LOP_IMM: {
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in LOP is not implemented");
+
                 if (instr.alu.lop.invert_a)
                     op_a = "~(" + op_a + ')';
 
@@ -1649,10 +2164,13 @@ private:
             case OpCode::Id::LOP3_C:
             case OpCode::Id::LOP3_R:
             case OpCode::Id::LOP3_IMM: {
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in LOP3 is not implemented");
+
                 const std::string op_c = regs.GetRegisterAsInteger(instr.gpr39);
                 std::string lut;
 
-                if (opcode->GetId() == OpCode::Id::LOP3_R) {
+                if (opcode->get().GetId() == OpCode::Id::LOP3_R) {
                     lut = '(' + std::to_string(instr.alu.lop3.GetImmLut28()) + ')';
                 } else {
                     lut = '(' + std::to_string(instr.alu.lop3.GetImmLut48()) + ')';
@@ -1664,8 +2182,10 @@ private:
             case OpCode::Id::IMNMX_C:
             case OpCode::Id::IMNMX_R:
             case OpCode::Id::IMNMX_IMM: {
-                ASSERT_MSG(instr.imnmx.exchange == Tegra::Shader::IMinMaxExchange::None,
-                           "Unimplemented");
+                UNIMPLEMENTED_IF(instr.imnmx.exchange != Tegra::Shader::IMinMaxExchange::None);
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in IMNMX is not implemented");
+
                 const std::string condition =
                     GetPredicateCondition(instr.imnmx.pred, instr.imnmx.negate_pred != 0);
                 const std::string parameters = op_a + ',' + op_b;
@@ -1682,7 +2202,7 @@ private:
             case OpCode::Id::LEA_HI: {
                 std::string op_c;
 
-                switch (opcode->GetId()) {
+                switch (opcode->get().GetId()) {
                 case OpCode::Id::LEA_R2: {
                     op_a = regs.GetRegisterAsInteger(instr.gpr20);
                     op_b = regs.GetRegisterAsInteger(instr.gpr39);
@@ -1727,26 +2247,103 @@ private:
                     op_b = regs.GetRegisterAsInteger(instr.gpr8);
                     op_a = std::to_string(instr.lea.imm.entry_a);
                     op_c = std::to_string(instr.lea.imm.entry_b);
-                    LOG_CRITICAL(HW_GPU, "Unhandled LEA subinstruction: {}", opcode->GetName());
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unhandled LEA subinstruction: {}", opcode->get().GetName());
                 }
                 }
-                if (instr.lea.pred48 != static_cast<u64>(Pred::UnusedIndex)) {
-                    LOG_ERROR(HW_GPU, "Unhandled LEA Predicate");
-                    UNREACHABLE();
-                }
+                UNIMPLEMENTED_IF_MSG(instr.lea.pred48 != static_cast<u64>(Pred::UnusedIndex),
+                                     "Unhandled LEA Predicate");
                 const std::string value = '(' + op_a + " + (" + op_b + "*(1 << " + op_c + ")))";
                 regs.SetRegisterToInteger(instr.gpr0, true, 0, value, 1, 1);
 
                 break;
             }
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled ArithmeticInteger instruction: {}",
-                             opcode->GetName());
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled ArithmeticInteger instruction: {}",
+                                  opcode->get().GetName());
             }
             }
 
+            break;
+        }
+        case OpCode::Type::ArithmeticHalf: {
+            if (opcode->get().GetId() == OpCode::Id::HADD2_C ||
+                opcode->get().GetId() == OpCode::Id::HADD2_R) {
+                UNIMPLEMENTED_IF(instr.alu_half.ftz != 0);
+            }
+            const bool negate_a =
+                opcode->get().GetId() != OpCode::Id::HMUL2_R && instr.alu_half.negate_a != 0;
+            const bool negate_b =
+                opcode->get().GetId() != OpCode::Id::HMUL2_C && instr.alu_half.negate_b != 0;
+
+            const std::string op_a =
+                GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr8, 0, false), instr.alu_half.type_a,
+                             instr.alu_half.abs_a != 0, negate_a);
+
+            std::string op_b;
+            switch (opcode->get().GetId()) {
+            case OpCode::Id::HADD2_C:
+            case OpCode::Id::HMUL2_C:
+                op_b = regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
+                                       GLSLRegister::Type::UnsignedInteger);
+                break;
+            case OpCode::Id::HADD2_R:
+            case OpCode::Id::HMUL2_R:
+                op_b = regs.GetRegisterAsInteger(instr.gpr20, 0, false);
+                break;
+            default:
+                UNREACHABLE();
+                op_b = "0";
+                break;
+            }
+            op_b = GetHalfFloat(op_b, instr.alu_half.type_b, instr.alu_half.abs_b != 0, negate_b);
+
+            const std::string result = [&]() {
+                switch (opcode->get().GetId()) {
+                case OpCode::Id::HADD2_C:
+                case OpCode::Id::HADD2_R:
+                    return '(' + op_a + " + " + op_b + ')';
+                case OpCode::Id::HMUL2_C:
+                case OpCode::Id::HMUL2_R:
+                    return '(' + op_a + " * " + op_b + ')';
+                default:
+                    UNIMPLEMENTED_MSG("Unhandled half float instruction: {}",
+                                      opcode->get().GetName());
+                    return std::string("0");
+                }
+            }();
+
+            regs.SetRegisterToHalfFloat(instr.gpr0, 0, result, instr.alu_half.merge, 1, 1,
+                                        instr.alu_half.saturate != 0);
+            break;
+        }
+        case OpCode::Type::ArithmeticHalfImmediate: {
+            if (opcode->get().GetId() == OpCode::Id::HADD2_IMM) {
+                UNIMPLEMENTED_IF(instr.alu_half_imm.ftz != 0);
+            } else {
+                UNIMPLEMENTED_IF(instr.alu_half_imm.precision !=
+                                 Tegra::Shader::HalfPrecision::None);
+            }
+
+            const std::string op_a = GetHalfFloat(
+                regs.GetRegisterAsInteger(instr.gpr8, 0, false), instr.alu_half_imm.type_a,
+                instr.alu_half_imm.abs_a != 0, instr.alu_half_imm.negate_a != 0);
+
+            const std::string op_b = UnpackHalfImmediate(instr, true);
+
+            const std::string result = [&]() {
+                switch (opcode->get().GetId()) {
+                case OpCode::Id::HADD2_IMM:
+                    return op_a + " + " + op_b;
+                case OpCode::Id::HMUL2_IMM:
+                    return op_a + " * " + op_b;
+                default:
+                    UNREACHABLE();
+                    return std::string("0");
+                }
+            }();
+
+            regs.SetRegisterToHalfFloat(instr.gpr0, 0, result, instr.alu_half_imm.merge, 1, 1,
+                                        instr.alu_half_imm.saturate != 0);
             break;
         }
         case OpCode::Type::Ffma: {
@@ -1754,13 +2351,16 @@ private:
             std::string op_b = instr.ffma.negate_b ? "-" : "";
             std::string op_c = instr.ffma.negate_c ? "-" : "";
 
-            ASSERT_MSG(instr.ffma.cc == 0, "FFMA cc not implemented");
-            ASSERT_MSG(instr.ffma.tab5980_0 == 1, "FFMA tab5980_0({}) not implemented",
-                       instr.ffma.tab5980_0.Value()); // Seems to be 1 by default based on SMO
-            ASSERT_MSG(instr.ffma.tab5980_1 == 0, "FFMA tab5980_1({}) not implemented",
-                       instr.ffma.tab5980_1.Value());
+            UNIMPLEMENTED_IF_MSG(instr.ffma.cc != 0, "FFMA cc not implemented");
+            UNIMPLEMENTED_IF_MSG(
+                instr.ffma.tab5980_0 != 1, "FFMA tab5980_0({}) not implemented",
+                instr.ffma.tab5980_0.Value()); // Seems to be 1 by default based on SMO
+            UNIMPLEMENTED_IF_MSG(instr.ffma.tab5980_1 != 0, "FFMA tab5980_1({}) not implemented",
+                                 instr.ffma.tab5980_1.Value());
+            UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                 "Condition codes generation in FFMA is not implemented");
 
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::FFMA_CR: {
                 op_b += regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
                                         GLSLRegister::Type::Float);
@@ -1784,19 +2384,69 @@ private:
                 break;
             }
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled FFMA instruction: {}", opcode->GetName());
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled FFMA instruction: {}", opcode->get().GetName());
             }
             }
 
-            regs.SetRegisterToFloat(instr.gpr0, 0, op_a + " * " + op_b + " + " + op_c, 1, 1,
-                                    instr.alu.saturate_d);
+            regs.SetRegisterToFloat(instr.gpr0, 0, "fma(" + op_a + ", " + op_b + ", " + op_c + ')',
+                                    1, 1, instr.alu.saturate_d, 0, true);
+            break;
+        }
+        case OpCode::Type::Hfma2: {
+            if (opcode->get().GetId() == OpCode::Id::HFMA2_RR) {
+                UNIMPLEMENTED_IF(instr.hfma2.rr.precision != Tegra::Shader::HalfPrecision::None);
+            } else {
+                UNIMPLEMENTED_IF(instr.hfma2.precision != Tegra::Shader::HalfPrecision::None);
+            }
+            const bool saturate = opcode->get().GetId() == OpCode::Id::HFMA2_RR
+                                      ? instr.hfma2.rr.saturate != 0
+                                      : instr.hfma2.saturate != 0;
+
+            const std::string op_a =
+                GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr8, 0, false), instr.hfma2.type_a);
+            std::string op_b, op_c;
+
+            switch (opcode->get().GetId()) {
+            case OpCode::Id::HFMA2_CR:
+                op_b = GetHalfFloat(regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
+                                                    GLSLRegister::Type::UnsignedInteger),
+                                    instr.hfma2.type_b, false, instr.hfma2.negate_b);
+                op_c = GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr39, 0, false),
+                                    instr.hfma2.type_reg39, false, instr.hfma2.negate_c);
+                break;
+            case OpCode::Id::HFMA2_RC:
+                op_b = GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr39, 0, false),
+                                    instr.hfma2.type_reg39, false, instr.hfma2.negate_b);
+                op_c = GetHalfFloat(regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
+                                                    GLSLRegister::Type::UnsignedInteger),
+                                    instr.hfma2.type_b, false, instr.hfma2.negate_c);
+                break;
+            case OpCode::Id::HFMA2_RR:
+                op_b = GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr20, 0, false),
+                                    instr.hfma2.type_b, false, instr.hfma2.negate_b);
+                op_c = GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr39, 0, false),
+                                    instr.hfma2.rr.type_c, false, instr.hfma2.rr.negate_c);
+                break;
+            case OpCode::Id::HFMA2_IMM_R:
+                op_b = UnpackHalfImmediate(instr, true);
+                op_c = GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr39, 0, false),
+                                    instr.hfma2.type_reg39, false, instr.hfma2.negate_c);
+                break;
+            default:
+                UNREACHABLE();
+                op_c = op_b = "vec2(0)";
+                break;
+            }
+
+            const std::string result = '(' + op_a + " * " + op_b + " + " + op_c + ')';
+
+            regs.SetRegisterToHalfFloat(instr.gpr0, 0, result, instr.hfma2.merge, 1, 1, saturate);
             break;
         }
         case OpCode::Type::Conversion: {
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::I2I_R: {
-                ASSERT_MSG(!instr.conversion.selector, "Unimplemented");
+                UNIMPLEMENTED_IF(instr.conversion.selector);
 
                 std::string op_a = regs.GetRegisterAsInteger(
                     instr.gpr20, 0, instr.conversion.is_input_signed, instr.conversion.src_size);
@@ -1816,10 +2466,11 @@ private:
             }
             case OpCode::Id::I2F_R:
             case OpCode::Id::I2F_C: {
-                ASSERT_MSG(instr.conversion.dest_size == Register::Size::Word, "Unimplemented");
-                ASSERT_MSG(!instr.conversion.selector, "Unimplemented");
-
-                std::string op_a{};
+                UNIMPLEMENTED_IF(instr.conversion.dest_size != Register::Size::Word);
+                UNIMPLEMENTED_IF(instr.conversion.selector);
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in I2F is not implemented");
+                std::string op_a;
 
                 if (instr.is_b_gpr) {
                     op_a =
@@ -1845,8 +2496,10 @@ private:
                 break;
             }
             case OpCode::Id::F2F_R: {
-                ASSERT_MSG(instr.conversion.dest_size == Register::Size::Word, "Unimplemented");
-                ASSERT_MSG(instr.conversion.src_size == Register::Size::Word, "Unimplemented");
+                UNIMPLEMENTED_IF(instr.conversion.dest_size != Register::Size::Word);
+                UNIMPLEMENTED_IF(instr.conversion.src_size != Register::Size::Word);
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in F2F is not implemented");
                 std::string op_a = regs.GetRegisterAsFloat(instr.gpr20);
 
                 if (instr.conversion.abs_a) {
@@ -1873,9 +2526,8 @@ private:
                     op_a = "trunc(" + op_a + ')';
                     break;
                 default:
-                    LOG_CRITICAL(HW_GPU, "Unimplemented f2f rounding mode {}",
-                                 static_cast<u32>(instr.conversion.f2f.rounding.Value()));
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unimplemented F2F rounding mode {}",
+                                      static_cast<u32>(instr.conversion.f2f.rounding.Value()));
                     break;
                 }
 
@@ -1884,7 +2536,9 @@ private:
             }
             case OpCode::Id::F2I_R:
             case OpCode::Id::F2I_C: {
-                ASSERT_MSG(instr.conversion.src_size == Register::Size::Word, "Unimplemented");
+                UNIMPLEMENTED_IF(instr.conversion.src_size != Register::Size::Word);
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in F2I is not implemented");
                 std::string op_a{};
 
                 if (instr.is_b_gpr) {
@@ -1915,9 +2569,8 @@ private:
                     op_a = "trunc(" + op_a + ')';
                     break;
                 default:
-                    LOG_CRITICAL(HW_GPU, "Unimplemented f2i rounding mode {}",
-                                 static_cast<u32>(instr.conversion.f2i.rounding.Value()));
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unimplemented F2I rounding mode {}",
+                                      static_cast<u32>(instr.conversion.f2i.rounding.Value()));
                     break;
                 }
 
@@ -1932,20 +2585,19 @@ private:
                 break;
             }
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled conversion instruction: {}", opcode->GetName());
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled conversion instruction: {}", opcode->get().GetName());
             }
             }
             break;
         }
         case OpCode::Type::Memory: {
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::LD_A: {
                 // Note: Shouldn't this be interp mode flat? As in no interpolation made.
-                ASSERT_MSG(instr.gpr8.Value() == Register::ZeroIndex,
-                           "Indirect attribute loads are not supported");
-                ASSERT_MSG((instr.attribute.fmt20.immediate.Value() % sizeof(u32)) == 0,
-                           "Unaligned attribute loads are not supported");
+                UNIMPLEMENTED_IF_MSG(instr.gpr8.Value() != Register::ZeroIndex,
+                                     "Indirect attribute loads are not supported");
+                UNIMPLEMENTED_IF_MSG((instr.attribute.fmt20.immediate.Value() % sizeof(u32)) != 0,
+                                     "Unaligned attribute loads are not supported");
 
                 Tegra::Shader::IpaMode input_mode{Tegra::Shader::IpaInterpMode::Perspective,
                                                   Tegra::Shader::IpaSampleMode::Default};
@@ -1972,12 +2624,9 @@ private:
                 break;
             }
             case OpCode::Id::LD_C: {
-                ASSERT_MSG(instr.ld_c.unknown == 0, "Unimplemented");
+                UNIMPLEMENTED_IF(instr.ld_c.unknown != 0);
 
-                // Add an extra scope and declare the index register inside to prevent
-                // overwriting it in case it is used as an output of the LD instruction.
-                shader.AddLine("{");
-                ++shader.scope;
+                const auto scope = shader.Scope();
 
                 shader.AddLine("uint index = (" + regs.GetRegisterAsInteger(instr.gpr8, 0, false) +
                                " / 4) & (MAX_CONSTBUFFER_ELEMENTS - 1);");
@@ -2000,20 +2649,39 @@ private:
                     break;
                 }
                 default:
-                    LOG_CRITICAL(HW_GPU, "Unhandled type: {}",
-                                 static_cast<unsigned>(instr.ld_c.type.Value()));
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unhandled type: {}",
+                                      static_cast<unsigned>(instr.ld_c.type.Value()));
                 }
+                break;
+            }
+            case OpCode::Id::LD_L: {
+                UNIMPLEMENTED_IF_MSG(instr.ld_l.unknown == 1, "LD_L Unhandled mode: {}",
+                                     static_cast<unsigned>(instr.ld_l.unknown.Value()));
 
-                --shader.scope;
-                shader.AddLine("}");
+                const auto scope = shader.Scope();
+
+                std::string op = '(' + regs.GetRegisterAsInteger(instr.gpr8, 0, false) + " + " +
+                                 std::to_string(instr.smem_imm.Value()) + ')';
+
+                shader.AddLine("uint index = (" + op + " / 4);");
+
+                const std::string op_a = regs.GetLocalMemoryAsFloat("index");
+
+                switch (instr.ldst_sl.type.Value()) {
+                case Tegra::Shader::StoreType::Bytes32:
+                    regs.SetRegisterToFloat(instr.gpr0, 0, op_a, 1, 1);
+                    break;
+                default:
+                    UNIMPLEMENTED_MSG("LD_L Unhandled type: {}",
+                                      static_cast<unsigned>(instr.ldst_sl.type.Value()));
+                }
                 break;
             }
             case OpCode::Id::ST_A: {
-                ASSERT_MSG(instr.gpr8.Value() == Register::ZeroIndex,
-                           "Indirect attribute loads are not supported");
-                ASSERT_MSG((instr.attribute.fmt20.immediate.Value() % sizeof(u32)) == 0,
-                           "Unaligned attribute loads are not supported");
+                UNIMPLEMENTED_IF_MSG(instr.gpr8.Value() != Register::ZeroIndex,
+                                     "Indirect attribute loads are not supported");
+                UNIMPLEMENTED_IF_MSG((instr.attribute.fmt20.immediate.Value() % sizeof(u32)) != 0,
+                                     "Unaligned attribute loads are not supported");
 
                 u64 next_element = instr.attribute.fmt20.element;
                 u64 next_index = static_cast<u64>(instr.attribute.fmt20.index.Value());
@@ -2037,285 +2705,158 @@ private:
 
                 break;
             }
+            case OpCode::Id::ST_L: {
+                UNIMPLEMENTED_IF_MSG(instr.st_l.unknown == 0, "ST_L Unhandled mode: {}",
+                                     static_cast<unsigned>(instr.st_l.unknown.Value()));
+
+                const auto scope = shader.Scope();
+
+                std::string op = '(' + regs.GetRegisterAsInteger(instr.gpr8, 0, false) + " + " +
+                                 std::to_string(instr.smem_imm.Value()) + ')';
+
+                shader.AddLine("uint index = (" + op + " / 4);");
+
+                switch (instr.ldst_sl.type.Value()) {
+                case Tegra::Shader::StoreType::Bytes32:
+                    regs.SetLocalMemoryAsFloat("index", regs.GetRegisterAsFloat(instr.gpr0));
+                    break;
+                default:
+                    UNIMPLEMENTED_MSG("ST_L Unhandled type: {}",
+                                      static_cast<unsigned>(instr.ldst_sl.type.Value()));
+                }
+                break;
+            }
             case OpCode::Id::TEX: {
-                ASSERT_MSG(instr.tex.array == 0, "TEX arrays unimplemented");
                 Tegra::Shader::TextureType texture_type{instr.tex.texture_type};
-                std::string coord;
-
-                ASSERT_MSG(!instr.tex.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
-                           "NODEP is not implemented");
-                ASSERT_MSG(!instr.tex.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
-                           "AOFFI is not implemented");
-
+                const bool is_array = instr.tex.array != 0;
                 const bool depth_compare =
                     instr.tex.UsesMiscMode(Tegra::Shader::TextureMiscMode::DC);
-                u32 num_coordinates = TextureCoordinates(texture_type);
-                if (depth_compare)
-                    num_coordinates += 1;
+                const auto process_mode = instr.tex.GetTextureProcessMode();
+                UNIMPLEMENTED_IF_MSG(instr.tex.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                                     "NODEP is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.tex.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
+                                     "AOFFI is not implemented");
 
-                switch (num_coordinates) {
-                case 1: {
-                    const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                    coord = "float coords = " + x + ';';
-                    break;
-                }
-                case 2: {
-                    const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                    const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
-                    break;
-                }
-                case 3: {
-                    const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                    const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                    const std::string z = regs.GetRegisterAsFloat(instr.gpr20);
-                    coord = "vec3 coords = vec3(" + x + ", " + y + ", " + z + ");";
-                    break;
-                }
-                default:
-                    LOG_CRITICAL(HW_GPU, "Unhandled coordinates number {}",
-                                 static_cast<u32>(num_coordinates));
-                    UNREACHABLE();
+                const auto [coord, texture] =
+                    GetTEXCode(instr, texture_type, process_mode, depth_compare, is_array);
 
-                    // Fallback to interpreting as a 2D texture for now
-                    const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                    const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
-                    texture_type = Tegra::Shader::TextureType::Texture2D;
-                }
-                // TODO: make sure coordinates are always indexed to gpr8 and gpr20 is always bias
-                // or lod.
-                std::string op_c;
-
-                const std::string sampler =
-                    GetSampler(instr.sampler, texture_type, false, depth_compare);
-                // Add an extra scope and declare the texture coords inside to prevent
-                // overwriting them in case they are used as outputs of the texs instruction.
-
-                shader.AddLine("{");
-                ++shader.scope;
+                const auto scope = shader.Scope();
                 shader.AddLine(coord);
-                std::string texture;
 
-                switch (instr.tex.GetTextureProcessMode()) {
-                case Tegra::Shader::TextureProcessMode::None: {
-                    texture = "texture(" + sampler + ", coords)";
-                    break;
-                }
-                case Tegra::Shader::TextureProcessMode::LZ: {
-                    texture = "textureLod(" + sampler + ", coords, 0.0)";
-                    break;
-                }
-                case Tegra::Shader::TextureProcessMode::LB:
-                case Tegra::Shader::TextureProcessMode::LBA: {
-                    if (num_coordinates <= 2) {
-                        op_c = regs.GetRegisterAsFloat(instr.gpr20);
-                    } else {
-                        op_c = regs.GetRegisterAsFloat(instr.gpr20.Value() + 1);
-                    }
-                    // TODO: Figure if A suffix changes the equation at all.
-                    texture = "texture(" + sampler + ", coords, " + op_c + ')';
-                    break;
-                }
-                case Tegra::Shader::TextureProcessMode::LL:
-                case Tegra::Shader::TextureProcessMode::LLA: {
-                    if (num_coordinates <= 2) {
-                        op_c = regs.GetRegisterAsFloat(instr.gpr20);
-                    } else {
-                        op_c = regs.GetRegisterAsFloat(instr.gpr20.Value() + 1);
-                    }
-                    // TODO: Figure if A suffix changes the equation at all.
-                    texture = "textureLod(" + sampler + ", coords, " + op_c + ')';
-                    break;
-                }
-                default: {
-                    texture = "texture(" + sampler + ", coords)";
-                    LOG_CRITICAL(HW_GPU, "Unhandled texture process mode {}",
-                                 static_cast<u32>(instr.tex.GetTextureProcessMode()));
-                    UNREACHABLE();
-                }
-                }
-                if (!depth_compare) {
+                if (depth_compare) {
+                    regs.SetRegisterToFloat(instr.gpr0, 0, texture, 1, 1, false);
+                } else {
+                    shader.AddLine("vec4 texture_tmp = " + texture + ';');
                     std::size_t dest_elem{};
                     for (std::size_t elem = 0; elem < 4; ++elem) {
                         if (!instr.tex.IsComponentEnabled(elem)) {
                             // Skip disabled components
                             continue;
                         }
-                        regs.SetRegisterToFloat(instr.gpr0, elem, texture, 1, 4, false, dest_elem);
+                        regs.SetRegisterToFloat(instr.gpr0, elem, "texture_tmp", 1, 4, false,
+                                                dest_elem);
                         ++dest_elem;
                     }
-                } else {
-                    regs.SetRegisterToFloat(instr.gpr0, 0, texture, 1, 1, false);
                 }
-                --shader.scope;
-                shader.AddLine("}");
                 break;
             }
             case OpCode::Id::TEXS: {
-                std::string coord;
                 Tegra::Shader::TextureType texture_type{instr.texs.GetTextureType()};
-                bool is_array{instr.texs.IsArrayTexture()};
-
-                ASSERT_MSG(!instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
-                           "NODEP is not implemented");
-
+                const bool is_array{instr.texs.IsArrayTexture()};
                 const bool depth_compare =
                     instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::DC);
-                u32 num_coordinates = TextureCoordinates(texture_type);
-                if (depth_compare)
-                    num_coordinates += 1;
+                const auto process_mode = instr.texs.GetTextureProcessMode();
+                UNIMPLEMENTED_IF_MSG(instr.texs.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                                     "NODEP is not implemented");
 
-                switch (num_coordinates) {
-                case 2: {
-                    if (is_array) {
-                        const std::string index = regs.GetRegisterAsInteger(instr.gpr8);
-                        const std::string x = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                        const std::string y = regs.GetRegisterAsFloat(instr.gpr20);
-                        coord = "vec3 coords = vec3(" + x + ", " + y + ", " + index + ");";
-                    } else {
-                        const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                        const std::string y = regs.GetRegisterAsFloat(instr.gpr20);
-                        coord = "vec2 coords = vec2(" + x + ", " + y + ");";
-                    }
-                    break;
-                }
-                case 3: {
-                    if (is_array) {
-                        UNIMPLEMENTED_MSG("3-coordinate arrays not fully implemented");
-                        const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                        const std::string y = regs.GetRegisterAsFloat(instr.gpr20);
-                        coord = "vec2 coords = vec2(" + x + ", " + y + ");";
-                        texture_type = Tegra::Shader::TextureType::Texture2D;
-                        is_array = false;
-                    } else {
-                        const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                        const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                        const std::string z = regs.GetRegisterAsFloat(instr.gpr20);
-                        coord = "vec3 coords = vec3(" + x + ", " + y + ", " + z + ");";
-                    }
-                    break;
-                }
-                default:
-                    LOG_CRITICAL(HW_GPU, "Unhandled coordinates number {}",
-                                 static_cast<u32>(num_coordinates));
-                    UNREACHABLE();
+                const auto scope = shader.Scope();
 
-                    // Fallback to interpreting as a 2D texture for now
-                    const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
-                    const std::string y = regs.GetRegisterAsFloat(instr.gpr20);
-                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
-                    texture_type = Tegra::Shader::TextureType::Texture2D;
-                    is_array = false;
-                }
-                const std::string sampler =
-                    GetSampler(instr.sampler, texture_type, is_array, depth_compare);
-                std::string texture;
-                switch (instr.texs.GetTextureProcessMode()) {
-                case Tegra::Shader::TextureProcessMode::None: {
-                    texture = "texture(" + sampler + ", coords)";
-                    break;
-                }
-                case Tegra::Shader::TextureProcessMode::LZ: {
-                    texture = "textureLod(" + sampler + ", coords, 0.0)";
-                    break;
-                }
-                case Tegra::Shader::TextureProcessMode::LL: {
-                    const std::string op_c = regs.GetRegisterAsFloat(instr.gpr20.Value() + 1);
-                    texture = "textureLod(" + sampler + ", coords, " + op_c + ')';
-                    break;
-                }
-                default: {
-                    texture = "texture(" + sampler + ", coords)";
-                    LOG_CRITICAL(HW_GPU, "Unhandled texture process mode {}",
-                                 static_cast<u32>(instr.texs.GetTextureProcessMode()));
-                    UNREACHABLE();
-                }
-                }
+                const auto [coord, texture] =
+                    GetTEXSCode(instr, texture_type, process_mode, depth_compare, is_array);
+
+                shader.AddLine(coord);
+
                 if (!depth_compare) {
-                    WriteTexsInstruction(instr, coord, texture);
+                    shader.AddLine("vec4 texture_tmp = " + texture + ';');
+
                 } else {
-                    WriteTexsInstruction(instr, coord, "vec4(" + texture + ')');
+                    shader.AddLine("vec4 texture_tmp = vec4(" + texture + ");");
                 }
+
+                WriteTexsInstruction(instr, "texture_tmp");
                 break;
             }
             case OpCode::Id::TLDS: {
-                std::string coord;
                 const Tegra::Shader::TextureType texture_type{instr.tlds.GetTextureType()};
                 const bool is_array{instr.tlds.IsArrayTexture()};
 
                 ASSERT(texture_type == Tegra::Shader::TextureType::Texture2D);
                 ASSERT(is_array == false);
 
-                ASSERT_MSG(!instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
-                           "NODEP is not implemented");
-                ASSERT_MSG(!instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
-                           "AOFFI is not implemented");
-                ASSERT_MSG(!instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::MZ),
-                           "MZ is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                                     "NODEP is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
+                                     "AOFFI is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.tlds.UsesMiscMode(Tegra::Shader::TextureMiscMode::MZ),
+                                     "MZ is not implemented");
 
-                u32 op_c_offset = 0;
+                u32 extra_op_offset = 0;
+
+                ShaderScopedScope scope = shader.Scope();
 
                 switch (texture_type) {
                 case Tegra::Shader::TextureType::Texture1D: {
                     const std::string x = regs.GetRegisterAsInteger(instr.gpr8);
-                    coord = "int coords = " + x + ';';
+                    shader.AddLine("float coords = " + x + ';');
                     break;
                 }
                 case Tegra::Shader::TextureType::Texture2D: {
-                    if (is_array) {
-                        LOG_CRITICAL(HW_GPU, "Unhandled 2d array texture");
-                        UNREACHABLE();
-                    } else {
-                        const std::string x = regs.GetRegisterAsInteger(instr.gpr8);
-                        const std::string y = regs.GetRegisterAsInteger(instr.gpr20);
-                        coord = "ivec2 coords = ivec2(" + x + ", " + y + ");";
-                        op_c_offset = 1;
-                    }
+                    UNIMPLEMENTED_IF_MSG(is_array, "Unhandled 2d array texture");
+
+                    const std::string x = regs.GetRegisterAsInteger(instr.gpr8);
+                    const std::string y = regs.GetRegisterAsInteger(instr.gpr20);
+                    // shader.AddLine("ivec2 coords = ivec2(" + x + ", " + y + ");");
+                    shader.AddLine("ivec2 coords = ivec2(" + x + ", " + y + ");");
+                    extra_op_offset = 1;
                     break;
                 }
                 default:
-                    LOG_CRITICAL(HW_GPU, "Unhandled texture type {}",
-                                 static_cast<u32>(texture_type));
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unhandled texture type {}", static_cast<u32>(texture_type));
                 }
                 const std::string sampler =
                     GetSampler(instr.sampler, texture_type, is_array, false);
-                std::string texture = "texelFetch(" + sampler + ", coords, 0)";
-                switch (instr.tlds.GetTextureProcessMode()) {
-                case Tegra::Shader::TextureProcessMode::LZ: {
-                    texture = "texelFetch(" + sampler + ", coords, 0)";
-                    break;
-                }
-                case Tegra::Shader::TextureProcessMode::LL: {
-                    const std::string op_c =
-                        regs.GetRegisterAsInteger(instr.gpr20.Value() + op_c_offset);
-                    texture = "texelFetch(" + sampler + ", coords, " + op_c + ')';
-                    break;
-                }
-                default: {
-                    texture = "texelFetch(" + sampler + ", coords, 0)";
-                    LOG_CRITICAL(HW_GPU, "Unhandled texture process mode {}",
-                                 static_cast<u32>(instr.tlds.GetTextureProcessMode()));
-                    UNREACHABLE();
-                }
-                }
-                WriteTexsInstruction(instr, coord, texture);
+
+                const std::string texture = [&]() {
+                    switch (instr.tlds.GetTextureProcessMode()) {
+                    case Tegra::Shader::TextureProcessMode::LZ:
+                        return "texelFetch(" + sampler + ", coords, 0)";
+                    case Tegra::Shader::TextureProcessMode::LL:
+                        shader.AddLine(
+                            "float lod = " +
+                            regs.GetRegisterAsInteger(instr.gpr20.Value() + extra_op_offset) + ';');
+                        return "texelFetch(" + sampler + ", coords, lod)";
+                    default:
+                        UNIMPLEMENTED_MSG("Unhandled texture process mode {}",
+                                          static_cast<u32>(instr.tlds.GetTextureProcessMode()));
+                        return "texelFetch(" + sampler + ", coords, 0)";
+                    }
+                }();
+
+                WriteTexsInstruction(instr, texture);
                 break;
             }
             case OpCode::Id::TLD4: {
                 ASSERT(instr.tld4.texture_type == Tegra::Shader::TextureType::Texture2D);
                 ASSERT(instr.tld4.array == 0);
-                std::string coord;
 
-                ASSERT_MSG(!instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
-                           "NODEP is not implemented");
-                ASSERT_MSG(!instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
-                           "AOFFI is not implemented");
-                ASSERT_MSG(!instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::NDV),
-                           "NDV is not implemented");
-                ASSERT_MSG(!instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::PTP),
-                           "PTP is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                                     "NODEP is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
+                                     "AOFFI is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::NDV),
+                                     "NDV is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::PTP),
+                                     "PTP is not implemented");
                 const bool depth_compare =
                     instr.tld4.UsesMiscMode(Tegra::Shader::TextureMiscMode::DC);
                 auto texture_type = instr.tld4.texture_type.Value();
@@ -2323,40 +2864,40 @@ private:
                 if (depth_compare)
                     num_coordinates += 1;
 
+                const auto scope = shader.Scope();
+
                 switch (num_coordinates) {
                 case 2: {
                     const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
                     const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    shader.AddLine("vec2 coords = vec2(" + x + ", " + y + ");");
                     break;
                 }
                 case 3: {
                     const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
                     const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
                     const std::string z = regs.GetRegisterAsFloat(instr.gpr8.Value() + 2);
-                    coord = "vec3 coords = vec3(" + x + ", " + y + ", " + z + ");";
+                    shader.AddLine("vec3 coords = vec3(" + x + ", " + y + ", " + z + ");");
                     break;
                 }
                 default:
-                    LOG_CRITICAL(HW_GPU, "Unhandled coordinates number {}",
-                                 static_cast<u32>(num_coordinates));
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unhandled coordinates number {}",
+                                      static_cast<u32>(num_coordinates));
                     const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
                     const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    shader.AddLine("vec2 coords = vec2(" + x + ", " + y + ");");
                     texture_type = Tegra::Shader::TextureType::Texture2D;
                 }
 
                 const std::string sampler =
                     GetSampler(instr.sampler, texture_type, false, depth_compare);
-                // Add an extra scope and declare the texture coords inside to prevent
-                // overwriting them in case they are used as outputs of the texs instruction.
-                shader.AddLine("{");
-                ++shader.scope;
-                shader.AddLine(coord);
+
                 const std::string texture = "textureGather(" + sampler + ", coords, " +
                                             std::to_string(instr.tld4.component) + ')';
-                if (!depth_compare) {
+
+                if (depth_compare) {
+                    regs.SetRegisterToFloat(instr.gpr0, 0, texture, 1, 1, false);
+                } else {
                     std::size_t dest_elem{};
                     for (std::size_t elem = 0; elem < 4; ++elem) {
                         if (!instr.tex.IsComponentEnabled(elem)) {
@@ -2366,18 +2907,18 @@ private:
                         regs.SetRegisterToFloat(instr.gpr0, elem, texture, 1, 4, false, dest_elem);
                         ++dest_elem;
                     }
-                } else {
-                    regs.SetRegisterToFloat(instr.gpr0, 0, texture, 1, 1, false);
                 }
-                --shader.scope;
-                shader.AddLine("}");
                 break;
             }
             case OpCode::Id::TLD4S: {
-                ASSERT_MSG(!instr.tld4s.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
-                           "NODEP is not implemented");
-                ASSERT_MSG(!instr.tld4s.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
-                           "AOFFI is not implemented");
+                UNIMPLEMENTED_IF_MSG(
+                    instr.tld4s.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                    "NODEP is not implemented");
+                UNIMPLEMENTED_IF_MSG(
+                    instr.tld4s.UsesMiscMode(Tegra::Shader::TextureMiscMode::AOFFI),
+                    "AOFFI is not implemented");
+
+                const auto scope = shader.Scope();
 
                 const bool depth_compare =
                     instr.tld4s.UsesMiscMode(Tegra::Shader::TextureMiscMode::DC);
@@ -2386,52 +2927,58 @@ private:
                 // TODO(Subv): Figure out how the sampler type is encoded in the TLD4S instruction.
                 const std::string sampler = GetSampler(
                     instr.sampler, Tegra::Shader::TextureType::Texture2D, false, depth_compare);
-                std::string coord;
-                if (!depth_compare) {
-                    coord = "vec2 coords = vec2(" + op_a + ", " + op_b + ");";
-                } else {
+                if (depth_compare) {
                     // Note: TLD4S coordinate encoding works just like TEXS's
-                    const std::string op_c = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                    coord = "vec3 coords = vec3(" + op_a + ", " + op_c + ", " + op_b + ");";
-                }
-                const std::string texture = "textureGather(" + sampler + ", coords, " +
-                                            std::to_string(instr.tld4s.component) + ')';
-
-                if (!depth_compare) {
-                    WriteTexsInstruction(instr, coord, texture);
+                    const std::string op_y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
+                    shader.AddLine("vec3 coords = vec3(" + op_a + ", " + op_y + ", " + op_b + ");");
                 } else {
-                    WriteTexsInstruction(instr, coord, "vec4(" + texture + ')');
+                    shader.AddLine("vec2 coords = vec2(" + op_a + ", " + op_b + ");");
                 }
+
+                std::string texture = "textureGather(" + sampler + ", coords, " +
+                                      std::to_string(instr.tld4s.component) + ')';
+                if (depth_compare) {
+                    texture = "vec4(" + texture + ')';
+                }
+                WriteTexsInstruction(instr, texture);
                 break;
             }
             case OpCode::Id::TXQ: {
-                ASSERT_MSG(!instr.txq.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
-                           "NODEP is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.txq.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                                     "NODEP is not implemented");
 
-                // TODO: the new commits on the texture refactor, change the way samplers work.
+                const auto scope = shader.Scope();
+
+                // TODO: The new commits on the texture refactor, change the way samplers work.
                 // Sadly, not all texture instructions specify the type of texture their sampler
                 // uses. This must be fixed at a later instance.
                 const std::string sampler =
                     GetSampler(instr.sampler, Tegra::Shader::TextureType::Texture2D, false, false);
                 switch (instr.txq.query_type) {
                 case Tegra::Shader::TextureQueryType::Dimension: {
-                    const std::string texture = "textureQueryLevels(" + sampler + ')';
-                    regs.SetRegisterToInteger(instr.gpr0, true, 0, texture, 1, 1);
+                    const std::string texture = "textureSize(" + sampler + ", " +
+                                                regs.GetRegisterAsInteger(instr.gpr8) + ')';
+                    const std::string mip_level = "textureQueryLevels(" + sampler + ')';
+                    shader.AddLine("ivec2 sizes = " + texture + ';');
+
+                    regs.SetRegisterToInteger(instr.gpr0.Value() + 0, true, 0, "sizes.x", 1, 1);
+                    regs.SetRegisterToInteger(instr.gpr0.Value() + 1, true, 0, "sizes.y", 1, 1);
+                    regs.SetRegisterToInteger(instr.gpr0.Value() + 2, true, 0, "0", 1, 1);
+                    regs.SetRegisterToInteger(instr.gpr0.Value() + 3, true, 0, mip_level, 1, 1);
                     break;
                 }
                 default: {
-                    LOG_CRITICAL(HW_GPU, "Unhandled texture query type: {}",
-                                 static_cast<u32>(instr.txq.query_type.Value()));
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unhandled texture query type: {}",
+                                      static_cast<u32>(instr.txq.query_type.Value()));
                 }
                 }
                 break;
             }
             case OpCode::Id::TMML: {
-                ASSERT_MSG(!instr.tmml.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
-                           "NODEP is not implemented");
-                ASSERT_MSG(!instr.tmml.UsesMiscMode(Tegra::Shader::TextureMiscMode::NDV),
-                           "NDV is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.tmml.UsesMiscMode(Tegra::Shader::TextureMiscMode::NODEP),
+                                     "NODEP is not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.tmml.UsesMiscMode(Tegra::Shader::TextureMiscMode::NDV),
+                                     "NDV is not implemented");
 
                 const std::string x = regs.GetRegisterAsFloat(instr.gpr8);
                 const bool is_array = instr.tmml.array != 0;
@@ -2439,66 +2986,50 @@ private:
                 const std::string sampler =
                     GetSampler(instr.sampler, texture_type, is_array, false);
 
-                // TODO: add coordinates for different samplers once other texture types are
+                const auto scope = shader.Scope();
+
+                // TODO: Add coordinates for different samplers once other texture types are
                 // implemented.
-                std::string coord;
                 switch (texture_type) {
                 case Tegra::Shader::TextureType::Texture1D: {
-                    coord = "float coords = " + x + ';';
+                    shader.AddLine("float coords = " + x + ';');
                     break;
                 }
                 case Tegra::Shader::TextureType::Texture2D: {
                     const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    shader.AddLine("vec2 coords = vec2(" + x + ", " + y + ");");
                     break;
                 }
                 default:
-                    LOG_CRITICAL(HW_GPU, "Unhandled texture type {}",
-                                 static_cast<u32>(texture_type));
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unhandled texture type {}", static_cast<u32>(texture_type));
 
                     // Fallback to interpreting as a 2D texture for now
                     const std::string y = regs.GetRegisterAsFloat(instr.gpr8.Value() + 1);
-                    coord = "vec2 coords = vec2(" + x + ", " + y + ");";
+                    shader.AddLine("vec2 coords = vec2(" + x + ", " + y + ");");
                     texture_type = Tegra::Shader::TextureType::Texture2D;
                 }
-                // Add an extra scope and declare the texture coords inside to prevent
-                // overwriting them in case they are used as outputs of the texs instruction.
-                shader.AddLine('{');
-                ++shader.scope;
-                shader.AddLine(coord);
+
                 const std::string texture = "textureQueryLod(" + sampler + ", coords)";
-                const std::string tmp = "vec2 tmp = " + texture + "*vec2(256.0, 256.0);";
-                shader.AddLine(tmp);
+                shader.AddLine("vec2 tmp = " + texture + " * vec2(256.0, 256.0);");
 
                 regs.SetRegisterToInteger(instr.gpr0, true, 0, "int(tmp.y)", 1, 1);
                 regs.SetRegisterToInteger(instr.gpr0.Value() + 1, false, 0, "uint(tmp.x)", 1, 1);
-                --shader.scope;
-                shader.AddLine('}');
                 break;
             }
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled memory instruction: {}", opcode->GetName());
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled memory instruction: {}", opcode->get().GetName());
             }
             }
             break;
         }
         case OpCode::Type::FloatSetPredicate: {
-            std::string op_a = instr.fsetp.neg_a ? "-" : "";
-            op_a += regs.GetRegisterAsFloat(instr.gpr8);
+            const std::string op_a =
+                GetOperandAbsNeg(regs.GetRegisterAsFloat(instr.gpr8), instr.fsetp.abs_a != 0,
+                                 instr.fsetp.neg_a != 0);
 
-            if (instr.fsetp.abs_a) {
-                op_a = "abs(" + op_a + ')';
-            }
-
-            std::string op_b{};
+            std::string op_b;
 
             if (instr.is_b_imm) {
-                if (instr.fsetp.neg_b) {
-                    // Only the immediate version of fsetp has a neg_b bit.
-                    op_b += '-';
-                }
                 op_b += '(' + GetImmediate19(instr) + ')';
             } else {
                 if (instr.is_b_gpr) {
@@ -2571,7 +3102,55 @@ private:
             }
             break;
         }
+        case OpCode::Type::HalfSetPredicate: {
+            UNIMPLEMENTED_IF(instr.hsetp2.ftz != 0);
+
+            const std::string op_a =
+                GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr8, 0, false), instr.hsetp2.type_a,
+                             instr.hsetp2.abs_a, instr.hsetp2.negate_a);
+
+            const std::string op_b = [&]() {
+                switch (opcode->get().GetId()) {
+                case OpCode::Id::HSETP2_R:
+                    return GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr20, 0, false),
+                                        instr.hsetp2.type_b, instr.hsetp2.abs_a,
+                                        instr.hsetp2.negate_b);
+                default:
+                    UNREACHABLE();
+                    return std::string("vec2(0)");
+                }
+            }();
+
+            // We can't use the constant predicate as destination.
+            ASSERT(instr.hsetp2.pred3 != static_cast<u64>(Pred::UnusedIndex));
+
+            const std::string second_pred =
+                GetPredicateCondition(instr.hsetp2.pred39, instr.hsetp2.neg_pred != 0);
+
+            const std::string combiner = GetPredicateCombiner(instr.hsetp2.op);
+
+            const std::string component_combiner = instr.hsetp2.h_and ? "&&" : "||";
+            const std::string predicate =
+                '(' + GetPredicateComparison(instr.hsetp2.cond, op_a + ".x", op_b + ".x") + ' ' +
+                component_combiner + ' ' +
+                GetPredicateComparison(instr.hsetp2.cond, op_a + ".y", op_b + ".y") + ')';
+
+            // Set the primary predicate to the result of Predicate OP SecondPredicate
+            SetPredicate(instr.hsetp2.pred3,
+                         '(' + predicate + ") " + combiner + " (" + second_pred + ')');
+
+            if (instr.hsetp2.pred0 != static_cast<u64>(Pred::UnusedIndex)) {
+                // Set the secondary predicate to the result of !Predicate OP SecondPredicate,
+                // if enabled
+                SetPredicate(instr.hsetp2.pred0,
+                             "!(" + predicate + ") " + combiner + " (" + second_pred + ')');
+            }
+            break;
+        }
         case OpCode::Type::PredicateSetRegister: {
+            UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                 "Condition codes generation in PSET is not implemented");
+
             const std::string op_a =
                 GetPredicateCondition(instr.pset.pred12, instr.pset.neg_pred12 != 0);
             const std::string op_b =
@@ -2592,11 +3171,10 @@ private:
                 const std::string value = '(' + result + ") ? 1.0 : 0.0";
                 regs.SetRegisterToFloat(instr.gpr0, 0, value, 1, 1);
             }
-
             break;
         }
         case OpCode::Type::PredicateSetPredicate: {
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::PSETP: {
                 const std::string op_a =
                     GetPredicateCondition(instr.psetp.pred12, instr.psetp.neg_pred12 != 0);
@@ -2630,52 +3208,70 @@ private:
                 const std::string pred =
                     GetPredicateCondition(instr.csetp.pred39, instr.csetp.neg_pred39 != 0);
                 const std::string combiner = GetPredicateCombiner(instr.csetp.op);
-                const std::string controlCode = regs.GetControlCode(instr.csetp.cc);
+                const std::string condition_code = regs.GetConditionCode(instr.csetp.cc);
                 if (instr.csetp.pred3 != static_cast<u64>(Pred::UnusedIndex)) {
                     SetPredicate(instr.csetp.pred3,
-                                 '(' + controlCode + ") " + combiner + " (" + pred + ')');
+                                 '(' + condition_code + ") " + combiner + " (" + pred + ')');
                 }
                 if (instr.csetp.pred0 != static_cast<u64>(Pred::UnusedIndex)) {
                     SetPredicate(instr.csetp.pred0,
-                                 "!(" + controlCode + ") " + combiner + " (" + pred + ')');
+                                 "!(" + condition_code + ") " + combiner + " (" + pred + ')');
                 }
                 break;
             }
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled predicate instruction: {}", opcode->GetName());
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled predicate instruction: {}", opcode->get().GetName());
             }
             }
             break;
         }
-        case OpCode::Type::FloatSet: {
-            std::string op_a = instr.fset.neg_a ? "-" : "";
-            op_a += regs.GetRegisterAsFloat(instr.gpr8);
+        case OpCode::Type::RegisterSetPredicate: {
+            UNIMPLEMENTED_IF(instr.r2p.mode != Tegra::Shader::R2pMode::Pr);
 
-            if (instr.fset.abs_a) {
-                op_a = "abs(" + op_a + ')';
+            const std::string apply_mask = [&]() {
+                switch (opcode->get().GetId()) {
+                case OpCode::Id::R2P_IMM:
+                    return std::to_string(instr.r2p.immediate_mask);
+                default:
+                    UNREACHABLE();
+                }
+            }();
+            const std::string mask = '(' + regs.GetRegisterAsInteger(instr.gpr8, 0, false) +
+                                     " >> " + std::to_string(instr.r2p.byte) + ')';
+
+            constexpr u64 programmable_preds = 7;
+            for (u64 pred = 0; pred < programmable_preds; ++pred) {
+                const auto shift = std::to_string(1 << pred);
+
+                shader.AddLine("if ((" + apply_mask + " & " + shift + ") != 0) {");
+                ++shader.scope;
+
+                SetPredicate(pred, '(' + mask + " & " + shift + ") != 0");
+
+                --shader.scope;
+                shader.AddLine('}');
             }
+            break;
+        }
+        case OpCode::Type::FloatSet: {
+            const std::string op_a = GetOperandAbsNeg(regs.GetRegisterAsFloat(instr.gpr8),
+                                                      instr.fset.abs_a != 0, instr.fset.neg_a != 0);
 
-            std::string op_b = instr.fset.neg_b ? "-" : "";
+            std::string op_b;
 
             if (instr.is_b_imm) {
                 const std::string imm = GetImmediate19(instr);
-                if (instr.fset.neg_imm)
-                    op_b += "(-" + imm + ')';
-                else
-                    op_b += imm;
+                op_b = imm;
             } else {
                 if (instr.is_b_gpr) {
-                    op_b += regs.GetRegisterAsFloat(instr.gpr20);
+                    op_b = regs.GetRegisterAsFloat(instr.gpr20);
                 } else {
-                    op_b += regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
-                                            GLSLRegister::Type::Float);
+                    op_b = regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
+                                           GLSLRegister::Type::Float);
                 }
             }
 
-            if (instr.fset.abs_b) {
-                op_b = "abs(" + op_b + ')';
-            }
+            op_b = GetOperandAbsNeg(op_b, instr.fset.abs_b != 0, instr.fset.neg_b != 0);
 
             // The fset instruction sets a register to 1.0 or -1 (depending on the bf bit) if the
             // condition is true, and to 0 otherwise.
@@ -2693,6 +3289,10 @@ private:
             } else {
                 regs.SetRegisterToInteger(instr.gpr0, false, 0, predicate + " ? 0xFFFFFFFF : 0", 1,
                                           1);
+            }
+            if (instr.generates_cc.Value() != 0) {
+                regs.SetInternalFlag(InternalFlag::ZeroFlag, predicate);
+                LOG_WARNING(HW_GPU, "FSET Condition Code is incomplete");
             }
             break;
         }
@@ -2731,20 +3331,66 @@ private:
             }
             break;
         }
+        case OpCode::Type::HalfSet: {
+            UNIMPLEMENTED_IF(instr.hset2.ftz != 0);
+
+            const std::string op_a =
+                GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr8, 0, false), instr.hset2.type_a,
+                             instr.hset2.abs_a != 0, instr.hset2.negate_a != 0);
+
+            const std::string op_b = [&]() {
+                switch (opcode->get().GetId()) {
+                case OpCode::Id::HSET2_R:
+                    return GetHalfFloat(regs.GetRegisterAsInteger(instr.gpr20, 0, false),
+                                        instr.hset2.type_b, instr.hset2.abs_b != 0,
+                                        instr.hset2.negate_b != 0);
+                default:
+                    UNREACHABLE();
+                    return std::string("vec2(0)");
+                }
+            }();
+
+            const std::string second_pred =
+                GetPredicateCondition(instr.hset2.pred39, instr.hset2.neg_pred != 0);
+
+            const std::string combiner = GetPredicateCombiner(instr.hset2.op);
+
+            // HSET2 operates on each half float in the pack.
+            std::string result;
+            for (int i = 0; i < 2; ++i) {
+                const std::string float_value = i == 0 ? "0x00003c00" : "0x3c000000";
+                const std::string integer_value = i == 0 ? "0x0000ffff" : "0xffff0000";
+                const std::string value = instr.hset2.bf == 1 ? float_value : integer_value;
+
+                const std::string comp = std::string(".") + "xy"[i];
+                const std::string predicate =
+                    "((" + GetPredicateComparison(instr.hset2.cond, op_a + comp, op_b + comp) +
+                    ") " + combiner + " (" + second_pred + "))";
+
+                result += '(' + predicate + " ? " + value + " : 0)";
+                if (i == 0) {
+                    result += " | ";
+                }
+            }
+            regs.SetRegisterToInteger(instr.gpr0, false, 0, '(' + result + ')', 1, 1);
+            break;
+        }
         case OpCode::Type::Xmad: {
-            ASSERT_MSG(!instr.xmad.sign_a, "Unimplemented");
-            ASSERT_MSG(!instr.xmad.sign_b, "Unimplemented");
+            UNIMPLEMENTED_IF(instr.xmad.sign_a);
+            UNIMPLEMENTED_IF(instr.xmad.sign_b);
+            UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                 "Condition codes generation in XMAD is not implemented");
 
             std::string op_a{regs.GetRegisterAsInteger(instr.gpr8, 0, instr.xmad.sign_a)};
             std::string op_b;
             std::string op_c;
 
             // TODO(bunnei): Needs to be fixed once op_a or op_b is signed
-            ASSERT_MSG(instr.xmad.sign_a == instr.xmad.sign_b, "Unimplemented");
+            UNIMPLEMENTED_IF(instr.xmad.sign_a != instr.xmad.sign_b);
             const bool is_signed{instr.xmad.sign_a == 1};
 
             bool is_merge{};
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::XMAD_CR: {
                 is_merge = instr.xmad.merge_56;
                 op_b += regs.GetUniform(instr.cbuf34.index, instr.cbuf34.offset,
@@ -2773,8 +3419,7 @@ private:
                 break;
             }
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled XMAD instruction: {}", opcode->GetName());
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled XMAD instruction: {}", opcode->get().GetName());
             }
             }
 
@@ -2810,9 +3455,8 @@ private:
                 op_c = "((" + op_c + ") + (" + src2 + "<< 16))";
                 break;
             default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled XMAD mode: {}",
-                             static_cast<u32>(instr.xmad.mode.Value()));
-                UNREACHABLE();
+                UNIMPLEMENTED_MSG("Unhandled XMAD mode: {}",
+                                  static_cast<u32>(instr.xmad.mode.Value()));
             }
             }
 
@@ -2825,8 +3469,12 @@ private:
             break;
         }
         default: {
-            switch (opcode->GetId()) {
+            switch (opcode->get().GetId()) {
             case OpCode::Id::EXIT: {
+                const Tegra::Shader::ConditionCode cc = instr.flow_condition_code;
+                UNIMPLEMENTED_IF_MSG(cc != Tegra::Shader::ConditionCode::T,
+                                     "EXIT condition code used: {}", static_cast<u32>(cc));
+
                 if (stage == Maxwell3D::Regs::ShaderStage::Fragment) {
                     EmitFragmentOutputsWrite();
                 }
@@ -2845,18 +3493,21 @@ private:
                 case Tegra::Shader::FlowCondition::Fcsm_Tr:
                     // TODO(bunnei): What is this used for? If we assume this conditon is not
                     // satisifed, dual vertex shaders in Farming Simulator make more sense
-                    LOG_CRITICAL(HW_GPU, "Skipping unknown FlowCondition::Fcsm_Tr");
+                    UNIMPLEMENTED_MSG("Skipping unknown FlowCondition::Fcsm_Tr");
                     break;
 
                 default:
-                    LOG_CRITICAL(HW_GPU, "Unhandled flow condition: {}",
-                                 static_cast<u32>(instr.flow.cond.Value()));
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unhandled flow condition: {}",
+                                      static_cast<u32>(instr.flow.cond.Value()));
                 }
                 break;
             }
             case OpCode::Id::KIL: {
-                ASSERT(instr.flow.cond == Tegra::Shader::FlowCondition::Always);
+                UNIMPLEMENTED_IF(instr.flow.cond != Tegra::Shader::FlowCondition::Always);
+
+                const Tegra::Shader::ConditionCode cc = instr.flow_condition_code;
+                UNIMPLEMENTED_IF_MSG(cc != Tegra::Shader::ConditionCode::T,
+                                     "KIL condition code used: {}", static_cast<u32>(cc));
 
                 // Enclose "discard" in a conditional, so that GLSL compilation does not complain
                 // about unexecuted instructions that may follow this.
@@ -2869,7 +3520,8 @@ private:
                 break;
             }
             case OpCode::Id::OUT_R: {
-                ASSERT(instr.gpr20.Value() == Register::ZeroIndex);
+                UNIMPLEMENTED_IF_MSG(instr.gpr20.Value() != Register::ZeroIndex,
+                                     "Stream buffer is not supported");
                 ASSERT_MSG(stage == Maxwell3D::Regs::ShaderStage::Geometry,
                            "OUT is expected to be used in a geometry shader.");
 
@@ -2895,19 +3547,23 @@ private:
                     regs.SetRegisterToInteger(instr.gpr0, false, 0, "0u", 1, 1);
                     break;
                 }
+                case Tegra::Shader::SystemVariable::Ydirection: {
+                    // Config pack's third value is Y_NEGATE's state.
+                    regs.SetRegisterToFloat(instr.gpr0, 0, "uintBitsToFloat(config_pack[2])", 1, 1);
+                    break;
+                }
                 default: {
-                    LOG_CRITICAL(HW_GPU, "Unhandled system move: {}",
-                                 static_cast<u32>(instr.sys20.Value()));
-                    UNREACHABLE();
+                    UNIMPLEMENTED_MSG("Unhandled system move: {}",
+                                      static_cast<u32>(instr.sys20.Value()));
                 }
                 }
                 break;
             }
             case OpCode::Id::ISBERD: {
-                ASSERT(instr.isberd.o == 0);
-                ASSERT(instr.isberd.skew == 0);
-                ASSERT(instr.isberd.shift == Tegra::Shader::IsberdShift::None);
-                ASSERT(instr.isberd.mode == Tegra::Shader::IsberdMode::None);
+                UNIMPLEMENTED_IF(instr.isberd.o != 0);
+                UNIMPLEMENTED_IF(instr.isberd.skew != 0);
+                UNIMPLEMENTED_IF(instr.isberd.shift != Tegra::Shader::IsberdShift::None);
+                UNIMPLEMENTED_IF(instr.isberd.mode != Tegra::Shader::IsberdMode::None);
                 ASSERT_MSG(stage == Maxwell3D::Regs::ShaderStage::Geometry,
                            "ISBERD is expected to be used in a geometry shader.");
                 LOG_WARNING(HW_GPU, "ISBERD instruction is incomplete");
@@ -2915,10 +3571,21 @@ private:
                 break;
             }
             case OpCode::Id::BRA: {
-                ASSERT_MSG(instr.bra.constant_buffer == 0,
-                           "BRA with constant buffers are not implemented");
+                UNIMPLEMENTED_IF_MSG(instr.bra.constant_buffer != 0,
+                                     "BRA with constant buffers are not implemented");
+
+                const Tegra::Shader::ConditionCode cc = instr.flow_condition_code;
                 const u32 target = offset + instr.bra.GetBranchTarget();
-                shader.AddLine("{ jmp_to = " + std::to_string(target) + "u; break; }");
+                if (cc != Tegra::Shader::ConditionCode::T) {
+                    const std::string condition_code = regs.GetConditionCode(cc);
+                    shader.AddLine("if (" + condition_code + "){");
+                    shader.scope++;
+                    shader.AddLine("{ jmp_to = " + std::to_string(target) + "u; break; }");
+                    shader.scope--;
+                    shader.AddLine('}');
+                } else {
+                    shader.AddLine("{ jmp_to = " + std::to_string(target) + "u; break; }");
+                }
                 break;
             }
             case OpCode::Id::IPA: {
@@ -2939,16 +3606,40 @@ private:
                 // The SSY opcode tells the GPU where to re-converge divergent execution paths, it
                 // sets the target of the jump that the SYNC instruction will make. The SSY opcode
                 // has a similar structure to the BRA opcode.
-                ASSERT_MSG(instr.bra.constant_buffer == 0, "Constant buffer SSY is not supported");
+                UNIMPLEMENTED_IF_MSG(instr.bra.constant_buffer != 0,
+                                     "Constant buffer flow is not supported");
 
                 const u32 target = offset + instr.bra.GetBranchTarget();
-                EmitPushToSSYStack(target);
+                EmitPushToFlowStack(target);
+                break;
+            }
+            case OpCode::Id::PBK: {
+                // PBK pushes to a stack the address where BRK will jump to. This shares stack with
+                // SSY but using SYNC on a PBK address will kill the shader execution. We don't
+                // emulate this because it's very unlikely a driver will emit such invalid shader.
+                UNIMPLEMENTED_IF_MSG(instr.bra.constant_buffer != 0,
+                                     "Constant buffer PBK is not supported");
+
+                const u32 target = offset + instr.bra.GetBranchTarget();
+                EmitPushToFlowStack(target);
                 break;
             }
             case OpCode::Id::SYNC: {
+                const Tegra::Shader::ConditionCode cc = instr.flow_condition_code;
+                UNIMPLEMENTED_IF_MSG(cc != Tegra::Shader::ConditionCode::T,
+                                     "SYNC condition code used: {}", static_cast<u32>(cc));
+
                 // The SYNC opcode jumps to the address previously set by the SSY opcode
-                ASSERT(instr.flow.cond == Tegra::Shader::FlowCondition::Always);
-                EmitPopFromSSYStack();
+                EmitPopFromFlowStack();
+                break;
+            }
+            case OpCode::Id::BRK: {
+                // The BRK opcode jumps to the address previously set by the PBK opcode
+                const Tegra::Shader::ConditionCode cc = instr.flow_condition_code;
+                UNIMPLEMENTED_IF_MSG(cc != Tegra::Shader::ConditionCode::T,
+                                     "BRK condition code used: {}", static_cast<u32>(cc));
+
+                EmitPopFromFlowStack();
                 break;
             }
             case OpCode::Id::DEPBAR: {
@@ -2958,91 +3649,55 @@ private:
                 break;
             }
             case OpCode::Id::VMAD: {
-                const bool signed_a = instr.vmad.signed_a == 1;
-                const bool signed_b = instr.vmad.signed_b == 1;
-                const bool result_signed = signed_a || signed_b;
-                boost::optional<std::string> forced_result;
+                UNIMPLEMENTED_IF_MSG(instr.generates_cc,
+                                     "Condition codes generation in VMAD is not implemented");
 
-                auto Unpack = [&](const std::string& op, bool is_chunk, bool is_signed,
-                                  Tegra::Shader::VmadType type, u64 byte_height) {
-                    const std::string value = [&]() {
-                        if (!is_chunk) {
-                            const auto offset = static_cast<u32>(byte_height * 8);
-                            return "((" + op + " >> " + std::to_string(offset) + ") & 0xff)";
-                        }
-                        const std::string zero = "0";
-
-                        switch (type) {
-                        case Tegra::Shader::VmadType::Size16_Low:
-                            return '(' + op + " & 0xffff)";
-                        case Tegra::Shader::VmadType::Size16_High:
-                            return '(' + op + " >> 16)";
-                        case Tegra::Shader::VmadType::Size32:
-                            // TODO(Rodrigo): From my hardware tests it becomes a bit "mad" when
-                            // this type is used (1 * 1 + 0 == 0x5b800000). Until a better
-                            // explanation is found: assert.
-                            UNREACHABLE_MSG("Unimplemented");
-                            return zero;
-                        case Tegra::Shader::VmadType::Invalid:
-                            // Note(Rodrigo): This flag is invalid according to nvdisasm. From my
-                            // testing (even though it's invalid) this makes the whole instruction
-                            // assign zero to target register.
-                            forced_result = boost::make_optional(zero);
-                            return zero;
-                        default:
-                            UNREACHABLE();
-                            return zero;
-                        }
-                    }();
-
-                    if (is_signed) {
-                        return "int(" + value + ')';
-                    }
-                    return value;
-                };
-
-                const std::string op_a = Unpack(regs.GetRegisterAsInteger(instr.gpr8, 0, false),
-                                                instr.vmad.is_byte_chunk_a != 0, signed_a,
-                                                instr.vmad.type_a, instr.vmad.byte_height_a);
-
-                std::string op_b;
-                if (instr.vmad.use_register_b) {
-                    op_b = Unpack(regs.GetRegisterAsInteger(instr.gpr20, 0, false),
-                                  instr.vmad.is_byte_chunk_b != 0, signed_b, instr.vmad.type_b,
-                                  instr.vmad.byte_height_b);
-                } else {
-                    op_b = '(' +
-                           std::to_string(signed_b ? static_cast<s16>(instr.alu.GetImm20_16())
-                                                   : instr.alu.GetImm20_16()) +
-                           ')';
-                }
-
+                const bool result_signed = instr.video.signed_a == 1 || instr.video.signed_b == 1;
+                const std::string op_a = GetVideoOperandA(instr);
+                const std::string op_b = GetVideoOperandB(instr);
                 const std::string op_c = regs.GetRegisterAsInteger(instr.gpr39, 0, result_signed);
 
-                std::string result;
-                if (forced_result) {
-                    result = *forced_result;
-                } else {
-                    result = '(' + op_a + " * " + op_b + " + " + op_c + ')';
+                std::string result = '(' + op_a + " * " + op_b + " + " + op_c + ')';
 
-                    switch (instr.vmad.shr) {
-                    case Tegra::Shader::VmadShr::Shr7:
-                        result = '(' + result + " >> 7)";
-                        break;
-                    case Tegra::Shader::VmadShr::Shr15:
-                        result = '(' + result + " >> 15)";
-                        break;
-                    }
+                switch (instr.vmad.shr) {
+                case Tegra::Shader::VmadShr::Shr7:
+                    result = '(' + result + " >> 7)";
+                    break;
+                case Tegra::Shader::VmadShr::Shr15:
+                    result = '(' + result + " >> 15)";
+                    break;
                 }
+
                 regs.SetRegisterToInteger(instr.gpr0, result_signed, 1, result, 1, 1,
                                           instr.vmad.saturate == 1, 0, Register::Size::Word,
                                           instr.vmad.cc);
                 break;
             }
-            default: {
-                LOG_CRITICAL(HW_GPU, "Unhandled instruction: {}", opcode->GetName());
-                UNREACHABLE();
+            case OpCode::Id::VSETP: {
+                const std::string op_a = GetVideoOperandA(instr);
+                const std::string op_b = GetVideoOperandB(instr);
+
+                // We can't use the constant predicate as destination.
+                ASSERT(instr.vsetp.pred3 != static_cast<u64>(Pred::UnusedIndex));
+
+                const std::string second_pred = GetPredicateCondition(instr.vsetp.pred39, false);
+
+                const std::string combiner = GetPredicateCombiner(instr.vsetp.op);
+
+                const std::string predicate = GetPredicateComparison(instr.vsetp.cond, op_a, op_b);
+                // Set the primary predicate to the result of Predicate OP SecondPredicate
+                SetPredicate(instr.vsetp.pred3,
+                             '(' + predicate + ") " + combiner + " (" + second_pred + ')');
+
+                if (instr.vsetp.pred0 != static_cast<u64>(Pred::UnusedIndex)) {
+                    // Set the secondary predicate to the result of !Predicate OP SecondPredicate,
+                    // if enabled
+                    SetPredicate(instr.vsetp.pred0,
+                                 "!(" + predicate + ") " + combiner + " (" + second_pred + ')');
+                }
+                break;
             }
+            default: { UNIMPLEMENTED_MSG("Unhandled instruction: {}", opcode->get().GetName()); }
             }
 
             break;
@@ -3102,11 +3757,11 @@ private:
                 labels.insert(subroutine.begin);
                 shader.AddLine("uint jmp_to = " + std::to_string(subroutine.begin) + "u;");
 
-                // TODO(Subv): Figure out the actual depth of the SSY stack, for now it seems
-                // unlikely that shaders will use 20 nested SSYs.
-                constexpr u32 SSY_STACK_SIZE = 20;
-                shader.AddLine("uint ssy_stack[" + std::to_string(SSY_STACK_SIZE) + "];");
-                shader.AddLine("uint ssy_stack_top = 0u;");
+                // TODO(Subv): Figure out the actual depth of the flow stack, for now it seems
+                // unlikely that shaders will use 20 nested SSYs and PBKs.
+                constexpr u32 FLOW_STACK_SIZE = 20;
+                shader.AddLine("uint flow_stack[" + std::to_string(FLOW_STACK_SIZE) + "];");
+                shader.AddLine("uint flow_stack_top = 0u;");
 
                 shader.AddLine("while (true) {");
                 ++shader.scope;
@@ -3166,6 +3821,8 @@ private:
     const u32 main_offset;
     Maxwell3D::Regs::ShaderStage stage;
     const std::string& suffix;
+    u64 local_memory_size;
+    std::size_t shader_length;
 
     ShaderWriter shader;
     ShaderWriter declarations;
@@ -3173,25 +3830,26 @@ private:
 
     // Declarations
     std::set<std::string> declr_predicates;
-}; // namespace Decompiler
+}; // namespace OpenGL::GLShader::Decompiler
 
 std::string GetCommonDeclarations() {
     return fmt::format("#define MAX_CONSTBUFFER_ELEMENTS {}\n",
                        RasterizerOpenGL::MaxConstbufferSize / sizeof(GLvec4));
 }
 
-boost::optional<ProgramResult> DecompileProgram(const ProgramCode& program_code, u32 main_offset,
-                                                Maxwell3D::Regs::ShaderStage stage,
-                                                const std::string& suffix) {
+std::optional<ProgramResult> DecompileProgram(const ProgramCode& program_code, u32 main_offset,
+                                              Maxwell3D::Regs::ShaderStage stage,
+                                              const std::string& suffix) {
     try {
-        const auto subroutines =
-            ControlFlowAnalyzer(program_code, main_offset, suffix).GetSubroutines();
-        GLSLGenerator generator(subroutines, program_code, main_offset, stage, suffix);
+        ControlFlowAnalyzer analyzer(program_code, main_offset, suffix);
+        const auto subroutines = analyzer.GetSubroutines();
+        GLSLGenerator generator(subroutines, program_code, main_offset, stage, suffix,
+                                analyzer.GetShaderLength());
         return ProgramResult{generator.GetShaderCode(), generator.GetEntries()};
     } catch (const DecompileFail& exception) {
         LOG_ERROR(HW_GPU, "Shader decompilation failed: {}", exception.what());
     }
-    return boost::none;
+    return {};
 }
 
 } // namespace OpenGL::GLShader::Decompiler

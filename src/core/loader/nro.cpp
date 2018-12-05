@@ -10,12 +10,13 @@
 #include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/swap.h"
-#include "core/core.h"
 #include "core/file_sys/control_metadata.h"
+#include "core/file_sys/romfs_factory.h"
 #include "core/file_sys/vfs_offset.h"
 #include "core/gdbstub/gdbstub.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/vm_manager.h"
+#include "core/hle/service/filesystem/filesystem.h"
 #include "core/loader/nro.h"
 #include "core/loader/nso.h"
 #include "core/memory.h"
@@ -127,18 +128,22 @@ static constexpr u32 PageAlignSize(u32 size) {
     return (size + Memory::PAGE_MASK) & ~Memory::PAGE_MASK;
 }
 
-bool AppLoader_NRO::LoadNro(FileSys::VirtualFile file, VAddr load_base) {
-    // Read NSO header
-    NroHeader nro_header{};
-    if (sizeof(NroHeader) != file->ReadObject(&nro_header)) {
+static bool LoadNroImpl(Kernel::Process& process, const std::vector<u8>& data,
+                        const std::string& name, VAddr load_base) {
+    if (data.size() < sizeof(NroHeader)) {
         return {};
     }
+
+    // Read NSO header
+    NroHeader nro_header{};
+    std::memcpy(&nro_header, data.data(), sizeof(NroHeader));
     if (nro_header.magic != Common::MakeMagic('N', 'R', 'O', '0')) {
         return {};
     }
 
     // Build program image
-    std::vector<u8> program_image = file->ReadBytes(PageAlignSize(nro_header.file_size));
+    std::vector<u8> program_image(PageAlignSize(nro_header.file_size));
+    std::memcpy(program_image.data(), data.data(), program_image.size());
     if (program_image.size() != PageAlignSize(nro_header.file_size)) {
         return {};
     }
@@ -163,28 +168,36 @@ bool AppLoader_NRO::LoadNro(FileSys::VirtualFile file, VAddr load_base) {
                     arg_data.size());
     }
 
-    // Read MOD header
-    ModHeader mod_header{};
     // Default .bss to NRO header bss size if MOD0 section doesn't exist
     u32 bss_size{PageAlignSize(nro_header.bss_size)};
+
+    // Read MOD header
+    ModHeader mod_header{};
     std::memcpy(&mod_header, program_image.data() + nro_header.module_header_offset,
                 sizeof(ModHeader));
+
     const bool has_mod_header{mod_header.magic == Common::MakeMagic('M', 'O', 'D', '0')};
     if (has_mod_header) {
         // Resize program image to include .bss section and page align each section
         bss_size = PageAlignSize(mod_header.bss_end_offset - mod_header.bss_start_offset);
     }
+
     codeset.DataSegment().size += bss_size;
     program_image.resize(static_cast<u32>(program_image.size()) + bss_size);
 
     // Load codeset for current process
     codeset.memory = std::make_shared<std::vector<u8>>(std::move(program_image));
-    Core::CurrentProcess()->LoadModule(std::move(codeset), load_base);
+    process.LoadModule(std::move(codeset), load_base);
 
     // Register module with GDBStub
-    GDBStub::RegisterModule(file->GetName(), load_base, load_base);
+    GDBStub::RegisterModule(name, load_base, load_base);
 
     return true;
+}
+
+bool AppLoader_NRO::LoadNro(Kernel::Process& process, const FileSys::VfsFile& file,
+                            VAddr load_base) {
+    return LoadNroImpl(process, file.ReadAllBytes(), file.GetName(), load_base);
 }
 
 ResultStatus AppLoader_NRO::Load(Kernel::Process& process) {
@@ -195,9 +208,12 @@ ResultStatus AppLoader_NRO::Load(Kernel::Process& process) {
     // Load NRO
     const VAddr base_address = process.VMManager().GetCodeRegionBaseAddress();
 
-    if (!LoadNro(file, base_address)) {
+    if (!LoadNro(process, *file, base_address)) {
         return ResultStatus::ErrorLoadingNRO;
     }
+
+    if (romfs != nullptr)
+        Service::FileSystem::RegisterRomFS(std::make_unique<FileSys::RomFSFactory>(*this));
 
     process.Run(base_address, Kernel::THREADPRIO_DEFAULT, Memory::DEFAULT_STACK_SIZE);
 

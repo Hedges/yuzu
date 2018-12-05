@@ -16,11 +16,13 @@ class ConfigureGameList : public QWidget {
 
 public:
     explicit ConfigureGameList(QWidget* parent = nullptr);
-    ~ConfigureGameList();
+    ~ConfigureGameList() override;
 
     void applyConfiguration();
 
 private:
+    void RequestGameListUpdate();
+
     void setConfiguration();
 
     void changeEvent(QEvent*) override;

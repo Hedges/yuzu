@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
 #include <regex>
 #include <mbedtls/sha256.h>
 #include "common/assert.h"
@@ -28,6 +29,14 @@ std::string RegisteredCacheEntry::DebugInfo() const {
 
 bool operator<(const RegisteredCacheEntry& lhs, const RegisteredCacheEntry& rhs) {
     return (lhs.title_id < rhs.title_id) || (lhs.title_id == rhs.title_id && lhs.type < rhs.type);
+}
+
+bool operator==(const RegisteredCacheEntry& lhs, const RegisteredCacheEntry& rhs) {
+    return std::tie(lhs.title_id, lhs.type) == std::tie(rhs.title_id, rhs.type);
+}
+
+bool operator!=(const RegisteredCacheEntry& lhs, const RegisteredCacheEntry& rhs) {
+    return !operator==(lhs, rhs);
 }
 
 static bool FollowsTwoDigitDirFormat(std::string_view name) {
@@ -97,40 +106,42 @@ static ContentRecordType GetCRTypeFromNCAType(NCAContentType type) {
 
 VirtualFile RegisteredCache::OpenFileOrDirectoryConcat(const VirtualDir& dir,
                                                        std::string_view path) const {
-    if (dir->GetFileRelative(path) != nullptr)
-        return dir->GetFileRelative(path);
-    if (dir->GetDirectoryRelative(path) != nullptr) {
-        const auto nca_dir = dir->GetDirectoryRelative(path);
-        VirtualFile file = nullptr;
-
-        const auto files = nca_dir->GetFiles();
-        if (files.size() == 1 && files[0]->GetName() == "00") {
-            file = files[0];
-        } else {
-            std::vector<VirtualFile> concat;
-            // Since the files are a two-digit hex number, max is FF.
-            for (std::size_t i = 0; i < 0x100; ++i) {
-                auto next = nca_dir->GetFile(fmt::format("{:02X}", i));
-                if (next != nullptr) {
-                    concat.push_back(std::move(next));
-                } else {
-                    next = nca_dir->GetFile(fmt::format("{:02x}", i));
-                    if (next != nullptr)
-                        concat.push_back(std::move(next));
-                    else
-                        break;
-                }
-            }
-
-            if (concat.empty())
-                return nullptr;
-
-            file = ConcatenatedVfsFile::MakeConcatenatedFile(concat, concat.front()->GetName());
-        }
-
+    const auto file = dir->GetFileRelative(path);
+    if (file != nullptr) {
         return file;
     }
-    return nullptr;
+
+    const auto nca_dir = dir->GetDirectoryRelative(path);
+    if (nca_dir == nullptr) {
+        return nullptr;
+    }
+
+    const auto files = nca_dir->GetFiles();
+    if (files.size() == 1 && files[0]->GetName() == "00") {
+        return files[0];
+    }
+
+    std::vector<VirtualFile> concat;
+    // Since the files are a two-digit hex number, max is FF.
+    for (std::size_t i = 0; i < 0x100; ++i) {
+        auto next = nca_dir->GetFile(fmt::format("{:02X}", i));
+        if (next != nullptr) {
+            concat.push_back(std::move(next));
+        } else {
+            next = nca_dir->GetFile(fmt::format("{:02x}", i));
+            if (next != nullptr) {
+                concat.push_back(std::move(next));
+            } else {
+                break;
+            }
+        }
+    }
+
+    if (concat.empty()) {
+        return nullptr;
+    }
+
+    return ConcatenatedVfsFile::MakeConcatenatedFile(concat, concat.front()->GetName());
 }
 
 VirtualFile RegisteredCache::GetFileAtID(NcaID id) const {
@@ -150,28 +161,28 @@ VirtualFile RegisteredCache::GetFileAtID(NcaID id) const {
     return file;
 }
 
-static boost::optional<NcaID> CheckMapForContentRecord(
+static std::optional<NcaID> CheckMapForContentRecord(
     const boost::container::flat_map<u64, CNMT>& map, u64 title_id, ContentRecordType type) {
     if (map.find(title_id) == map.end())
-        return boost::none;
+        return {};
 
     const auto& cnmt = map.at(title_id);
 
     const auto iter = std::find_if(cnmt.GetContentRecords().begin(), cnmt.GetContentRecords().end(),
                                    [type](const ContentRecord& rec) { return rec.type == type; });
     if (iter == cnmt.GetContentRecords().end())
-        return boost::none;
+        return {};
 
-    return boost::make_optional(iter->nca_id);
+    return std::make_optional(iter->nca_id);
 }
 
-boost::optional<NcaID> RegisteredCache::GetNcaIDFromMetadata(u64 title_id,
-                                                             ContentRecordType type) const {
+std::optional<NcaID> RegisteredCache::GetNcaIDFromMetadata(u64 title_id,
+                                                           ContentRecordType type) const {
     if (type == ContentRecordType::Meta && meta_id.find(title_id) != meta_id.end())
         return meta_id.at(title_id);
 
     const auto res1 = CheckMapForContentRecord(yuzu_meta, title_id, type);
-    if (res1 != boost::none)
+    if (res1)
         return res1;
     return CheckMapForContentRecord(meta, title_id, type);
 }
@@ -216,7 +227,7 @@ void RegisteredCache::ProcessFiles(const std::vector<NcaID>& ids) {
 
         if (file == nullptr)
             continue;
-        const auto nca = std::make_shared<NCA>(parser(file, id));
+        const auto nca = std::make_shared<NCA>(parser(file, id), nullptr, 0, keys);
         if (nca->GetStatus() != Loader::ResultStatus::Success ||
             nca->GetType() != NCAContentType::Meta) {
             continue;
@@ -274,17 +285,14 @@ bool RegisteredCache::HasEntry(RegisteredCacheEntry entry) const {
 
 VirtualFile RegisteredCache::GetEntryUnparsed(u64 title_id, ContentRecordType type) const {
     const auto id = GetNcaIDFromMetadata(title_id, type);
-    if (id == boost::none)
-        return nullptr;
-
-    return GetFileAtID(id.get());
+    return id ? GetFileAtID(*id) : nullptr;
 }
 
 VirtualFile RegisteredCache::GetEntryUnparsed(RegisteredCacheEntry entry) const {
     return GetEntryUnparsed(entry.title_id, entry.type);
 }
 
-boost::optional<u32> RegisteredCache::GetEntryVersion(u64 title_id) const {
+std::optional<u32> RegisteredCache::GetEntryVersion(u64 title_id) const {
     const auto meta_iter = meta.find(title_id);
     if (meta_iter != meta.end())
         return meta_iter->second.GetTitleVersion();
@@ -293,29 +301,26 @@ boost::optional<u32> RegisteredCache::GetEntryVersion(u64 title_id) const {
     if (yuzu_meta_iter != yuzu_meta.end())
         return yuzu_meta_iter->second.GetTitleVersion();
 
-    return boost::none;
+    return {};
 }
 
 VirtualFile RegisteredCache::GetEntryRaw(u64 title_id, ContentRecordType type) const {
     const auto id = GetNcaIDFromMetadata(title_id, type);
-    if (id == boost::none)
-        return nullptr;
-
-    return parser(GetFileAtID(id.get()), id.get());
+    return id ? parser(GetFileAtID(*id), *id) : nullptr;
 }
 
 VirtualFile RegisteredCache::GetEntryRaw(RegisteredCacheEntry entry) const {
     return GetEntryRaw(entry.title_id, entry.type);
 }
 
-std::shared_ptr<NCA> RegisteredCache::GetEntry(u64 title_id, ContentRecordType type) const {
+std::unique_ptr<NCA> RegisteredCache::GetEntry(u64 title_id, ContentRecordType type) const {
     const auto raw = GetEntryRaw(title_id, type);
     if (raw == nullptr)
         return nullptr;
-    return std::make_shared<NCA>(raw);
+    return std::make_unique<NCA>(raw, nullptr, 0, keys);
 }
 
-std::shared_ptr<NCA> RegisteredCache::GetEntry(RegisteredCacheEntry entry) const {
+std::unique_ptr<NCA> RegisteredCache::GetEntry(RegisteredCacheEntry entry) const {
     return GetEntry(entry.title_id, entry.type);
 }
 
@@ -355,8 +360,8 @@ std::vector<RegisteredCacheEntry> RegisteredCache::ListEntries() const {
 }
 
 std::vector<RegisteredCacheEntry> RegisteredCache::ListEntriesFilter(
-    boost::optional<TitleType> title_type, boost::optional<ContentRecordType> record_type,
-    boost::optional<u64> title_id) const {
+    std::optional<TitleType> title_type, std::optional<ContentRecordType> record_type,
+    std::optional<u64> title_id) const {
     std::vector<RegisteredCacheEntry> out;
     IterateAllMetadata<RegisteredCacheEntry>(
         out,
@@ -364,33 +369,33 @@ std::vector<RegisteredCacheEntry> RegisteredCache::ListEntriesFilter(
             return RegisteredCacheEntry{c.GetTitleID(), r.type};
         },
         [&title_type, &record_type, &title_id](const CNMT& c, const ContentRecord& r) {
-            if (title_type != boost::none && title_type.get() != c.GetType())
+            if (title_type && *title_type != c.GetType())
                 return false;
-            if (record_type != boost::none && record_type.get() != r.type)
+            if (record_type && *record_type != r.type)
                 return false;
-            if (title_id != boost::none && title_id.get() != c.GetTitleID())
+            if (title_id && *title_id != c.GetTitleID())
                 return false;
             return true;
         });
     return out;
 }
 
-static std::shared_ptr<NCA> GetNCAFromNSPForID(std::shared_ptr<NSP> nsp, const NcaID& id) {
-    const auto file = nsp->GetFile(fmt::format("{}.nca", Common::HexArrayToString(id, false)));
+static std::shared_ptr<NCA> GetNCAFromNSPForID(const NSP& nsp, const NcaID& id) {
+    const auto file = nsp.GetFile(fmt::format("{}.nca", Common::HexArrayToString(id, false)));
     if (file == nullptr)
         return nullptr;
     return std::make_shared<NCA>(file);
 }
 
-InstallResult RegisteredCache::InstallEntry(std::shared_ptr<XCI> xci, bool overwrite_if_exists,
+InstallResult RegisteredCache::InstallEntry(const XCI& xci, bool overwrite_if_exists,
                                             const VfsCopyFunction& copy) {
-    return InstallEntry(xci->GetSecurePartitionNSP(), overwrite_if_exists, copy);
+    return InstallEntry(*xci.GetSecurePartitionNSP(), overwrite_if_exists, copy);
 }
 
-InstallResult RegisteredCache::InstallEntry(std::shared_ptr<NSP> nsp, bool overwrite_if_exists,
+InstallResult RegisteredCache::InstallEntry(const NSP& nsp, bool overwrite_if_exists,
                                             const VfsCopyFunction& copy) {
-    const auto& ncas = nsp->GetNCAsCollapsed();
-    const auto& meta_iter = std::find_if(ncas.begin(), ncas.end(), [](std::shared_ptr<NCA> nca) {
+    const auto ncas = nsp.GetNCAsCollapsed();
+    const auto meta_iter = std::find_if(ncas.begin(), ncas.end(), [](const auto& nca) {
         return nca->GetType() == NCAContentType::Meta;
     });
 
@@ -404,7 +409,7 @@ InstallResult RegisteredCache::InstallEntry(std::shared_ptr<NSP> nsp, bool overw
     const auto meta_id_raw = (*meta_iter)->GetName().substr(0, 32);
     const auto meta_id = Common::HexStringToArray<16>(meta_id_raw);
 
-    const auto res = RawInstallNCA(*meta_iter, copy, overwrite_if_exists, meta_id);
+    const auto res = RawInstallNCA(**meta_iter, copy, overwrite_if_exists, meta_id);
     if (res != InstallResult::Success)
         return res;
 
@@ -416,7 +421,7 @@ InstallResult RegisteredCache::InstallEntry(std::shared_ptr<NSP> nsp, bool overw
         const auto nca = GetNCAFromNSPForID(nsp, record.nca_id);
         if (nca == nullptr)
             return InstallResult::ErrorCopyFailed;
-        const auto res2 = RawInstallNCA(nca, copy, overwrite_if_exists, record.nca_id);
+        const auto res2 = RawInstallNCA(*nca, copy, overwrite_if_exists, record.nca_id);
         if (res2 != InstallResult::Success)
             return res2;
     }
@@ -425,21 +430,21 @@ InstallResult RegisteredCache::InstallEntry(std::shared_ptr<NSP> nsp, bool overw
     return InstallResult::Success;
 }
 
-InstallResult RegisteredCache::InstallEntry(std::shared_ptr<NCA> nca, TitleType type,
+InstallResult RegisteredCache::InstallEntry(const NCA& nca, TitleType type,
                                             bool overwrite_if_exists, const VfsCopyFunction& copy) {
     CNMTHeader header{
-        nca->GetTitleId(), ///< Title ID
-        0,                 ///< Ignore/Default title version
-        type,              ///< Type
-        {},                ///< Padding
-        0x10,              ///< Default table offset
-        1,                 ///< 1 Content Entry
-        0,                 ///< No Meta Entries
-        {},                ///< Padding
+        nca.GetTitleId(), ///< Title ID
+        0,                ///< Ignore/Default title version
+        type,             ///< Type
+        {},               ///< Padding
+        0x10,             ///< Default table offset
+        1,                ///< 1 Content Entry
+        0,                ///< No Meta Entries
+        {},               ///< Padding
     };
     OptionalHeader opt_header{0, 0};
-    ContentRecord c_rec{{}, {}, {}, GetCRTypeFromNCAType(nca->GetType()), {}};
-    const auto& data = nca->GetBaseFile()->ReadBytes(0x100000);
+    ContentRecord c_rec{{}, {}, {}, GetCRTypeFromNCAType(nca.GetType()), {}};
+    const auto& data = nca.GetBaseFile()->ReadBytes(0x100000);
     mbedtls_sha256(data.data(), data.size(), c_rec.hash.data(), 0);
     memcpy(&c_rec.nca_id, &c_rec.hash, 16);
     const CNMT new_cnmt(header, opt_header, {c_rec}, {});
@@ -448,10 +453,10 @@ InstallResult RegisteredCache::InstallEntry(std::shared_ptr<NCA> nca, TitleType 
     return RawInstallNCA(nca, copy, overwrite_if_exists, c_rec.nca_id);
 }
 
-InstallResult RegisteredCache::RawInstallNCA(std::shared_ptr<NCA> nca, const VfsCopyFunction& copy,
+InstallResult RegisteredCache::RawInstallNCA(const NCA& nca, const VfsCopyFunction& copy,
                                              bool overwrite_if_exists,
-                                             boost::optional<NcaID> override_id) {
-    const auto in = nca->GetBaseFile();
+                                             std::optional<NcaID> override_id) {
+    const auto in = nca.GetBaseFile();
     Core::Crypto::SHA256Hash hash{};
 
     // Calculate NcaID
@@ -459,12 +464,12 @@ InstallResult RegisteredCache::RawInstallNCA(std::shared_ptr<NCA> nca, const Vfs
     // game is massive), we're going to cheat and only hash the first MB of the NCA.
     // Also, for XCIs the NcaID matters, so if the override id isn't none, use that.
     NcaID id{};
-    if (override_id == boost::none) {
+    if (override_id) {
+        id = *override_id;
+    } else {
         const auto& data = in->ReadBytes(0x100000);
         mbedtls_sha256(data.data(), data.size(), hash.data(), 0);
         memcpy(id.data(), hash.data(), 16);
-    } else {
-        id = override_id.get();
     }
 
     std::string path = GetRelativePathFromNcaID(id, false, true);
@@ -516,7 +521,7 @@ bool RegisteredCache::RawInstallYuzuMeta(const CNMT& cnmt) {
                         }) != yuzu_meta.end();
 }
 
-RegisteredCacheUnion::RegisteredCacheUnion(std::vector<std::shared_ptr<RegisteredCache>> caches)
+RegisteredCacheUnion::RegisteredCacheUnion(std::vector<RegisteredCache*> caches)
     : caches(std::move(caches)) {}
 
 void RegisteredCacheUnion::Refresh() {
@@ -534,14 +539,14 @@ bool RegisteredCacheUnion::HasEntry(RegisteredCacheEntry entry) const {
     return HasEntry(entry.title_id, entry.type);
 }
 
-boost::optional<u32> RegisteredCacheUnion::GetEntryVersion(u64 title_id) const {
+std::optional<u32> RegisteredCacheUnion::GetEntryVersion(u64 title_id) const {
     for (const auto& c : caches) {
         const auto res = c->GetEntryVersion(title_id);
-        if (res != boost::none)
+        if (res)
             return res;
     }
 
-    return boost::none;
+    return {};
 }
 
 VirtualFile RegisteredCacheUnion::GetEntryUnparsed(u64 title_id, ContentRecordType type) const {
@@ -572,14 +577,14 @@ VirtualFile RegisteredCacheUnion::GetEntryRaw(RegisteredCacheEntry entry) const 
     return GetEntryRaw(entry.title_id, entry.type);
 }
 
-std::shared_ptr<NCA> RegisteredCacheUnion::GetEntry(u64 title_id, ContentRecordType type) const {
+std::unique_ptr<NCA> RegisteredCacheUnion::GetEntry(u64 title_id, ContentRecordType type) const {
     const auto raw = GetEntryRaw(title_id, type);
     if (raw == nullptr)
         return nullptr;
-    return std::make_shared<NCA>(raw);
+    return std::make_unique<NCA>(raw);
 }
 
-std::shared_ptr<NCA> RegisteredCacheUnion::GetEntry(RegisteredCacheEntry entry) const {
+std::unique_ptr<NCA> RegisteredCacheUnion::GetEntry(RegisteredCacheEntry entry) const {
     return GetEntry(entry.title_id, entry.type);
 }
 
@@ -593,12 +598,15 @@ std::vector<RegisteredCacheEntry> RegisteredCacheUnion::ListEntries() const {
             },
             [](const CNMT& c, const ContentRecord& r) { return true; });
     }
+
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
 }
 
 std::vector<RegisteredCacheEntry> RegisteredCacheUnion::ListEntriesFilter(
-    boost::optional<TitleType> title_type, boost::optional<ContentRecordType> record_type,
-    boost::optional<u64> title_id) const {
+    std::optional<TitleType> title_type, std::optional<ContentRecordType> record_type,
+    std::optional<u64> title_id) const {
     std::vector<RegisteredCacheEntry> out;
     for (const auto& c : caches) {
         c->IterateAllMetadata<RegisteredCacheEntry>(
@@ -607,15 +615,18 @@ std::vector<RegisteredCacheEntry> RegisteredCacheUnion::ListEntriesFilter(
                 return RegisteredCacheEntry{c.GetTitleID(), r.type};
             },
             [&title_type, &record_type, &title_id](const CNMT& c, const ContentRecord& r) {
-                if (title_type != boost::none && title_type.get() != c.GetType())
+                if (title_type && *title_type != c.GetType())
                     return false;
-                if (record_type != boost::none && record_type.get() != r.type)
+                if (record_type && *record_type != r.type)
                     return false;
-                if (title_id != boost::none && title_id.get() != c.GetTitleID())
+                if (title_id && *title_id != c.GetTitleID())
                     return false;
                 return true;
             });
     }
+
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
 }
 } // namespace FileSys

@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <cinttypes>
+#include <cstring>
 #include "common/assert.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -13,71 +14,157 @@
 #include "video_core/renderer_base.h"
 #include "video_core/textures/texture.h"
 
-namespace Tegra {
-namespace Engines {
+namespace Tegra::Engines {
 
 /// First register id that is actually a Macro call.
 constexpr u32 MacroRegistersStart = 0xE00;
 
 Maxwell3D::Maxwell3D(VideoCore::RasterizerInterface& rasterizer, MemoryManager& memory_manager)
-    : memory_manager(memory_manager), rasterizer{rasterizer}, macro_interpreter(*this) {}
+    : memory_manager(memory_manager), rasterizer{rasterizer}, macro_interpreter(*this) {
+    InitializeRegisterDefaults();
+}
+
+void Maxwell3D::InitializeRegisterDefaults() {
+    // Initializes registers to their default values - what games expect them to be at boot. This is
+    // for certain registers that may not be explicitly set by games.
+
+    // Reset all registers to zero
+    std::memset(&regs, 0, sizeof(regs));
+
+    // Depth range near/far is not always set, but is expected to be the default 0.0f, 1.0f. This is
+    // needed for ARMS.
+    for (std::size_t viewport{}; viewport < Regs::NumViewports; ++viewport) {
+        regs.viewports[viewport].depth_range_near = 0.0f;
+        regs.viewports[viewport].depth_range_far = 1.0f;
+    }
+    // Doom and Bomberman seems to use the uninitialized registers and just enable blend
+    // so initialize blend registers with sane values
+    regs.blend.equation_rgb = Regs::Blend::Equation::Add;
+    regs.blend.factor_source_rgb = Regs::Blend::Factor::One;
+    regs.blend.factor_dest_rgb = Regs::Blend::Factor::Zero;
+    regs.blend.equation_a = Regs::Blend::Equation::Add;
+    regs.blend.factor_source_a = Regs::Blend::Factor::One;
+    regs.blend.factor_dest_a = Regs::Blend::Factor::Zero;
+    for (std::size_t blend_index = 0; blend_index < Regs::NumRenderTargets; blend_index++) {
+        regs.independent_blend[blend_index].equation_rgb = Regs::Blend::Equation::Add;
+        regs.independent_blend[blend_index].factor_source_rgb = Regs::Blend::Factor::One;
+        regs.independent_blend[blend_index].factor_dest_rgb = Regs::Blend::Factor::Zero;
+        regs.independent_blend[blend_index].equation_a = Regs::Blend::Equation::Add;
+        regs.independent_blend[blend_index].factor_source_a = Regs::Blend::Factor::One;
+        regs.independent_blend[blend_index].factor_dest_a = Regs::Blend::Factor::Zero;
+    }
+    regs.stencil_front_op_fail = Regs::StencilOp::Keep;
+    regs.stencil_front_op_zfail = Regs::StencilOp::Keep;
+    regs.stencil_front_op_zpass = Regs::StencilOp::Keep;
+    regs.stencil_front_func_func = Regs::ComparisonOp::Always;
+    regs.stencil_front_func_mask = 0xFFFFFFFF;
+    regs.stencil_front_mask = 0xFFFFFFFF;
+    regs.stencil_two_side_enable = 1;
+    regs.stencil_back_op_fail = Regs::StencilOp::Keep;
+    regs.stencil_back_op_zfail = Regs::StencilOp::Keep;
+    regs.stencil_back_op_zpass = Regs::StencilOp::Keep;
+    regs.stencil_back_func_func = Regs::ComparisonOp::Always;
+    regs.stencil_back_func_mask = 0xFFFFFFFF;
+    regs.stencil_back_mask = 0xFFFFFFFF;
+    // TODO(Rodrigo): Most games do not set a point size. I think this is a case of a
+    // register carrying a default value. Assume it's OpenGL's default (1).
+    regs.point_size = 1.0f;
+
+    // TODO(bunnei): Some games do not initialize the color masks (e.g. Sonic Mania). Assuming a
+    // default of enabled fixes rendering here.
+    for (std::size_t color_mask = 0; color_mask < Regs::NumRenderTargets; color_mask++) {
+        regs.color_mask[color_mask].R.Assign(1);
+        regs.color_mask[color_mask].G.Assign(1);
+        regs.color_mask[color_mask].B.Assign(1);
+        regs.color_mask[color_mask].A.Assign(1);
+    }
+}
 
 void Maxwell3D::CallMacroMethod(u32 method, std::vector<u32> parameters) {
     // Reset the current macro.
     executing_macro = 0;
 
-    // The requested macro must have been uploaded already.
-    auto macro_code = uploaded_macros.find(method);
-    if (macro_code == uploaded_macros.end()) {
-        LOG_ERROR(HW_GPU, "Macro {:04X} was not uploaded", method);
+    // Lookup the macro offset
+    const u32 entry{(method - MacroRegistersStart) >> 1};
+    const auto& search{macro_offsets.find(entry)};
+    if (search == macro_offsets.end()) {
+        LOG_CRITICAL(HW_GPU, "macro not found for method 0x{:X}!", method);
+        UNREACHABLE();
         return;
     }
 
     // Execute the current macro.
-    macro_interpreter.Execute(macro_code->second, std::move(parameters));
+    macro_interpreter.Execute(search->second, std::move(parameters));
 }
 
-void Maxwell3D::WriteReg(u32 method, u32 value, u32 remaining_params) {
+void Maxwell3D::CallMethod(const GPU::MethodCall& method_call) {
     auto debug_context = Core::System::GetInstance().GetGPUDebugContext();
 
     // It is an error to write to a register other than the current macro's ARG register before it
     // has finished execution.
     if (executing_macro != 0) {
-        ASSERT(method == executing_macro + 1);
+        ASSERT(method_call.method == executing_macro + 1);
     }
 
     // Methods after 0xE00 are special, they're actually triggers for some microcode that was
     // uploaded to the GPU during initialization.
-    if (method >= MacroRegistersStart) {
+    if (method_call.method >= MacroRegistersStart) {
         // We're trying to execute a macro
         if (executing_macro == 0) {
             // A macro call must begin by writing the macro method's register, not its argument.
-            ASSERT_MSG((method % 2) == 0,
+            ASSERT_MSG((method_call.method % 2) == 0,
                        "Can't start macro execution by writing to the ARGS register");
-            executing_macro = method;
+            executing_macro = method_call.method;
         }
 
-        macro_params.push_back(value);
+        macro_params.push_back(method_call.argument);
 
         // Call the macro when there are no more parameters in the command buffer
-        if (remaining_params == 0) {
+        if (method_call.IsLastCall()) {
             CallMacroMethod(executing_macro, std::move(macro_params));
         }
         return;
     }
 
-    ASSERT_MSG(method < Regs::NUM_REGS,
+    ASSERT_MSG(method_call.method < Regs::NUM_REGS,
                "Invalid Maxwell3D register, increase the size of the Regs structure");
 
     if (debug_context) {
         debug_context->OnEvent(Tegra::DebugContext::Event::MaxwellCommandLoaded, nullptr);
     }
 
-    regs.reg_array[method] = value;
+    if (regs.reg_array[method_call.method] != method_call.argument) {
+        regs.reg_array[method_call.method] = method_call.argument;
+        // Vertex format
+        if (method_call.method >= MAXWELL3D_REG_INDEX(vertex_attrib_format) &&
+            method_call.method <
+                MAXWELL3D_REG_INDEX(vertex_attrib_format) + regs.vertex_attrib_format.size()) {
+            dirty_flags.vertex_attrib_format = true;
+        }
 
-    switch (method) {
+        // Vertex buffer
+        if (method_call.method >= MAXWELL3D_REG_INDEX(vertex_array) &&
+            method_call.method < MAXWELL3D_REG_INDEX(vertex_array) + 4 * 32) {
+            dirty_flags.vertex_array |=
+                1u << ((method_call.method - MAXWELL3D_REG_INDEX(vertex_array)) >> 2);
+        } else if (method_call.method >= MAXWELL3D_REG_INDEX(vertex_array_limit) &&
+                   method_call.method < MAXWELL3D_REG_INDEX(vertex_array_limit) + 2 * 32) {
+            dirty_flags.vertex_array |=
+                1u << ((method_call.method - MAXWELL3D_REG_INDEX(vertex_array_limit)) >> 1);
+        } else if (method_call.method >= MAXWELL3D_REG_INDEX(instanced_arrays) &&
+                   method_call.method < MAXWELL3D_REG_INDEX(instanced_arrays) + 32) {
+            dirty_flags.vertex_array |=
+                1u << (method_call.method - MAXWELL3D_REG_INDEX(instanced_arrays));
+        }
+    }
+
+    switch (method_call.method) {
     case MAXWELL3D_REG_INDEX(macros.data): {
-        ProcessMacroUpload(value);
+        ProcessMacroUpload(method_call.argument);
+        break;
+    }
+    case MAXWELL3D_REG_INDEX(macros.bind): {
+        ProcessMacroBind(method_call.argument);
         break;
     }
     case MAXWELL3D_REG_INDEX(const_buffer.cb_data[0]):
@@ -96,7 +183,7 @@ void Maxwell3D::WriteReg(u32 method, u32 value, u32 remaining_params) {
     case MAXWELL3D_REG_INDEX(const_buffer.cb_data[13]):
     case MAXWELL3D_REG_INDEX(const_buffer.cb_data[14]):
     case MAXWELL3D_REG_INDEX(const_buffer.cb_data[15]): {
-        ProcessCBData(value);
+        ProcessCBData(method_call.argument);
         break;
     }
     case MAXWELL3D_REG_INDEX(cb_bind[0].raw_config): {
@@ -141,22 +228,25 @@ void Maxwell3D::WriteReg(u32 method, u32 value, u32 remaining_params) {
 }
 
 void Maxwell3D::ProcessMacroUpload(u32 data) {
-    // Store the uploaded macro code to interpret them when they're called.
-    auto& macro = uploaded_macros[regs.macros.entry * 2 + MacroRegistersStart];
-    macro.push_back(data);
+    ASSERT_MSG(regs.macros.upload_address < macro_memory.size(),
+               "upload_address exceeded macro_memory size!");
+    macro_memory[regs.macros.upload_address++] = data;
+}
+
+void Maxwell3D::ProcessMacroBind(u32 data) {
+    macro_offsets[regs.macros.entry] = data;
 }
 
 void Maxwell3D::ProcessQueryGet() {
     GPUVAddr sequence_address = regs.query.QueryAddress();
     // Since the sequence address is given as a GPU VAddr, we have to convert it to an application
     // VAddr before writing.
-    boost::optional<VAddr> address = memory_manager.GpuToCpuAddress(sequence_address);
+    std::optional<VAddr> address = memory_manager.GpuToCpuAddress(sequence_address);
 
     // TODO(Subv): Support the other query units.
     ASSERT_MSG(regs.query.query_get.unit == Regs::QueryUnit::Crop,
                "Units other than CROP are unimplemented");
 
-    u32 value = Memory::Read32(*address);
     u64 result = 0;
 
     // TODO(Subv): Support the other query variables
@@ -197,6 +287,7 @@ void Maxwell3D::ProcessQueryGet() {
             query_result.timestamp = CoreTiming::GetTicks();
             Memory::WriteBlock(*address, &query_result, sizeof(query_result));
         }
+        dirty_flags.OnMemoryWrite();
         break;
     }
     default:
@@ -269,10 +360,11 @@ void Maxwell3D::ProcessCBData(u32 value) {
     // Don't allow writing past the end of the buffer.
     ASSERT(regs.const_buffer.cb_pos + sizeof(u32) <= regs.const_buffer.cb_size);
 
-    boost::optional<VAddr> address =
+    std::optional<VAddr> address =
         memory_manager.GpuToCpuAddress(buffer_address + regs.const_buffer.cb_pos);
 
     Memory::Write32(*address, value);
+    dirty_flags.OnMemoryWrite();
 
     // Increment the current buffer position.
     regs.const_buffer.cb_pos = regs.const_buffer.cb_pos + 4;
@@ -282,7 +374,7 @@ Texture::TICEntry Maxwell3D::GetTICEntry(u32 tic_index) const {
     GPUVAddr tic_base_address = regs.tic.TICAddress();
 
     GPUVAddr tic_address_gpu = tic_base_address + tic_index * sizeof(Texture::TICEntry);
-    boost::optional<VAddr> tic_address_cpu = memory_manager.GpuToCpuAddress(tic_address_gpu);
+    std::optional<VAddr> tic_address_cpu = memory_manager.GpuToCpuAddress(tic_address_gpu);
 
     Texture::TICEntry tic_entry;
     Memory::ReadBlock(*tic_address_cpu, &tic_entry, sizeof(Texture::TICEntry));
@@ -306,7 +398,7 @@ Texture::TSCEntry Maxwell3D::GetTSCEntry(u32 tsc_index) const {
     GPUVAddr tsc_base_address = regs.tsc.TSCAddress();
 
     GPUVAddr tsc_address_gpu = tsc_base_address + tsc_index * sizeof(Texture::TSCEntry);
-    boost::optional<VAddr> tsc_address_cpu = memory_manager.GpuToCpuAddress(tsc_address_gpu);
+    std::optional<VAddr> tsc_address_cpu = memory_manager.GpuToCpuAddress(tsc_address_gpu);
 
     Texture::TSCEntry tsc_entry;
     Memory::ReadBlock(*tsc_address_cpu, &tsc_entry, sizeof(Texture::TSCEntry));
@@ -370,7 +462,7 @@ Texture::FullTextureInfo Maxwell3D::GetStageTexture(Regs::ShaderStage stage,
 
     ASSERT(tex_info_address < tex_info_buffer.address + tex_info_buffer.size);
 
-    boost::optional<VAddr> tex_address_cpu = memory_manager.GpuToCpuAddress(tex_info_address);
+    std::optional<VAddr> tex_address_cpu = memory_manager.GpuToCpuAddress(tex_info_address);
     Texture::TextureHandle tex_handle{Memory::Read32(*tex_address_cpu)};
 
     Texture::FullTextureInfo tex_info{};
@@ -408,5 +500,4 @@ void Maxwell3D::ProcessClearBuffers() {
     rasterizer.Clear();
 }
 
-} // namespace Engines
-} // namespace Tegra
+} // namespace Tegra::Engines

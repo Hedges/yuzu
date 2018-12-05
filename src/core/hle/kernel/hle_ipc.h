@@ -27,7 +27,8 @@ class Domain;
 class HandleTable;
 class HLERequestContext;
 class Process;
-class Event;
+class ReadableEvent;
+class WritableEvent;
 
 /**
  * Interface implemented by HLE Session handlers.
@@ -119,20 +120,20 @@ public:
      * @param callback Callback to be invoked when the thread is resumed. This callback must write
      * the entire command response once again, regardless of the state of it before this function
      * was called.
-     * @param event Event to use to wake up the thread. If unspecified, an event will be created.
+     * @param writable_event Event to use to wake up the thread. If unspecified, an event will be
+     * created.
      * @returns Event that when signaled will resume the thread and call the callback function.
      */
-    SharedPtr<Event> SleepClientThread(SharedPtr<Thread> thread, const std::string& reason,
-                                       u64 timeout, WakeupCallback&& callback,
-                                       Kernel::SharedPtr<Kernel::Event> event = nullptr);
-
-    void ParseCommandBuffer(u32_le* src_cmdbuf, bool incoming);
+    SharedPtr<WritableEvent> SleepClientThread(SharedPtr<Thread> thread, const std::string& reason,
+                                               u64 timeout, WakeupCallback&& callback,
+                                               SharedPtr<WritableEvent> writable_event = nullptr);
 
     /// Populates this context with data from the requesting process/thread.
-    ResultCode PopulateFromIncomingCommandBuffer(u32_le* src_cmdbuf, Process& src_process,
-                                                 HandleTable& src_table);
+    ResultCode PopulateFromIncomingCommandBuffer(const HandleTable& handle_table,
+                                                 u32_le* src_cmdbuf);
+
     /// Writes data from this context back to the requesting process/thread.
-    ResultCode WriteToOutgoingCommandBuffer(const Thread& thread);
+    ResultCode WriteToOutgoingCommandBuffer(Thread& thread);
 
     u32_le GetCommand() const {
         return command;
@@ -162,8 +163,12 @@ public:
         return buffer_c_desciptors;
     }
 
-    const std::shared_ptr<IPC::DomainMessageHeader>& GetDomainMessageHeader() const {
-        return domain_message_header;
+    const IPC::DomainMessageHeader* GetDomainMessageHeader() const {
+        return domain_message_header.get();
+    }
+
+    bool HasDomainMessageHeader() const {
+        return domain_message_header != nullptr;
     }
 
     /// Helper function to read a buffer using the appropriate buffer descriptor
@@ -255,6 +260,8 @@ public:
     std::string Description() const;
 
 private:
+    void ParseCommandBuffer(const HandleTable& handle_table, u32_le* src_cmdbuf, bool incoming);
+
     std::array<u32, IPC::COMMAND_BUFFER_LENGTH> cmd_buf;
     SharedPtr<Kernel::ServerSession> server_session;
     // TODO(yuriks): Check common usage of this and optimize size accordingly

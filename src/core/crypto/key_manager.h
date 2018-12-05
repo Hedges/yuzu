@@ -6,9 +6,10 @@
 
 #include <array>
 #include <map>
+#include <optional>
 #include <string>
+
 #include <boost/container/flat_map.hpp>
-#include <boost/optional.hpp>
 #include <fmt/format.h>
 #include "common/common_types.h"
 #include "core/crypto/partition_data_manager.h"
@@ -175,7 +176,7 @@ private:
     void WriteKeyToFile(KeyCategory category, std::string_view keyname,
                         const std::array<u8, Size>& key);
 
-    void DeriveGeneralPurposeKeys(u8 crypto_revision);
+    void DeriveGeneralPurposeKeys(std::size_t crypto_revision);
 
     void SetKeyWrapped(S128KeyType id, Key128 key, u64 field1 = 0, u64 field2 = 0);
     void SetKeyWrapped(S256KeyType id, Key256 key, u64 field1 = 0, u64 field2 = 0);
@@ -191,14 +192,14 @@ Key128 DeriveMasterKey(const std::array<u8, 0x90>& keyblob, const Key128& master
 std::array<u8, 0x90> DecryptKeyblob(const std::array<u8, 0xB0>& encrypted_keyblob,
                                     const Key128& key);
 
-boost::optional<Key128> DeriveSDSeed();
+std::optional<Key128> DeriveSDSeed();
 Loader::ResultStatus DeriveSDKeys(std::array<Key256, 2>& sd_keys, KeyManager& keys);
 
 std::vector<TicketRaw> GetTicketblob(const FileUtil::IOFile& ticket_save);
 
 // Returns a pair of {rights_id, titlekey}. Fails if the ticket has no certificate authority (offset
 // 0x140-0x144 is zero)
-boost::optional<std::pair<Key128, Key128>> ParseTicket(
-    const TicketRaw& ticket, const RSAKeyPair<2048>& eticket_extended_key);
+std::optional<std::pair<Key128, Key128>> ParseTicket(const TicketRaw& ticket,
+                                                     const RSAKeyPair<2048>& eticket_extended_key);
 
 } // namespace Core::Crypto

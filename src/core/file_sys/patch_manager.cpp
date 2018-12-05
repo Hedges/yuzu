@@ -19,11 +19,17 @@
 #include "core/file_sys/vfs_vector.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/loader/loader.h"
+#include "core/settings.h"
 
 namespace FileSys {
 
 constexpr u64 SINGLE_BYTE_MODULUS = 0x100;
 constexpr u64 DLC_BASE_TITLE_ID_MASK = 0xFFFFFFFFFFFFE000;
+
+constexpr std::array<const char*, 14> EXEFS_FILE_NAMES{
+    "main",    "main.npdm", "rtld",    "sdk",     "subsdk0", "subsdk1", "subsdk2",
+    "subsdk3", "subsdk4",   "subsdk5", "subsdk6", "subsdk7", "subsdk8", "subsdk9",
+};
 
 struct NSOBuildHeader {
     u32_le magic;
@@ -56,17 +62,49 @@ VirtualDir PatchManager::PatchExeFS(VirtualDir exefs) const {
     if (exefs == nullptr)
         return exefs;
 
+    if (Settings::values.dump_exefs) {
+        LOG_INFO(Loader, "Dumping ExeFS for title_id={:016X}", title_id);
+        const auto dump_dir = Service::FileSystem::GetModificationDumpRoot(title_id);
+        if (dump_dir != nullptr) {
+            const auto exefs_dir = GetOrCreateDirectoryRelative(dump_dir, "/exefs");
+            VfsRawCopyD(exefs, exefs_dir);
+        }
+    }
+
     const auto installed = Service::FileSystem::GetUnionContents();
 
     // Game Updates
     const auto update_tid = GetUpdateTitleID(title_id);
-    const auto update = installed->GetEntry(update_tid, ContentRecordType::Program);
-    if (update != nullptr) {
-        if (update->GetStatus() == Loader::ResultStatus::ErrorMissingBKTRBaseRomFS &&
-            update->GetExeFS() != nullptr) {
-            LOG_INFO(Loader, "    ExeFS: Update ({}) applied successfully",
-                     FormatTitleVersion(installed->GetEntryVersion(update_tid).get_value_or(0)));
-            exefs = update->GetExeFS();
+    const auto update = installed.GetEntry(update_tid, ContentRecordType::Program);
+
+    if (update != nullptr && update->GetExeFS() != nullptr &&
+        update->GetStatus() == Loader::ResultStatus::ErrorMissingBKTRBaseRomFS) {
+        LOG_INFO(Loader, "    ExeFS: Update ({}) applied successfully",
+                 FormatTitleVersion(installed.GetEntryVersion(update_tid).value_or(0)));
+        exefs = update->GetExeFS();
+    }
+
+    // LayeredExeFS
+    const auto load_dir = Service::FileSystem::GetModificationLoadRoot(title_id);
+    if (load_dir != nullptr && load_dir->GetSize() > 0) {
+        auto patch_dirs = load_dir->GetSubdirectories();
+        std::sort(
+            patch_dirs.begin(), patch_dirs.end(),
+            [](const VirtualDir& l, const VirtualDir& r) { return l->GetName() < r->GetName(); });
+
+        std::vector<VirtualDir> layers;
+        layers.reserve(patch_dirs.size() + 1);
+        for (const auto& subdir : patch_dirs) {
+            auto exefs_dir = subdir->GetSubdirectory("exefs");
+            if (exefs_dir != nullptr)
+                layers.push_back(std::move(exefs_dir));
+        }
+        layers.push_back(exefs);
+
+        auto layered = LayeredVfsDirectory::MakeLayeredDirectory(std::move(layers));
+        if (layered != nullptr) {
+            LOG_INFO(Loader, "    ExeFS: LayeredExeFS patches applied successfully");
+            exefs = std::move(layered);
         }
     }
 
@@ -120,6 +158,18 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso) const {
     const auto build_id_raw = Common::HexArrayToString(header.build_id);
     const auto build_id = build_id_raw.substr(0, build_id_raw.find_last_not_of('0') + 1);
 
+    if (Settings::values.dump_nso) {
+        LOG_INFO(Loader, "Dumping NSO for build_id={}, title_id={:016X}", build_id, title_id);
+        const auto dump_dir = Service::FileSystem::GetModificationDumpRoot(title_id);
+        if (dump_dir != nullptr) {
+            const auto nso_dir = GetOrCreateDirectoryRelative(dump_dir, "/nso");
+            const auto file = nso_dir->CreateFile(fmt::format("{}.nso", build_id));
+
+            file->Resize(nso.size());
+            file->WriteBytes(nso);
+        }
+    }
+
     LOG_INFO(Loader, "Patching NSO for build_id={}", build_id);
 
     const auto load_dir = Service::FileSystem::GetModificationLoadRoot(title_id);
@@ -168,7 +218,8 @@ bool PatchManager::HasNSOPatch(const std::array<u8, 32>& build_id_) const {
 
 static void ApplyLayeredFS(VirtualFile& romfs, u64 title_id, ContentRecordType type) {
     const auto load_dir = Service::FileSystem::GetModificationLoadRoot(title_id);
-    if (type != ContentRecordType::Program || load_dir == nullptr || load_dir->GetSize() <= 0) {
+    if ((type != ContentRecordType::Program && type != ContentRecordType::Data) ||
+        load_dir == nullptr || load_dir->GetSize() <= 0) {
         return;
     }
 
@@ -214,8 +265,14 @@ static void ApplyLayeredFS(VirtualFile& romfs, u64 title_id, ContentRecordType t
 
 VirtualFile PatchManager::PatchRomFS(VirtualFile romfs, u64 ivfc_offset, ContentRecordType type,
                                      VirtualFile update_raw) const {
-    LOG_INFO(Loader, "Patching RomFS for title_id={:016X}, type={:02X}", title_id,
-             static_cast<u8>(type));
+    const auto log_string = fmt::format("Patching RomFS for title_id={:016X}, type={:02X}",
+                                        title_id, static_cast<u8>(type))
+                                .c_str();
+
+    if (type == ContentRecordType::Program || type == ContentRecordType::Data)
+        LOG_INFO(Loader, log_string);
+    else
+        LOG_DEBUG(Loader, log_string);
 
     if (romfs == nullptr)
         return romfs;
@@ -224,13 +281,13 @@ VirtualFile PatchManager::PatchRomFS(VirtualFile romfs, u64 ivfc_offset, Content
 
     // Game Updates
     const auto update_tid = GetUpdateTitleID(title_id);
-    const auto update = installed->GetEntryRaw(update_tid, type);
+    const auto update = installed.GetEntryRaw(update_tid, type);
     if (update != nullptr) {
         const auto new_nca = std::make_shared<NCA>(update, romfs, ivfc_offset);
         if (new_nca->GetStatus() == Loader::ResultStatus::Success &&
             new_nca->GetRomFS() != nullptr) {
             LOG_INFO(Loader, "    RomFS: Update ({}) applied successfully",
-                     FormatTitleVersion(installed->GetEntryVersion(update_tid).get_value_or(0)));
+                     FormatTitleVersion(installed.GetEntryVersion(update_tid).value_or(0)));
             romfs = new_nca->GetRomFS();
         }
     } else if (update_raw != nullptr) {
@@ -272,14 +329,13 @@ std::map<std::string, std::string, std::less<>> PatchManager::GetPatchVersionNam
     if (nacp != nullptr) {
         out.insert_or_assign("Update", nacp->GetVersionString());
     } else {
-        if (installed->HasEntry(update_tid, ContentRecordType::Program)) {
-            const auto meta_ver = installed->GetEntryVersion(update_tid);
-            if (meta_ver == boost::none || meta_ver.get() == 0) {
+        if (installed.HasEntry(update_tid, ContentRecordType::Program)) {
+            const auto meta_ver = installed.GetEntryVersion(update_tid);
+            if (meta_ver.value_or(0) == 0) {
                 out.insert_or_assign("Update", "");
             } else {
                 out.insert_or_assign(
-                    "Update",
-                    FormatTitleVersion(meta_ver.get(), TitleVersionFormat::ThreeElements));
+                    "Update", FormatTitleVersion(*meta_ver, TitleVersionFormat::ThreeElements));
             }
         } else if (update_raw != nullptr) {
             out.insert_or_assign("Update", "PACKED");
@@ -296,18 +352,25 @@ std::map<std::string, std::string, std::less<>> PatchManager::GetPatchVersionNam
             if (IsDirValidAndNonEmpty(exefs_dir)) {
                 bool ips = false;
                 bool ipswitch = false;
+                bool layeredfs = false;
 
                 for (const auto& file : exefs_dir->GetFiles()) {
-                    if (file->GetExtension() == "ips")
+                    if (file->GetExtension() == "ips") {
                         ips = true;
-                    else if (file->GetExtension() == "pchtxt")
+                    } else if (file->GetExtension() == "pchtxt") {
                         ipswitch = true;
+                    } else if (std::find(EXEFS_FILE_NAMES.begin(), EXEFS_FILE_NAMES.end(),
+                                         file->GetName()) != EXEFS_FILE_NAMES.end()) {
+                        layeredfs = true;
+                    }
                 }
 
                 if (ips)
                     AppendCommaIfNotEmpty(types, "IPS");
                 if (ipswitch)
                     AppendCommaIfNotEmpty(types, "IPSwitch");
+                if (layeredfs)
+                    AppendCommaIfNotEmpty(types, "LayeredExeFS");
             }
             if (IsDirValidAndNonEmpty(mod->GetSubdirectory("romfs")))
                 AppendCommaIfNotEmpty(types, "LayeredFS");
@@ -320,14 +383,13 @@ std::map<std::string, std::string, std::less<>> PatchManager::GetPatchVersionNam
     }
 
     // DLC
-    const auto dlc_entries = installed->ListEntriesFilter(TitleType::AOC, ContentRecordType::Data);
+    const auto dlc_entries = installed.ListEntriesFilter(TitleType::AOC, ContentRecordType::Data);
     std::vector<RegisteredCacheEntry> dlc_match;
     dlc_match.reserve(dlc_entries.size());
     std::copy_if(dlc_entries.begin(), dlc_entries.end(), std::back_inserter(dlc_match),
                  [this, &installed](const RegisteredCacheEntry& entry) {
                      return (entry.title_id & DLC_BASE_TITLE_ID_MASK) == title_id &&
-                            installed->GetEntry(entry)->GetStatus() ==
-                                Loader::ResultStatus::Success;
+                            installed.GetEntry(entry)->GetStatus() == Loader::ResultStatus::Success;
                  });
     if (!dlc_match.empty()) {
         // Ensure sorted so DLC IDs show in order.
@@ -346,9 +408,9 @@ std::map<std::string, std::string, std::less<>> PatchManager::GetPatchVersionNam
 }
 
 std::pair<std::unique_ptr<NACP>, VirtualFile> PatchManager::GetControlMetadata() const {
-    const auto& installed{Service::FileSystem::GetUnionContents()};
+    const auto installed{Service::FileSystem::GetUnionContents()};
 
-    const auto base_control_nca = installed->GetEntry(title_id, ContentRecordType::Control);
+    const auto base_control_nca = installed.GetEntry(title_id, ContentRecordType::Control);
     if (base_control_nca == nullptr)
         return {};
 

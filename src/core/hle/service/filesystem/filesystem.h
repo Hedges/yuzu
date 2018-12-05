@@ -45,21 +45,23 @@ ResultVal<FileSys::VirtualFile> OpenRomFS(u64 title_id, FileSys::StorageId stora
                                           FileSys::ContentRecordType type);
 ResultVal<FileSys::VirtualDir> OpenSaveData(FileSys::SaveDataSpaceId space,
                                             FileSys::SaveDataDescriptor save_struct);
+ResultVal<FileSys::VirtualDir> OpenSaveDataSpace(FileSys::SaveDataSpaceId space);
 ResultVal<FileSys::VirtualDir> OpenSDMC();
 
-std::shared_ptr<FileSys::RegisteredCacheUnion> GetUnionContents();
+FileSys::RegisteredCacheUnion GetUnionContents();
 
-std::shared_ptr<FileSys::RegisteredCache> GetSystemNANDContents();
-std::shared_ptr<FileSys::RegisteredCache> GetUserNANDContents();
-std::shared_ptr<FileSys::RegisteredCache> GetSDMCContents();
+FileSys::RegisteredCache* GetSystemNANDContents();
+FileSys::RegisteredCache* GetUserNANDContents();
+FileSys::RegisteredCache* GetSDMCContents();
 
 FileSys::VirtualDir GetModificationLoadRoot(u64 title_id);
+FileSys::VirtualDir GetModificationDumpRoot(u64 title_id);
 
 // Creates the SaveData, SDMC, and BIS Factories. Should be called once and before any function
 // above is called.
-void CreateFactories(const FileSys::VirtualFilesystem& vfs, bool overwrite = true);
+void CreateFactories(FileSys::VfsFilesystem& vfs, bool overwrite = true);
 
-void InstallInterfaces(SM::ServiceManager& service_manager, const FileSys::VirtualFilesystem& vfs);
+void InstallInterfaces(SM::ServiceManager& service_manager, FileSys::VfsFilesystem& vfs);
 
 // A class that wraps a VfsDirectory with methods that return ResultVal and ResultCode instead of
 // pointers and booleans. This makes using a VfsDirectory with switch services much easier and
@@ -109,6 +111,18 @@ public:
      * @return Result of the operation
      */
     ResultCode DeleteDirectoryRecursively(const std::string& path) const;
+
+    /**
+     * Cleans the specified directory. This is similar to DeleteDirectoryRecursively,
+     * in that it deletes all the contents of the specified directory, however, this
+     * function does *not* delete the directory itself. It only deletes everything
+     * within it.
+     *
+     * @param path Path relative to the archive.
+     *
+     * @return Result of the operation.
+     */
+    ResultCode CleanDirectoryRecursively(const std::string& path) const;
 
     /**
      * Rename a File specified by its path

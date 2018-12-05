@@ -24,7 +24,7 @@ public:
     ~MaxwellDMA() = default;
 
     /// Write the value to the register identified by method.
-    void WriteReg(u32 method, u32 value);
+    void CallMethod(const GPU::MethodCall& method_call);
 
     struct Regs {
         static constexpr std::size_t NUM_REGS = 0x1D6;
@@ -46,6 +46,10 @@ public:
 
             u32 BlockHeight() const {
                 return 1 << block_height;
+            }
+
+            u32 BlockDepth() const {
+                return 1 << block_depth;
             }
         };
 

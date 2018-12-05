@@ -9,6 +9,7 @@
 #include <vector>
 #include "common/common_types.h"
 #include "common/swap.h"
+#include "core/crypto/key_manager.h"
 #include "core/file_sys/vfs.h"
 
 namespace Loader {
@@ -31,7 +32,18 @@ enum class GamecardSize : u8 {
 };
 
 struct GamecardInfo {
-    std::array<u8, 0x70> data;
+    u64_le firmware_version;
+    u32_le access_control_flags;
+    u32_le read_wait_time1;
+    u32_le read_wait_time2;
+    u32_le write_wait_time1;
+    u32_le write_wait_time2;
+    u32_le firmware_mode;
+    u32_le cup_version;
+    std::array<u8, 4> reserved1;
+    u64_le update_partition_hash;
+    u64_le cup_id;
+    std::array<u8, 0x38> reserved2;
 };
 static_assert(sizeof(GamecardInfo) == 0x70, "GamecardInfo has incorrect size.");
 
@@ -80,7 +92,7 @@ public:
 
     u64 GetProgramTitleID() const;
 
-    std::shared_ptr<NCA> GetProgramNCA() const;
+    bool HasProgramNCA() const;
     VirtualFile GetProgramNCAFile() const;
     const std::vector<std::shared_ptr<NCA>>& GetNCAs() const;
     std::shared_ptr<NCA> GetNCAByType(NCAContentType type) const;
@@ -93,9 +105,6 @@ public:
     std::string GetName() const override;
 
     VirtualDir GetParentDirectory() const override;
-
-protected:
-    bool ReplaceFileWithSubdirectory(VirtualFile file, VirtualDir dir) override;
 
 private:
     Loader::ResultStatus AddNCAFromPartition(XCIPartition part);
@@ -110,5 +119,7 @@ private:
     std::shared_ptr<NSP> secure_partition;
     std::shared_ptr<NCA> program;
     std::vector<std::shared_ptr<NCA>> ncas;
+
+    Core::Crypto::KeyManager keys;
 };
 } // namespace FileSys

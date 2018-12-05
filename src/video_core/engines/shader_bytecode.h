@@ -5,11 +5,10 @@
 #pragma once
 
 #include <bitset>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
-
-#include <boost/optional.hpp>
 
 #include "common/assert.h"
 #include "common/bit_field.h"
@@ -79,9 +78,12 @@ union Attribute {
     constexpr explicit Attribute(u64 value) : value(value) {}
 
     enum class Index : u64 {
+        PointSize = 6,
         Position = 7,
         Attribute_0 = 8,
         Attribute_31 = 39,
+        ClipDistances0123 = 44,
+        ClipDistances4567 = 45,
         PointCoord = 46,
         // This attribute contains a tuple of (~, ~, InstanceId, VertexId) when inside a vertex
         // shader, and a tuple of (TessCoord.x, TessCoord.y, TessCoord.z, ~) when inside a Tess Eval
@@ -153,6 +155,7 @@ enum class PredCondition : u64 {
     NotEqual = 5,
     GreaterEqual = 6,
     LessThanWithNan = 9,
+    LessEqualWithNan = 11,
     GreaterThanWithNan = 12,
     NotEqualWithNan = 13,
     GreaterEqualWithNan = 14,
@@ -207,6 +210,16 @@ enum class UniformType : u64 {
     Double = 5,
 };
 
+enum class StoreType : u64 {
+    Unsigned8 = 0,
+    Signed8 = 1,
+    Unsigned16 = 2,
+    Signed16 = 3,
+    Bytes32 = 4,
+    Bytes64 = 5,
+    Bytes128 = 6,
+};
+
 enum class IMinMaxExchange : u64 {
     None = 0,
     XLo = 1,
@@ -214,7 +227,7 @@ enum class IMinMaxExchange : u64 {
     XHi = 3,
 };
 
-enum class VmadType : u64 {
+enum class VideoType : u64 {
     Size16_Low = 0,
     Size16_High = 1,
     Size32 = 2,
@@ -251,7 +264,7 @@ enum class FlowCondition : u64 {
     Fcsm_Tr = 0x1C, // TODO(bunnei): What is this used for?
 };
 
-enum class ControlCode : u64 {
+enum class ConditionCode : u64 {
     F = 0,
     LT = 1,
     EQ = 2,
@@ -267,7 +280,7 @@ enum class ControlCode : u64 {
     GTU = 12,
     NEU = 13,
     GEU = 14,
-    //
+    T = 15,
     OFF = 16,
     LO = 17,
     SFF = 18,
@@ -334,6 +347,31 @@ enum class IsberdMode : u64 {
 };
 
 enum class IsberdShift : u64 { None = 0, U16 = 1, B32 = 2 };
+
+enum class HalfType : u64 {
+    H0_H1 = 0,
+    F32 = 1,
+    H0_H0 = 2,
+    H1_H1 = 3,
+};
+
+enum class HalfMerge : u64 {
+    H0_H1 = 0,
+    F32 = 1,
+    Mrg_H0 = 2,
+    Mrg_H1 = 3,
+};
+
+enum class HalfPrecision : u64 {
+    None = 0,
+    FTZ = 1,
+    FMZ = 2,
+};
+
+enum class R2pMode : u64 {
+    Pr = 0,
+    Cc = 1,
+};
 
 enum class IpaInterpMode : u64 {
     Linear = 0,
@@ -539,9 +577,16 @@ union Instruction {
         BitField<39, 2, u64> tab5cb8_2;
         BitField<41, 3, u64> tab5c68_1;
         BitField<44, 2, u64> tab5c68_0;
-        BitField<47, 1, u64> cc;
         BitField<48, 1, u64> negate_b;
     } fmul;
+
+    union {
+        BitField<55, 1, u64> saturate;
+    } fmul32;
+
+    union {
+        BitField<52, 1, u64> generates_cc;
+    } op_32;
 
     union {
         BitField<48, 1, u64> is_signed;
@@ -552,6 +597,70 @@ union Instruction {
         BitField<48, 1, u64> negate_b;
         BitField<49, 1, u64> negate_a;
     } alu_integer;
+
+    union {
+        BitField<39, 1, u64> ftz;
+        BitField<32, 1, u64> saturate;
+        BitField<49, 2, HalfMerge> merge;
+
+        BitField<43, 1, u64> negate_a;
+        BitField<44, 1, u64> abs_a;
+        BitField<47, 2, HalfType> type_a;
+
+        BitField<31, 1, u64> negate_b;
+        BitField<30, 1, u64> abs_b;
+        BitField<47, 2, HalfType> type_b;
+
+        BitField<35, 2, HalfType> type_c;
+    } alu_half;
+
+    union {
+        BitField<39, 2, HalfPrecision> precision;
+        BitField<39, 1, u64> ftz;
+        BitField<52, 1, u64> saturate;
+        BitField<49, 2, HalfMerge> merge;
+
+        BitField<43, 1, u64> negate_a;
+        BitField<44, 1, u64> abs_a;
+        BitField<47, 2, HalfType> type_a;
+    } alu_half_imm;
+
+    union {
+        BitField<29, 1, u64> first_negate;
+        BitField<20, 9, u64> first;
+
+        BitField<56, 1, u64> second_negate;
+        BitField<30, 9, u64> second;
+
+        u32 PackImmediates() const {
+            // Immediates are half floats shifted.
+            constexpr u32 imm_shift = 6;
+            return static_cast<u32>((first << imm_shift) | (second << (16 + imm_shift)));
+        }
+    } half_imm;
+
+    union {
+        union {
+            BitField<37, 2, HalfPrecision> precision;
+            BitField<32, 1, u64> saturate;
+
+            BitField<30, 1, u64> negate_c;
+            BitField<35, 2, HalfType> type_c;
+        } rr;
+
+        BitField<57, 2, HalfPrecision> precision;
+        BitField<52, 1, u64> saturate;
+
+        BitField<49, 2, HalfMerge> merge;
+
+        BitField<47, 2, HalfType> type_a;
+
+        BitField<56, 1, u64> negate_b;
+        BitField<28, 2, HalfType> type_b;
+
+        BitField<51, 1, u64> negate_c;
+        BitField<53, 2, HalfType> type_reg39;
+    } hfma2;
 
     union {
         BitField<40, 1, u64> invert;
@@ -659,6 +768,18 @@ union Instruction {
     } ld_c;
 
     union {
+        BitField<48, 3, StoreType> type;
+    } ldst_sl;
+
+    union {
+        BitField<44, 2, u64> unknown;
+    } ld_l;
+
+    union {
+        BitField<44, 2, u64> unknown;
+    } st_l;
+
+    union {
         BitField<0, 3, u64> pred0;
         BitField<3, 3, u64> pred3;
         BitField<7, 1, u64> abs_a;
@@ -669,7 +790,6 @@ union Instruction {
         BitField<45, 2, PredOperation> op;
         BitField<47, 1, u64> ftz;
         BitField<48, 4, PredCondition> cond;
-        BitField<56, 1, u64> neg_b;
     } fsetp;
 
     union {
@@ -696,6 +816,14 @@ union Instruction {
     } psetp;
 
     union {
+        BitField<43, 4, PredCondition> cond;
+        BitField<45, 2, PredOperation> op;
+        BitField<3, 3, u64> pred3;
+        BitField<0, 3, u64> pred0;
+        BitField<39, 3, u64> pred39;
+    } vsetp;
+
+    union {
         BitField<12, 3, u64> pred12;
         BitField<15, 1, u64> neg_pred12;
         BitField<24, 2, PredOperation> cond;
@@ -710,11 +838,34 @@ union Instruction {
     union {
         BitField<0, 3, u64> pred0;
         BitField<3, 3, u64> pred3;
-        BitField<8, 5, ControlCode> cc; // flag in cc
+        BitField<8, 5, ConditionCode> cc; // flag in cc
         BitField<39, 3, u64> pred39;
         BitField<42, 1, u64> neg_pred39;
         BitField<45, 4, PredOperation> op; // op with pred39
     } csetp;
+
+    union {
+        BitField<35, 4, PredCondition> cond;
+        BitField<49, 1, u64> h_and;
+        BitField<6, 1, u64> ftz;
+        BitField<45, 2, PredOperation> op;
+        BitField<3, 3, u64> pred3;
+        BitField<0, 3, u64> pred0;
+        BitField<43, 1, u64> negate_a;
+        BitField<44, 1, u64> abs_a;
+        BitField<47, 2, HalfType> type_a;
+        BitField<31, 1, u64> negate_b;
+        BitField<30, 1, u64> abs_b;
+        BitField<28, 2, HalfType> type_b;
+        BitField<42, 1, u64> neg_pred;
+        BitField<39, 3, u64> pred39;
+    } hsetp2;
+
+    union {
+        BitField<40, 1, R2pMode> mode;
+        BitField<41, 2, u64> byte;
+        BitField<20, 7, u64> immediate_mask;
+    } r2p;
 
     union {
         BitField<39, 3, u64> pred39;
@@ -727,8 +878,22 @@ union Instruction {
         BitField<53, 1, u64> neg_b;
         BitField<54, 1, u64> abs_a;
         BitField<55, 1, u64> ftz;
-        BitField<56, 1, u64> neg_imm;
     } fset;
+
+    union {
+        BitField<49, 1, u64> bf;
+        BitField<35, 3, PredCondition> cond;
+        BitField<50, 1, u64> ftz;
+        BitField<45, 2, PredOperation> op;
+        BitField<43, 1, u64> negate_a;
+        BitField<44, 1, u64> abs_a;
+        BitField<47, 2, HalfType> type_a;
+        BitField<31, 1, u64> negate_b;
+        BitField<30, 1, u64> abs_b;
+        BitField<28, 2, HalfType> type_b;
+        BitField<42, 1, u64> neg_pred;
+        BitField<39, 3, u64> pred39;
+    } hset2;
 
     union {
         BitField<39, 3, u64> pred39;
@@ -1036,15 +1201,17 @@ union Instruction {
     union {
         BitField<48, 1, u64> signed_a;
         BitField<38, 1, u64> is_byte_chunk_a;
-        BitField<36, 2, VmadType> type_a;
+        BitField<36, 2, VideoType> type_a;
         BitField<36, 2, u64> byte_height_a;
 
         BitField<49, 1, u64> signed_b;
         BitField<50, 1, u64> use_register_b;
         BitField<30, 1, u64> is_byte_chunk_b;
-        BitField<28, 2, VmadType> type_b;
+        BitField<28, 2, VideoType> type_b;
         BitField<28, 2, u64> byte_height_b;
+    } video;
 
+    union {
         BitField<51, 2, VmadShr> shr;
         BitField<55, 1, u64> saturate; // Saturates the result (a * b + c)
         BitField<47, 1, u64> cc;
@@ -1080,6 +1247,8 @@ union Instruction {
     BitField<61, 1, u64> is_b_imm;
     BitField<60, 1, u64> is_b_gpr;
     BitField<59, 1, u64> is_c_gpr;
+    BitField<20, 24, s64> smem_imm;
+    BitField<0, 5, ConditionCode> flow_condition_code;
 
     Attribute attribute;
     Sampler sampler;
@@ -1095,14 +1264,21 @@ public:
         KIL,
         SSY,
         SYNC,
+        BRK,
         DEPBAR,
         BFE_C,
         BFE_R,
         BFE_IMM,
+        BFI_IMM_R,
         BRA,
+        PBK,
         LD_A,
+        LD_L,
+        LD_S,
         LD_C,
         ST_A,
+        ST_L,
+        ST_S,
         LDG, // Load from global memory
         STG, // Store in global memory
         TEX,
@@ -1118,6 +1294,7 @@ public:
         OUT_R, // Emit vertex/primitive
         ISBERD,
         VMAD,
+        VSETP,
         FFMA_IMM, // Fused Multiply and Add
         FFMA_CR,
         FFMA_RC,
@@ -1145,6 +1322,18 @@ public:
         LEA_RZ,
         LEA_IMM,
         LEA_HI,
+        HADD2_C,
+        HADD2_R,
+        HADD2_IMM,
+        HMUL2_C,
+        HMUL2_R,
+        HMUL2_IMM,
+        HFMA2_CR,
+        HFMA2_RC,
+        HFMA2_RR,
+        HFMA2_IMM_R,
+        HSETP2_R,
+        HSET2_R,
         POPC_C,
         POPC_R,
         POPC_IMM,
@@ -1206,6 +1395,7 @@ public:
         PSETP,
         PSET,
         CSETP,
+        R2P_IMM,
         XMAD_IMM,
         XMAD_CR,
         XMAD_RC,
@@ -1218,9 +1408,13 @@ public:
         ArithmeticImmediate,
         ArithmeticInteger,
         ArithmeticIntegerImmediate,
+        ArithmeticHalf,
+        ArithmeticHalfImmediate,
         Bfe,
+        Bfi,
         Shift,
         Ffma,
+        Hfma2,
         Flow,
         Synch,
         Memory,
@@ -1228,8 +1422,11 @@ public:
         FloatSetPredicate,
         IntegerSet,
         IntegerSetPredicate,
+        HalfSet,
+        HalfSetPredicate,
         PredicateSetPredicate,
         PredicateSetRegister,
+        RegisterSetPredicate,
         Conversion,
         Xmad,
         Unknown,
@@ -1239,7 +1436,7 @@ public:
     /// conditionally executed).
     static bool IsPredicatedInstruction(Id opcode) {
         // TODO(Subv): Add the rest of unpredicated instructions.
-        return opcode != Id::SSY;
+        return opcode != Id::SSY && opcode != Id::PBK;
     }
 
     class Matcher {
@@ -1280,7 +1477,7 @@ public:
         Type type;
     };
 
-    static boost::optional<const Matcher&> Decode(Instruction instr) {
+    static std::optional<std::reference_wrapper<const Matcher>> Decode(Instruction instr) {
         static const auto table{GetDecodeTable()};
 
         const auto matches_instruction = [instr](const auto& matcher) {
@@ -1288,7 +1485,8 @@ public:
         };
 
         auto iter = std::find_if(table.begin(), table.end(), matches_instruction);
-        return iter != table.end() ? boost::optional<const Matcher&>(*iter) : boost::none;
+        return iter != table.end() ? std::optional<std::reference_wrapper<const Matcher>>(*iter)
+                                   : std::nullopt;
     }
 
 private:
@@ -1335,12 +1533,18 @@ private:
 #define INST(bitstring, op, type, name) Detail::GetMatcher(bitstring, op, type, name)
             INST("111000110011----", Id::KIL, Type::Flow, "KIL"),
             INST("111000101001----", Id::SSY, Type::Flow, "SSY"),
+            INST("111000101010----", Id::PBK, Type::Flow, "PBK"),
             INST("111000100100----", Id::BRA, Type::Flow, "BRA"),
+            INST("1111000011111---", Id::SYNC, Type::Flow, "SYNC"),
+            INST("111000110100---", Id::BRK, Type::Flow, "BRK"),
             INST("1111000011110---", Id::DEPBAR, Type::Synch, "DEPBAR"),
-            INST("1111000011111---", Id::SYNC, Type::Synch, "SYNC"),
             INST("1110111111011---", Id::LD_A, Type::Memory, "LD_A"),
+            INST("1110111101001---", Id::LD_S, Type::Memory, "LD_S"),
+            INST("1110111101000---", Id::LD_L, Type::Memory, "LD_L"),
             INST("1110111110010---", Id::LD_C, Type::Memory, "LD_C"),
             INST("1110111111110---", Id::ST_A, Type::Memory, "ST_A"),
+            INST("1110111101011---", Id::ST_S, Type::Memory, "ST_S"),
+            INST("1110111101010---", Id::ST_L, Type::Memory, "ST_L"),
             INST("1110111011010---", Id::LDG, Type::Memory, "LDG"),
             INST("1110111011011---", Id::STG, Type::Memory, "STG"),
             INST("110000----111---", Id::TEX, Type::Memory, "TEX"),
@@ -1356,6 +1560,7 @@ private:
             INST("1111101111100---", Id::OUT_R, Type::Trivial, "OUT_R"),
             INST("1110111111010---", Id::ISBERD, Type::Trivial, "ISBERD"),
             INST("01011111--------", Id::VMAD, Type::Trivial, "VMAD"),
+            INST("0101000011110---", Id::VSETP, Type::Trivial, "VSETP"),
             INST("0011001-1-------", Id::FFMA_IMM, Type::Ffma, "FFMA_IMM"),
             INST("010010011-------", Id::FFMA_CR, Type::Ffma, "FFMA_CR"),
             INST("010100011-------", Id::FFMA_RC, Type::Ffma, "FFMA_RC"),
@@ -1389,6 +1594,18 @@ private:
             INST("001101101101----", Id::LEA_IMM, Type::ArithmeticInteger, "LEA_IMM"),
             INST("010010111101----", Id::LEA_RZ, Type::ArithmeticInteger, "LEA_RZ"),
             INST("00011000--------", Id::LEA_HI, Type::ArithmeticInteger, "LEA_HI"),
+            INST("0111101-1-------", Id::HADD2_C, Type::ArithmeticHalf, "HADD2_C"),
+            INST("0101110100010---", Id::HADD2_R, Type::ArithmeticHalf, "HADD2_R"),
+            INST("0111101-0-------", Id::HADD2_IMM, Type::ArithmeticHalfImmediate, "HADD2_IMM"),
+            INST("0111100-1-------", Id::HMUL2_C, Type::ArithmeticHalf, "HMUL2_C"),
+            INST("0101110100001---", Id::HMUL2_R, Type::ArithmeticHalf, "HMUL2_R"),
+            INST("0111100-0-------", Id::HMUL2_IMM, Type::ArithmeticHalfImmediate, "HMUL2_IMM"),
+            INST("01110---1-------", Id::HFMA2_CR, Type::Hfma2, "HFMA2_CR"),
+            INST("01100---1-------", Id::HFMA2_RC, Type::Hfma2, "HFMA2_RC"),
+            INST("0101110100000---", Id::HFMA2_RR, Type::Hfma2, "HFMA2_RR"),
+            INST("01110---0-------", Id::HFMA2_IMM_R, Type::Hfma2, "HFMA2_R_IMM"),
+            INST("0101110100100---", Id::HSETP2_R, Type::HalfSetPredicate, "HSETP_R"),
+            INST("0101110100011---", Id::HSET2_R, Type::HalfSet, "HSET2_R"),
             INST("0101000010000---", Id::MUFU, Type::Arithmetic, "MUFU"),
             INST("0100110010010---", Id::RRO_C, Type::Arithmetic, "RRO_C"),
             INST("0101110010010---", Id::RRO_R, Type::Arithmetic, "RRO_R"),
@@ -1413,6 +1630,7 @@ private:
             INST("0100110000000---", Id::BFE_C, Type::Bfe, "BFE_C"),
             INST("0101110000000---", Id::BFE_R, Type::Bfe, "BFE_R"),
             INST("0011100-00000---", Id::BFE_IMM, Type::Bfe, "BFE_IMM"),
+            INST("0011011-11110---", Id::BFI_IMM_R, Type::Bfi, "BFI_IMM_R"),
             INST("0100110001000---", Id::LOP_C, Type::ArithmeticInteger, "LOP_C"),
             INST("0101110001000---", Id::LOP_R, Type::ArithmeticInteger, "LOP_R"),
             INST("0011100001000---", Id::LOP_IMM, Type::ArithmeticInteger, "LOP_IMM"),
@@ -1447,6 +1665,7 @@ private:
             INST("0101000010001---", Id::PSET, Type::PredicateSetRegister, "PSET"),
             INST("0101000010010---", Id::PSETP, Type::PredicateSetPredicate, "PSETP"),
             INST("010100001010----", Id::CSETP, Type::PredicateSetPredicate, "CSETP"),
+            INST("0011100-11110---", Id::R2P_IMM, Type::RegisterSetPredicate, "R2P_IMM"),
             INST("0011011-00------", Id::XMAD_IMM, Type::Xmad, "XMAD_IMM"),
             INST("0100111---------", Id::XMAD_CR, Type::Xmad, "XMAD_CR"),
             INST("010100010-------", Id::XMAD_RC, Type::Xmad, "XMAD_RC"),

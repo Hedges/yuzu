@@ -122,14 +122,16 @@ u64 XCI::GetProgramTitleID() const {
     return secure_partition->GetProgramTitleID();
 }
 
-std::shared_ptr<NCA> XCI::GetProgramNCA() const {
-    return program;
+bool XCI::HasProgramNCA() const {
+    return program != nullptr;
 }
 
 VirtualFile XCI::GetProgramNCAFile() const {
-    if (GetProgramNCA() == nullptr)
+    if (!HasProgramNCA()) {
         return nullptr;
-    return GetProgramNCA()->GetBaseFile();
+    }
+
+    return program->GetBaseFile();
 }
 
 const std::vector<std::shared_ptr<NCA>>& XCI::GetNCAs() const {
@@ -166,10 +168,6 @@ VirtualDir XCI::GetParentDirectory() const {
     return file->GetContainingDirectory();
 }
 
-bool XCI::ReplaceFileWithSubdirectory(VirtualFile file, VirtualDir dir) {
-    return false;
-}
-
 Loader::ResultStatus XCI::AddNCAFromPartition(XCIPartition part) {
     if (partitions[static_cast<std::size_t>(part)] == nullptr) {
         return Loader::ResultStatus::ErrorXCIMissingPartition;
@@ -178,7 +176,7 @@ Loader::ResultStatus XCI::AddNCAFromPartition(XCIPartition part) {
     for (const VirtualFile& file : partitions[static_cast<std::size_t>(part)]->GetFiles()) {
         if (file->GetExtension() != "nca")
             continue;
-        auto nca = std::make_shared<NCA>(file);
+        auto nca = std::make_shared<NCA>(file, nullptr, 0, keys);
         // TODO(DarkLordZach): Add proper Rev1+ Support
         if (nca->IsUpdate())
             continue;

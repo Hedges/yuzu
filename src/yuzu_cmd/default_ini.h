@@ -110,9 +110,9 @@ use_frame_limit =
 # 1 - 9999: Speed limit as a percentage of target game speed. 100 (default)
 frame_limit =
 
-# Whether to use accurate framebuffers
+# Whether to use accurate GPU emulation
 # 0 (default): Off (fast), 1 : On (slow)
-use_accurate_framebuffers =
+use_accurate_gpu_emulation =
 
 # The clear color for the renderer. What shows up on the sides of the bottom screen.
 # Must be in range of 0.0-1.0. Defaults to 1.0 for all.
@@ -174,6 +174,15 @@ use_virtual_sd =
 # 1: Yes, 0 (default): No
 use_docked_mode =
 
+# Allow the use of NFC in games
+# 1 (default): Yes, 0 : No
+enable_nfc =
+
+# Sets the seed for the RNG generator built into the switch
+# rng_seed will be ignored and randomly generated if rng_seed_enabled is false
+rng_seed_enabled =
+rng_seed =
+
 # Sets the account username, max length is 32 characters
 # yuzu (default)
 username = yuzu
@@ -197,6 +206,10 @@ log_filter = *:Trace
 # Port for listening to GDB connections.
 use_gdbstub=false
 gdbstub_port=24689
+# Determines whether or not yuzu will dump the ExeFS of all games it attempts to load while loading them
+dump_exefs=false
+# Determines whether or not yuzu will dump all NSOs it attempts to load while loading them
+dump_nso=false
 
 [WebService]
 # Whether or not to enable telemetry

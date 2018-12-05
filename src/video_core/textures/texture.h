@@ -141,6 +141,7 @@ static_assert(sizeof(TextureHandle) == 4, "TextureHandle has wrong size");
 
 struct TICEntry {
     static constexpr u32 DefaultBlockHeight = 16;
+    static constexpr u32 DefaultBlockDepth = 1;
 
     union {
         u32 raw;
@@ -165,21 +166,34 @@ struct TICEntry {
         BitField<3, 3, u32> block_height;
         BitField<6, 3, u32> block_depth;
 
+        BitField<10, 3, u32> tile_width_spacing;
+
         // High 16 bits of the pitch value
         BitField<0, 16, u32> pitch_high;
-
+        BitField<26, 1, u32> use_header_opt_control;
+        BitField<27, 1, u32> depth_texture;
         BitField<28, 4, u32> max_mip_level;
     };
     union {
         BitField<0, 16, u32> width_minus_1;
+        BitField<22, 1, u32> srgb_conversion;
         BitField<23, 4, TextureType> texture_type;
+        BitField<29, 3, u32> border_size;
     };
     union {
         BitField<0, 16, u32> height_minus_1;
         BitField<16, 15, u32> depth_minus_1;
     };
+    union {
+        BitField<6, 13, u32> mip_lod_bias;
+        BitField<27, 3, u32> max_anisotropy;
+    };
 
-    INSERT_PADDING_BYTES(8);
+    union {
+        BitField<0, 4, u32> res_min_mip_level;
+        BitField<4, 4, u32> res_max_mip_level;
+        BitField<12, 12, u32> min_lod_clamp;
+    };
 
     GPUVAddr Address() const {
         return static_cast<GPUVAddr>((static_cast<GPUVAddr>(address_high) << 32) | address_low);
@@ -226,6 +240,10 @@ struct TICEntry {
         return header_version == TICHeaderVersion::BlockLinear ||
                header_version == TICHeaderVersion::BlockLinearColorKey;
     }
+
+    bool IsSrgbConversionEnabled() const {
+        return srgb_conversion != 0;
+    }
 };
 static_assert(sizeof(TICEntry) == 0x20, "TICEntry has wrong size");
 
@@ -269,13 +287,25 @@ struct TSCEntry {
         BitField<6, 3, WrapMode> wrap_p;
         BitField<9, 1, u32> depth_compare_enabled;
         BitField<10, 3, DepthCompareFunc> depth_compare_func;
+        BitField<13, 1, u32> srgb_conversion;
+        BitField<20, 3, u32> max_anisotropy;
     };
     union {
         BitField<0, 2, TextureFilter> mag_filter;
         BitField<4, 2, TextureFilter> min_filter;
         BitField<6, 2, TextureMipmapFilter> mip_filter;
+        BitField<9, 1, u32> cubemap_interface_filtering;
+        BitField<12, 13, u32> mip_lod_bias;
     };
-    INSERT_PADDING_BYTES(8);
+    union {
+        BitField<0, 12, u32> min_lod_clamp;
+        BitField<12, 12, u32> max_lod_clamp;
+        BitField<24, 8, u32> srgb_border_color_r;
+    };
+    union {
+        BitField<12, 8, u32> srgb_border_color_g;
+        BitField<20, 8, u32> srgb_border_color_b;
+    };
     float border_color_r;
     float border_color_g;
     float border_color_b;

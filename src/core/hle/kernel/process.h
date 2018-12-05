@@ -13,6 +13,7 @@
 #include <boost/container/static_vector.hpp>
 #include "common/bit_field.h"
 #include "common/common_types.h"
+#include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/object.h"
 #include "core/hle/kernel/thread.h"
 #include "core/hle/kernel/vm_manager.h"
@@ -24,6 +25,7 @@ class ProgramMetadata;
 namespace Kernel {
 
 class KernelCore;
+class ResourceLimit;
 
 struct AddressMapping {
     // Address and size must be page-aligned
@@ -57,9 +59,23 @@ union ProcessFlags {
     BitField<12, 1, u16> loaded_high; ///< Application loaded high (not at 0x00100000).
 };
 
-enum class ProcessStatus { Created, Running, Exited };
-
-class ResourceLimit;
+/**
+ * Indicates the status of a Process instance.
+ *
+ * @note These match the values as used by kernel,
+ *       so new entries should only be added if RE
+ *       shows that a new value has been introduced.
+ */
+enum class ProcessStatus {
+    Created,
+    CreatedWithDebuggerAttached,
+    Running,
+    WaitingForDebuggerToAttach,
+    DebuggerAttached,
+    Exiting,
+    Exited,
+    DebugBreak,
+};
 
 struct CodeSet final {
     struct Segment {
@@ -103,6 +119,8 @@ struct CodeSet final {
 
 class Process final : public Object {
 public:
+    static constexpr std::size_t RANDOM_ENTROPY_SIZE = 4;
+
     static SharedPtr<Process> Create(KernelCore& kernel, std::string&& name);
 
     std::string GetTypeName() const override {
@@ -127,6 +145,16 @@ public:
         return vm_manager;
     }
 
+    /// Gets a reference to the process' handle table.
+    HandleTable& GetHandleTable() {
+        return handle_table;
+    }
+
+    /// Gets a const reference to the process' handle table.
+    const HandleTable& GetHandleTable() const {
+        return handle_table;
+    }
+
     /// Gets the current status of the process
     ProcessStatus GetStatus() const {
         return status;
@@ -143,14 +171,7 @@ public:
     }
 
     /// Gets the resource limit descriptor for this process
-    ResourceLimit& GetResourceLimit() {
-        return *resource_limit;
-    }
-
-    /// Gets the resource limit descriptor for this process
-    const ResourceLimit& GetResourceLimit() const {
-        return *resource_limit;
-    }
+    SharedPtr<ResourceLimit> GetResourceLimit() const;
 
     /// Gets the default CPU ID for this process
     u8 GetDefaultProcessorID() const {
@@ -174,6 +195,21 @@ public:
     /// Whether this process is an AArch64 or AArch32 process.
     bool Is64BitProcess() const {
         return is_64bit_process;
+    }
+
+    /// Gets the total running time of the process instance in ticks.
+    u64 GetCPUTimeTicks() const {
+        return total_process_running_time_ticks;
+    }
+
+    /// Updates the total running time, adding the given ticks to it.
+    void UpdateCPUTimeTicks(u64 ticks) {
+        total_process_running_time_ticks += ticks;
+    }
+
+    /// Gets 8 bytes of random data for svcGetInfo RandomEntropy
+    u64 GetRandomEntropy(std::size_t index) const {
+        return random_entropy.at(index);
     }
 
     /**
@@ -215,7 +251,8 @@ public:
     ResultVal<VAddr> HeapAllocate(VAddr target, u64 size, VMAPermission perms);
     ResultCode HeapFree(VAddr target, u32 size);
 
-    ResultCode MirrorMemory(VAddr dst_addr, VAddr src_addr, u64 size);
+    ResultCode MirrorMemory(VAddr dst_addr, VAddr src_addr, u64 size,
+                            MemoryState state = MemoryState::Mapped);
 
     ResultCode UnmapMemory(VAddr dst_addr, VAddr src_addr, u64 size);
 
@@ -256,17 +293,6 @@ private:
     u32 allowed_thread_priority_mask = 0xFFFFFFFF;
     u32 is_virtual_address_memory_enabled = 0;
 
-    // Memory used to back the allocations in the regular heap. A single vector is used to cover
-    // the entire virtual address space extents that bound the allocations, including any holes.
-    // This makes deallocation and reallocation of holes fast and keeps process memory contiguous
-    // in the emulator address space, allowing Memory::GetPointer to be reasonably safe.
-    std::shared_ptr<std::vector<u8>> heap_memory;
-
-    // The left/right bounds of the address space covered by heap_memory.
-    VAddr heap_start = 0;
-    VAddr heap_end = 0;
-    u64 heap_used = 0;
-
     /// The Thread Local Storage area is allocated as processes create threads,
     /// each TLS area is 0x200 bytes, so one page (0x1000) is split up in 8 parts, and each part
     /// holds the TLS for a specific thread. This vector contains which parts are in use for each
@@ -278,6 +304,15 @@ private:
     /// By default, we currently assume this is true, unless otherwise
     /// specified by metadata provided to the process during loading.
     bool is_64bit_process = true;
+
+    /// Total running time for the process in ticks.
+    u64 total_process_running_time_ticks = 0;
+
+    /// Per-process handle table for storing created object handles in.
+    HandleTable handle_table;
+
+    /// Random values for svcGetInfo RandomEntropy
+    std::array<u64, RANDOM_ENTROPY_SIZE> random_entropy;
 
     std::string name;
 };

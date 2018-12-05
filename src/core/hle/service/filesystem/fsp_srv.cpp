@@ -11,13 +11,16 @@
 
 #include "common/assert.h"
 #include "common/common_types.h"
+#include "common/hex_util.h"
 #include "common/logging/log.h"
 #include "common/string_util.h"
 #include "core/file_sys/directory.h"
 #include "core/file_sys/errors.h"
 #include "core/file_sys/mode.h"
 #include "core/file_sys/nca_metadata.h"
+#include "core/file_sys/patch_manager.h"
 #include "core/file_sys/savedata_factory.h"
+#include "core/file_sys/system_archive/system_archive.h"
 #include "core/file_sys/vfs.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/process.h"
@@ -60,13 +63,15 @@ private:
 
         // Error checking
         if (length < 0) {
+            LOG_ERROR(Service_FS, "Length is less than 0, length={}", length);
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ResultCode(ErrorModule::FS, ErrorDescription::InvalidLength));
+            rb.Push(FileSys::ERROR_INVALID_SIZE);
             return;
         }
         if (offset < 0) {
+            LOG_ERROR(Service_FS, "Offset is less than 0, offset={}", offset);
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ResultCode(ErrorModule::FS, ErrorDescription::InvalidOffset));
+            rb.Push(FileSys::ERROR_INVALID_OFFSET);
             return;
         }
 
@@ -105,13 +110,15 @@ private:
 
         // Error checking
         if (length < 0) {
+            LOG_ERROR(Service_FS, "Length is less than 0, length={}", length);
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ResultCode(ErrorModule::FS, ErrorDescription::InvalidLength));
+            rb.Push(FileSys::ERROR_INVALID_SIZE);
             return;
         }
         if (offset < 0) {
+            LOG_ERROR(Service_FS, "Offset is less than 0, offset={}", offset);
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ResultCode(ErrorModule::FS, ErrorDescription::InvalidOffset));
+            rb.Push(FileSys::ERROR_INVALID_OFFSET);
             return;
         }
 
@@ -136,13 +143,15 @@ private:
 
         // Error checking
         if (length < 0) {
+            LOG_ERROR(Service_FS, "Length is less than 0, length={}", length);
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ResultCode(ErrorModule::FS, ErrorDescription::InvalidLength));
+            rb.Push(FileSys::ERROR_INVALID_SIZE);
             return;
         }
         if (offset < 0) {
+            LOG_ERROR(Service_FS, "Offset is less than 0, offset={}", offset);
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ResultCode(ErrorModule::FS, ErrorDescription::InvalidOffset));
+            rb.Push(FileSys::ERROR_INVALID_OFFSET);
             return;
         }
 
@@ -178,8 +187,9 @@ private:
     void SetSize(Kernel::HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
         const u64 size = rp.Pop<u64>();
-        backend->Resize(size);
         LOG_DEBUG(Service_FS, "called, size={}", size);
+
+        backend->Resize(size);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
@@ -272,8 +282,8 @@ public:
             {0, &IFileSystem::CreateFile, "CreateFile"},
             {1, &IFileSystem::DeleteFile, "DeleteFile"},
             {2, &IFileSystem::CreateDirectory, "CreateDirectory"},
-            {3, nullptr, "DeleteDirectory"},
-            {4, nullptr, "DeleteDirectoryRecursively"},
+            {3, &IFileSystem::DeleteDirectory, "DeleteDirectory"},
+            {4, &IFileSystem::DeleteDirectoryRecursively, "DeleteDirectoryRecursively"},
             {5, &IFileSystem::RenameFile, "RenameFile"},
             {6, nullptr, "RenameDirectory"},
             {7, &IFileSystem::GetEntryType, "GetEntryType"},
@@ -282,7 +292,7 @@ public:
             {10, &IFileSystem::Commit, "Commit"},
             {11, nullptr, "GetFreeSpaceSize"},
             {12, nullptr, "GetTotalSpaceSize"},
-            {13, nullptr, "CleanDirectoryRecursively"},
+            {13, &IFileSystem::CleanDirectoryRecursively, "CleanDirectoryRecursively"},
             {14, nullptr, "GetFileTimeStampRaw"},
             {15, nullptr, "QueryEntry"},
         };
@@ -326,6 +336,40 @@ public:
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(backend.CreateDirectory(name));
+    }
+
+    void DeleteDirectory(Kernel::HLERequestContext& ctx) {
+        const IPC::RequestParser rp{ctx};
+
+        const auto file_buffer = ctx.ReadBuffer();
+        std::string name = Common::StringFromBuffer(file_buffer);
+
+        LOG_DEBUG(Service_FS, "called directory {}", name);
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(backend.DeleteDirectory(name));
+    }
+
+    void DeleteDirectoryRecursively(Kernel::HLERequestContext& ctx) {
+        const IPC::RequestParser rp{ctx};
+
+        const auto file_buffer = ctx.ReadBuffer();
+        std::string name = Common::StringFromBuffer(file_buffer);
+
+        LOG_DEBUG(Service_FS, "called directory {}", name);
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(backend.DeleteDirectoryRecursively(name));
+    }
+
+    void CleanDirectoryRecursively(Kernel::HLERequestContext& ctx) {
+        const auto file_buffer = ctx.ReadBuffer();
+        const std::string name = Common::StringFromBuffer(file_buffer);
+
+        LOG_DEBUG(Service_FS, "called. Directory: {}", name);
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(backend.CleanDirectoryRecursively(name));
     }
 
     void RenameFile(Kernel::HLERequestContext& ctx) {
@@ -426,7 +470,149 @@ private:
     VfsDirectoryServiceWrapper backend;
 };
 
+class ISaveDataInfoReader final : public ServiceFramework<ISaveDataInfoReader> {
+public:
+    explicit ISaveDataInfoReader(FileSys::SaveDataSpaceId space)
+        : ServiceFramework("ISaveDataInfoReader") {
+        static const FunctionInfo functions[] = {
+            {0, &ISaveDataInfoReader::ReadSaveDataInfo, "ReadSaveDataInfo"},
+        };
+        RegisterHandlers(functions);
+
+        FindAllSaves(space);
+    }
+
+    void ReadSaveDataInfo(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_FS, "called");
+
+        // Calculate how many entries we can fit in the output buffer
+        const u64 count_entries = ctx.GetWriteBufferSize() / sizeof(SaveDataInfo);
+
+        // Cap at total number of entries.
+        const u64 actual_entries = std::min(count_entries, info.size() - next_entry_index);
+
+        // Determine data start and end
+        const auto* begin = reinterpret_cast<u8*>(info.data() + next_entry_index);
+        const auto* end = reinterpret_cast<u8*>(info.data() + next_entry_index + actual_entries);
+        const auto range_size = static_cast<std::size_t>(std::distance(begin, end));
+
+        next_entry_index += actual_entries;
+
+        // Write the data to memory
+        ctx.WriteBuffer(begin, range_size);
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(RESULT_SUCCESS);
+        rb.Push<u32>(static_cast<u32>(actual_entries));
+    }
+
+private:
+    static u64 stoull_be(std::string_view str) {
+        if (str.size() != 16)
+            return 0;
+
+        const auto bytes = Common::HexStringToArray<0x8>(str);
+        u64 out{};
+        std::memcpy(&out, bytes.data(), sizeof(u64));
+
+        return Common::swap64(out);
+    }
+
+    void FindAllSaves(FileSys::SaveDataSpaceId space) {
+        const auto save_root = OpenSaveDataSpace(space);
+        ASSERT(save_root.Succeeded());
+
+        for (const auto& type : (*save_root)->GetSubdirectories()) {
+            if (type->GetName() == "save") {
+                for (const auto& save_id : type->GetSubdirectories()) {
+                    for (const auto& user_id : save_id->GetSubdirectories()) {
+                        const auto save_id_numeric = stoull_be(save_id->GetName());
+                        auto user_id_numeric = Common::HexStringToArray<0x10>(user_id->GetName());
+                        std::reverse(user_id_numeric.begin(), user_id_numeric.end());
+
+                        if (save_id_numeric != 0) {
+                            // System Save Data
+                            info.emplace_back(SaveDataInfo{
+                                0,
+                                space,
+                                FileSys::SaveDataType::SystemSaveData,
+                                {},
+                                user_id_numeric,
+                                save_id_numeric,
+                                0,
+                                user_id->GetSize(),
+                                {},
+                            });
+
+                            continue;
+                        }
+
+                        for (const auto& title_id : user_id->GetSubdirectories()) {
+                            const auto device =
+                                std::all_of(user_id_numeric.begin(), user_id_numeric.end(),
+                                            [](u8 val) { return val == 0; });
+                            info.emplace_back(SaveDataInfo{
+                                0,
+                                space,
+                                device ? FileSys::SaveDataType::DeviceSaveData
+                                       : FileSys::SaveDataType::SaveData,
+                                {},
+                                user_id_numeric,
+                                save_id_numeric,
+                                stoull_be(title_id->GetName()),
+                                title_id->GetSize(),
+                                {},
+                            });
+                        }
+                    }
+                }
+            } else if (space == FileSys::SaveDataSpaceId::TemporaryStorage) {
+                // Temporary Storage
+                for (const auto& user_id : type->GetSubdirectories()) {
+                    for (const auto& title_id : user_id->GetSubdirectories()) {
+                        if (!title_id->GetFiles().empty() ||
+                            !title_id->GetSubdirectories().empty()) {
+                            auto user_id_numeric =
+                                Common::HexStringToArray<0x10>(user_id->GetName());
+                            std::reverse(user_id_numeric.begin(), user_id_numeric.end());
+
+                            info.emplace_back(SaveDataInfo{
+                                0,
+                                space,
+                                FileSys::SaveDataType::TemporaryStorage,
+                                {},
+                                user_id_numeric,
+                                stoull_be(type->GetName()),
+                                stoull_be(title_id->GetName()),
+                                title_id->GetSize(),
+                                {},
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    struct SaveDataInfo {
+        u64_le save_id_unknown;
+        FileSys::SaveDataSpaceId space;
+        FileSys::SaveDataType type;
+        INSERT_PADDING_BYTES(0x6);
+        std::array<u8, 0x10> user_id;
+        u64_le save_id;
+        u64_le title_id;
+        u64_le save_image_size;
+        INSERT_PADDING_BYTES(0x28);
+    };
+    static_assert(sizeof(SaveDataInfo) == 0x60, "SaveDataInfo has incorrect size.");
+
+    std::vector<SaveDataInfo> info;
+    u64 next_entry_index = 0;
+};
+
 FSP_SRV::FSP_SRV() : ServiceFramework("fsp-srv") {
+    // clang-format off
     static const FunctionInfo functions[] = {
         {0, nullptr, "MountContent"},
         {1, &FSP_SRV::Initialize, "Initialize"},
@@ -460,7 +646,7 @@ FSP_SRV::FSP_SRV() : ServiceFramework("fsp-srv") {
         {58, nullptr, "ReadSaveDataFileSystemExtraData"},
         {59, nullptr, "WriteSaveDataFileSystemExtraData"},
         {60, nullptr, "OpenSaveDataInfoReader"},
-        {61, nullptr, "OpenSaveDataInfoReaderBySaveDataSpaceId"},
+        {61, &FSP_SRV::OpenSaveDataInfoReaderBySaveDataSpaceId, "OpenSaveDataInfoReaderBySaveDataSpaceId"},
         {62, nullptr, "OpenCacheStorageList"},
         {64, nullptr, "OpenSaveDataInternalStorageFileSystem"},
         {65, nullptr, "UpdateSaveDataMacForDebug"},
@@ -519,6 +705,7 @@ FSP_SRV::FSP_SRV() : ServiceFramework("fsp-srv") {
         {1009, nullptr, "GetAndClearMemoryReportInfo"},
         {1100, nullptr, "OverrideSaveDataTransferTokenSignVerificationKey"},
     };
+    // clang-format on
     RegisterHandlers(functions);
 }
 
@@ -536,6 +723,8 @@ void FSP_SRV::OpenFileSystemWithPatch(Kernel::HLERequestContext& ctx) {
 
     const auto type = rp.PopRaw<FileSystemType>();
     const auto title_id = rp.PopRaw<u64>();
+    LOG_WARNING(Service_FS, "(STUBBED) called with type={}, title_id={:016X}",
+                static_cast<u8>(type), title_id);
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 0};
     rb.Push(ResultCode(-1));
@@ -571,13 +760,14 @@ void FSP_SRV::MountSaveData(Kernel::HLERequestContext& ctx) {
     auto space_id = rp.PopRaw<FileSys::SaveDataSpaceId>();
     auto unk = rp.Pop<u32>();
     LOG_INFO(Service_FS, "called with unknown={:08X}", unk);
+
     auto save_struct = rp.PopRaw<FileSys::SaveDataDescriptor>();
 
     auto dir = OpenSaveData(space_id, save_struct);
 
     if (dir.Failed()) {
         IPC::ResponseBuilder rb{ctx, 2, 0, 0};
-        rb.Push(ResultCode(ErrorModule::FS, FileSys::ErrCodes::TitleNotFound));
+        rb.Push(FileSys::ERROR_ENTITY_NOT_FOUND);
         return;
     }
 
@@ -591,6 +781,16 @@ void FSP_SRV::MountSaveData(Kernel::HLERequestContext& ctx) {
 void FSP_SRV::OpenReadOnlySaveDataFileSystem(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service_FS, "(STUBBED) called, delegating to 51 OpenSaveDataFilesystem");
     MountSaveData(ctx);
+}
+
+void FSP_SRV::OpenSaveDataInfoReaderBySaveDataSpaceId(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto space = rp.PopRaw<FileSys::SaveDataSpaceId>();
+    LOG_INFO(Service_FS, "called, space={}", static_cast<u8>(space));
+
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(RESULT_SUCCESS);
+    rb.PushIpcInterface<ISaveDataInfoReader>(std::make_shared<ISaveDataInfoReader>(space));
 }
 
 void FSP_SRV::GetGlobalAccessLogMode(Kernel::HLERequestContext& ctx) {
@@ -630,7 +830,17 @@ void FSP_SRV::OpenDataStorageByDataId(Kernel::HLERequestContext& ctx) {
               static_cast<u8>(storage_id), unknown, title_id);
 
     auto data = OpenRomFS(title_id, storage_id, FileSys::ContentRecordType::Data);
+
     if (data.Failed()) {
+        const auto archive = FileSys::SystemArchive::SynthesizeSystemArchive(title_id);
+
+        if (archive != nullptr) {
+            IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+            rb.Push(RESULT_SUCCESS);
+            rb.PushIpcInterface(std::make_shared<IStorage>(archive));
+            return;
+        }
+
         // TODO(DarkLordZach): Find the right error code to use here
         LOG_ERROR(Service_FS,
                   "could not open data storage with title_id={:016X}, storage_id={:02X}", title_id,
@@ -640,7 +850,9 @@ void FSP_SRV::OpenDataStorageByDataId(Kernel::HLERequestContext& ctx) {
         return;
     }
 
-    IStorage storage(std::move(data.Unwrap()));
+    FileSys::PatchManager pm{title_id};
+
+    IStorage storage(pm.PatchRomFS(std::move(data.Unwrap()), 0, FileSys::ContentRecordType::Data));
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
@@ -657,7 +869,7 @@ void FSP_SRV::OpenRomStorage(Kernel::HLERequestContext& ctx) {
               static_cast<u8>(storage_id), title_id);
 
     IPC::ResponseBuilder rb{ctx, 2};
-    rb.Push(ResultCode(ErrorModule::FS, FileSys::ErrCodes::TitleNotFound));
+    rb.Push(FileSys::ERROR_ENTITY_NOT_FOUND);
 }
 
 } // namespace Service::FileSystem

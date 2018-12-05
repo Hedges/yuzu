@@ -4,13 +4,15 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <vector>
-#include <boost/optional.hpp>
+
 #include "common/common_types.h"
 #include "core/file_sys/vfs_types.h"
 
@@ -103,8 +105,8 @@ public:
     // into file. Returns number of bytes successfully written.
     virtual std::size_t Write(const u8* data, std::size_t length, std::size_t offset = 0) = 0;
 
-    // Reads exactly one byte at the offset provided, returning boost::none on error.
-    virtual boost::optional<u8> ReadByte(std::size_t offset = 0) const;
+    // Reads exactly one byte at the offset provided, returning std::nullopt on error.
+    virtual std::optional<u8> ReadByte(std::size_t offset = 0) const;
     // Reads size bytes starting at offset in file into a vector.
     virtual std::vector<u8> ReadBytes(std::size_t size, std::size_t offset = 0) const;
     // Reads all the bytes from the file into a vector. Equivalent to 'file->Read(file->GetSize(),
@@ -243,12 +245,18 @@ public:
     // any failure.
     virtual std::shared_ptr<VfsDirectory> CreateDirectoryAbsolute(std::string_view path);
 
-    // Deletes the subdirectory with name and returns true on success.
+    // Deletes the subdirectory with the given name and returns true on success.
     virtual bool DeleteSubdirectory(std::string_view name) = 0;
-    // Deletes all subdirectories and files of subdirectory with name recirsively and then deletes
-    // the subdirectory. Returns true on success.
+
+    // Deletes all subdirectories and files within the provided directory and then deletes
+    // the directory itself. Returns true on success.
     virtual bool DeleteSubdirectoryRecursive(std::string_view name);
-    // Returnes whether or not the file with name name was deleted successfully.
+
+    // Deletes all subdirectories and files within the provided directory.
+    // Unlike DeleteSubdirectoryRecursive, this does not delete the provided directory.
+    virtual bool CleanSubdirectoryRecursive(std::string_view name);
+
+    // Returns whether or not the file with name name was deleted successfully.
     virtual bool DeleteFile(std::string_view name) = 0;
 
     // Returns whether or not this directory was renamed to name.
@@ -262,36 +270,8 @@ public:
     // item name -> type.
     virtual std::map<std::string, VfsEntryType, std::less<>> GetEntries() const;
 
-    // Interprets the file with name file instead as a directory of type directory.
-    // The directory must have a constructor that takes a single argument of type
-    // std::shared_ptr<VfsFile>. Allows to reinterpret container files (i.e NCA, zip, XCI, etc) as a
-    // subdirectory in one call.
-    template <typename Directory>
-    bool InterpretAsDirectory(std::string_view file) {
-        auto file_p = GetFile(file);
-
-        if (file_p == nullptr) {
-            return false;
-        }
-
-        return ReplaceFileWithSubdirectory(file_p, std::make_shared<Directory>(file_p));
-    }
-
-    bool InterpretAsDirectory(const std::function<VirtualDir(VirtualFile)>& function,
-                              const std::string& file) {
-        auto file_p = GetFile(file);
-        if (file_p == nullptr)
-            return false;
-        return ReplaceFileWithSubdirectory(file_p, function(file_p));
-    }
-
     // Returns the full path of this directory as a string, recursively
     virtual std::string GetFullPath() const;
-
-protected:
-    // Backend for InterpretAsDirectory.
-    // Removes all references to file and adds a reference to dir in the directory's implementation.
-    virtual bool ReplaceFileWithSubdirectory(VirtualFile file, VirtualDir dir) = 0;
 };
 
 // A convenience partial-implementation of VfsDirectory that stubs out methods that should only work
@@ -302,7 +282,13 @@ public:
     bool IsReadable() const override;
     std::shared_ptr<VfsDirectory> CreateSubdirectory(std::string_view name) override;
     std::shared_ptr<VfsFile> CreateFile(std::string_view name) override;
+    std::shared_ptr<VfsFile> CreateFileAbsolute(std::string_view path) override;
+    std::shared_ptr<VfsFile> CreateFileRelative(std::string_view path) override;
+    std::shared_ptr<VfsDirectory> CreateDirectoryAbsolute(std::string_view path) override;
+    std::shared_ptr<VfsDirectory> CreateDirectoryRelative(std::string_view path) override;
     bool DeleteSubdirectory(std::string_view name) override;
+    bool DeleteSubdirectoryRecursive(std::string_view name) override;
+    bool CleanSubdirectoryRecursive(std::string_view name) override;
     bool DeleteFile(std::string_view name) override;
     bool Rename(std::string_view name) override;
 };

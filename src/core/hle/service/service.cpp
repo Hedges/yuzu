@@ -22,7 +22,7 @@
 #include "core/hle/service/apm/apm.h"
 #include "core/hle/service/arp/arp.h"
 #include "core/hle/service/audio/audio.h"
-#include "core/hle/service/bcat/bcat.h"
+#include "core/hle/service/bcat/module.h"
 #include "core/hle/service/bpc/bpc.h"
 #include "core/hle/service/btdrv/btdrv.h"
 #include "core/hle/service/btm/btm.h"
@@ -48,15 +48,17 @@
 #include "core/hle/service/nfp/nfp.h"
 #include "core/hle/service/nifm/nifm.h"
 #include "core/hle/service/nim/nim.h"
+#include "core/hle/service/npns/npns.h"
 #include "core/hle/service/ns/ns.h"
 #include "core/hle/service/nvdrv/nvdrv.h"
 #include "core/hle/service/nvflinger/nvflinger.h"
 #include "core/hle/service/pcie/pcie.h"
-#include "core/hle/service/pctl/pctl.h"
+#include "core/hle/service/pctl/module.h"
 #include "core/hle/service/pcv/pcv.h"
 #include "core/hle/service/pm/pm.h"
 #include "core/hle/service/prepo/prepo.h"
 #include "core/hle/service/psc/psc.h"
+#include "core/hle/service/ptm/psm.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/set/settings.h"
 #include "core/hle/service/sm/sm.h"
@@ -78,8 +80,8 @@ namespace Service {
  * Creates a function string for logging, complete with the name (or header code, depending
  * on what's passed in) the port name, and all the cmd_buff arguments.
  */
-static std::string MakeFunctionString(const char* name, const char* port_name,
-                                      const u32* cmd_buff) {
+[[maybe_unused]] static std::string MakeFunctionString(const char* name, const char* port_name,
+                                                       const u32* cmd_buff) {
     // Number of params == bits 0-5 + bits 6-11
     int num_params = (cmd_buff[0] & 0x3F) + ((cmd_buff[0] >> 6) & 0x3F);
 
@@ -197,7 +199,7 @@ ResultCode ServiceFrameworkBase::HandleSyncRequest(Kernel::HLERequestContext& co
 // Module interface
 
 /// Initialize ServiceManager
-void Init(std::shared_ptr<SM::ServiceManager>& sm, const FileSys::VirtualFilesystem& rfs) {
+void Init(std::shared_ptr<SM::ServiceManager>& sm, FileSys::VfsFilesystem& vfs) {
     // NVFlinger needs to be accessed by several services like Vi and AppletOE so we instantiate it
     // here and pass it into the respective InstallInterfaces functions.
     auto nv_flinger = std::make_shared<NVFlinger::NVFlinger>();
@@ -220,7 +222,7 @@ void Init(std::shared_ptr<SM::ServiceManager>& sm, const FileSys::VirtualFilesys
     EUPLD::InstallInterfaces(*sm);
     Fatal::InstallInterfaces(*sm);
     FGM::InstallInterfaces(*sm);
-    FileSystem::InstallInterfaces(*sm, rfs);
+    FileSystem::InstallInterfaces(*sm, vfs);
     Friend::InstallInterfaces(*sm);
     GRC::InstallInterfaces(*sm);
     HID::InstallInterfaces(*sm);
@@ -236,6 +238,7 @@ void Init(std::shared_ptr<SM::ServiceManager>& sm, const FileSys::VirtualFilesys
     NFP::InstallInterfaces(*sm);
     NIFM::InstallInterfaces(*sm);
     NIM::InstallInterfaces(*sm);
+    NPNS::InstallInterfaces(*sm);
     NS::InstallInterfaces(*sm);
     Nvidia::InstallInterfaces(*sm, *nv_flinger);
     PCIe::InstallInterfaces(*sm);
@@ -244,6 +247,7 @@ void Init(std::shared_ptr<SM::ServiceManager>& sm, const FileSys::VirtualFilesys
     PlayReport::InstallInterfaces(*sm);
     PM::InstallInterfaces(*sm);
     PSC::InstallInterfaces(*sm);
+    PSM::InstallInterfaces(*sm);
     Set::InstallInterfaces(*sm);
     Sockets::InstallInterfaces(*sm);
     SPL::InstallInterfaces(*sm);

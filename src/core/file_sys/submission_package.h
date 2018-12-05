@@ -55,9 +55,6 @@ public:
 
     VirtualDir GetParentDirectory() const override;
 
-protected:
-    bool ReplaceFileWithSubdirectory(VirtualFile file, VirtualDir dir) override;
-
 private:
     void InitializeExeFSAndRomFS(const std::vector<VirtualFile>& files);
     void ReadNCAs(const std::vector<VirtualFile>& files);
@@ -72,6 +69,8 @@ private:
     // Map title id -> {map type -> NCA}
     std::map<u64, std::map<ContentRecordType, std::shared_ptr<NCA>>> ncas;
     std::vector<VirtualFile> ticket_files;
+
+    Core::Crypto::KeyManager keys;
 
     VirtualFile romfs;
     VirtualDir exefs;

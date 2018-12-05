@@ -51,6 +51,13 @@ ResultVal<VirtualDir> SaveDataFactory::Open(SaveDataSpaceId space, SaveDataDescr
                     meta.title_id);
     }
 
+    if (meta.type == SaveDataType::DeviceSaveData && meta.user_id != u128{0, 0}) {
+        LOG_WARNING(Service_FS,
+                    "Possibly incorrect SaveDataDescriptor, type is DeviceSaveData but user_id is "
+                    "non-zero ({:016X}{:016X})",
+                    meta.user_id[1], meta.user_id[0]);
+    }
+
     std::string save_directory =
         GetFullPath(space, meta.type, meta.title_id, meta.user_id, meta.save_id);
 
@@ -76,6 +83,24 @@ ResultVal<VirtualDir> SaveDataFactory::Open(SaveDataSpaceId space, SaveDataDescr
     return MakeResult<VirtualDir>(std::move(out));
 }
 
+VirtualDir SaveDataFactory::GetSaveDataSpaceDirectory(SaveDataSpaceId space) const {
+    return dir->GetDirectoryRelative(GetSaveDataSpaceIdPath(space));
+}
+
+std::string SaveDataFactory::GetSaveDataSpaceIdPath(SaveDataSpaceId space) {
+    switch (space) {
+    case SaveDataSpaceId::NandSystem:
+        return "/system/";
+    case SaveDataSpaceId::NandUser:
+        return "/user/";
+    case SaveDataSpaceId::TemporaryStorage:
+        return "/temp/";
+    default:
+        ASSERT_MSG(false, "Unrecognized SaveDataSpaceId: {:02X}", static_cast<u8>(space));
+        return "/unrecognized/"; ///< To prevent corruption when ignoring asserts.
+    }
+}
+
 std::string SaveDataFactory::GetFullPath(SaveDataSpaceId space, SaveDataType type, u64 title_id,
                                          u128 user_id, u64 save_id) {
     // According to switchbrew, if a save is of type SaveData and the title id field is 0, it should
@@ -83,27 +108,17 @@ std::string SaveDataFactory::GetFullPath(SaveDataSpaceId space, SaveDataType typ
     if (type == SaveDataType::SaveData && title_id == 0)
         title_id = Core::CurrentProcess()->GetTitleID();
 
-    std::string out;
-
-    switch (space) {
-    case SaveDataSpaceId::NandSystem:
-        out = "/system/";
-        break;
-    case SaveDataSpaceId::NandUser:
-        out = "/user/";
-        break;
-    default:
-        ASSERT_MSG(false, "Unrecognized SaveDataSpaceId: {:02X}", static_cast<u8>(space));
-    }
+    std::string out = GetSaveDataSpaceIdPath(space);
 
     switch (type) {
     case SaveDataType::SystemSaveData:
         return fmt::format("{}save/{:016X}/{:016X}{:016X}", out, save_id, user_id[1], user_id[0]);
     case SaveDataType::SaveData:
+    case SaveDataType::DeviceSaveData:
         return fmt::format("{}save/{:016X}/{:016X}{:016X}/{:016X}", out, 0, user_id[1], user_id[0],
                            title_id);
     case SaveDataType::TemporaryStorage:
-        return fmt::format("{}temp/{:016X}/{:016X}{:016X}/{:016X}", out, 0, user_id[1], user_id[0],
+        return fmt::format("{}{:016X}/{:016X}{:016X}/{:016X}", out, 0, user_id[1], user_id[0],
                            title_id);
     default:
         ASSERT_MSG(false, "Unrecognized SaveDataType: {:02X}", static_cast<u8>(type));

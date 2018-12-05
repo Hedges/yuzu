@@ -11,7 +11,7 @@ namespace Tegra {
 
 MacroInterpreter::MacroInterpreter(Engines::Maxwell3D& maxwell3d) : maxwell3d(maxwell3d) {}
 
-void MacroInterpreter::Execute(const std::vector<u32>& code, std::vector<u32> parameters) {
+void MacroInterpreter::Execute(u32 offset, std::vector<u32> parameters) {
     Reset();
     registers[1] = parameters[0];
     this->parameters = std::move(parameters);
@@ -19,7 +19,7 @@ void MacroInterpreter::Execute(const std::vector<u32>& code, std::vector<u32> pa
     // Execute the code until we hit an exit condition.
     bool keep_executing = true;
     while (keep_executing) {
-        keep_executing = Step(code, false);
+        keep_executing = Step(offset, false);
     }
 
     // Assert the the macro used all the input parameters
@@ -29,25 +29,26 @@ void MacroInterpreter::Execute(const std::vector<u32>& code, std::vector<u32> pa
 void MacroInterpreter::Reset() {
     registers = {};
     pc = 0;
-    delayed_pc = boost::none;
+    delayed_pc = {};
     method_address.raw = 0;
     parameters.clear();
     // The next parameter index starts at 1, because $r1 already has the value of the first
     // parameter.
     next_parameter_index = 1;
+    carry_flag = false;
 }
 
-bool MacroInterpreter::Step(const std::vector<u32>& code, bool is_delay_slot) {
+bool MacroInterpreter::Step(u32 offset, bool is_delay_slot) {
     u32 base_address = pc;
 
-    Opcode opcode = GetOpcode(code);
+    Opcode opcode = GetOpcode(offset);
     pc += 4;
 
     // Update the program counter if we were delayed
-    if (delayed_pc != boost::none) {
+    if (delayed_pc) {
         ASSERT(is_delay_slot);
         pc = *delayed_pc;
-        delayed_pc = boost::none;
+        delayed_pc = {};
     }
 
     switch (opcode.operation) {
@@ -108,7 +109,7 @@ bool MacroInterpreter::Step(const std::vector<u32>& code, bool is_delay_slot) {
 
             delayed_pc = base_address + opcode.GetBranchTarget();
             // Execute one more instruction due to the delay slot.
-            return Step(code, true);
+            return Step(offset, true);
         }
         break;
     }
@@ -121,27 +122,42 @@ bool MacroInterpreter::Step(const std::vector<u32>& code, bool is_delay_slot) {
         // Exit has a delay slot, execute the next instruction
         // Note: Executing an exit during a branch delay slot will cause the instruction at the
         // branch target to be executed before exiting.
-        Step(code, true);
+        Step(offset, true);
         return false;
     }
 
     return true;
 }
 
-MacroInterpreter::Opcode MacroInterpreter::GetOpcode(const std::vector<u32>& code) const {
+MacroInterpreter::Opcode MacroInterpreter::GetOpcode(u32 offset) const {
+    const auto& macro_memory{maxwell3d.GetMacroMemory()};
     ASSERT((pc % sizeof(u32)) == 0);
-    ASSERT(pc < code.size() * sizeof(u32));
-    return {code[pc / sizeof(u32)]};
+    ASSERT((pc + offset) < macro_memory.size() * sizeof(u32));
+    return {macro_memory[offset + pc / sizeof(u32)]};
 }
 
-u32 MacroInterpreter::GetALUResult(ALUOperation operation, u32 src_a, u32 src_b) const {
+u32 MacroInterpreter::GetALUResult(ALUOperation operation, u32 src_a, u32 src_b) {
     switch (operation) {
-    case ALUOperation::Add:
-        return src_a + src_b;
-    // TODO(Subv): Implement AddWithCarry
-    case ALUOperation::Subtract:
-        return src_a - src_b;
-    // TODO(Subv): Implement SubtractWithBorrow
+    case ALUOperation::Add: {
+        const u64 result{static_cast<u64>(src_a) + src_b};
+        carry_flag = result > 0xffffffff;
+        return static_cast<u32>(result);
+    }
+    case ALUOperation::AddWithCarry: {
+        const u64 result{static_cast<u64>(src_a) + src_b + (carry_flag ? 1ULL : 0ULL)};
+        carry_flag = result > 0xffffffff;
+        return static_cast<u32>(result);
+    }
+    case ALUOperation::Subtract: {
+        const u64 result{static_cast<u64>(src_a) - src_b};
+        carry_flag = result < 0x100000000;
+        return static_cast<u32>(result);
+    }
+    case ALUOperation::SubtractWithBorrow: {
+        const u64 result{static_cast<u64>(src_a) - src_b - (carry_flag ? 0ULL : 1ULL)};
+        carry_flag = result < 0x100000000;
+        return static_cast<u32>(result);
+    }
     case ALUOperation::Xor:
         return src_a ^ src_b;
     case ALUOperation::Or:
@@ -234,7 +250,7 @@ void MacroInterpreter::SetMethodAddress(u32 address) {
 }
 
 void MacroInterpreter::Send(u32 value) {
-    maxwell3d.WriteReg(method_address.address, value, 0);
+    maxwell3d.CallMethod({method_address.address, value});
     // Increment the method address by the method increment.
     method_address.address.Assign(method_address.address.Value() +
                                   method_address.increment.Value());

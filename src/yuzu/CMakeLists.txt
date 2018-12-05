@@ -7,6 +7,8 @@ add_executable(yuzu
     Info.plist
     about_dialog.cpp
     about_dialog.h
+    applets/software_keyboard.cpp
+    applets/software_keyboard.h
     bootmanager.cpp
     bootmanager.h
     compatibility_list.cpp
@@ -27,8 +29,14 @@ add_executable(yuzu
     configuration/configure_graphics.h
     configuration/configure_input.cpp
     configuration/configure_input.h
+    configuration/configure_input_player.cpp
+    configuration/configure_input_player.h
+    configuration/configure_mouse_advanced.cpp
+    configuration/configure_mouse_advanced.h
     configuration/configure_system.cpp
     configuration/configure_system.h
+    configuration/configure_touchscreen_advanced.cpp
+    configuration/configure_touchscreen_advanced.h
     configuration/configure_web.cpp
     configuration/configure_web.h
     debugger/graphics/graphics_breakpoint_observer.cpp
@@ -56,6 +64,8 @@ add_executable(yuzu
     main.h
     ui_settings.cpp
     ui_settings.h
+    util/limitable_input_dialog.cpp
+    util/limitable_input_dialog.h
     util/spinbox.cpp
     util/spinbox.h
     util/util.cpp
@@ -74,7 +84,10 @@ set(UIS
     configuration/configure_general.ui
     configuration/configure_graphics.ui
     configuration/configure_input.ui
+    configuration/configure_input_player.ui
+    configuration/configure_mouse_advanced.ui
     configuration/configure_system.ui
+    configuration/configure_touchscreen_advanced.ui
     configuration/configure_web.ui
     hotkeys.ui
     main.ui
@@ -82,10 +95,10 @@ set(UIS
 )
 
 file(GLOB COMPAT_LIST
-     ${CMAKE_BINARY_DIR}/dist/compatibility_list/compatibility_list.qrc
-     ${CMAKE_BINARY_DIR}/dist/compatibility_list/compatibility_list.json)
-file(GLOB_RECURSE ICONS ${CMAKE_SOURCE_DIR}/dist/icons/*)
-file(GLOB_RECURSE THEMES ${CMAKE_SOURCE_DIR}/dist/qt_themes/*)
+     ${PROJECT_BINARY_DIR}/dist/compatibility_list/compatibility_list.qrc
+     ${PROJECT_BINARY_DIR}/dist/compatibility_list/compatibility_list.json)
+file(GLOB_RECURSE ICONS ${PROJECT_SOURCE_DIR}/dist/icons/*)
+file(GLOB_RECURSE THEMES ${PROJECT_SOURCE_DIR}/dist/qt_themes/*)
 
 qt5_wrap_ui(UI_HDRS ${UIS})
 
@@ -121,7 +134,7 @@ target_link_libraries(yuzu PRIVATE Boost::boost glad Qt5::OpenGL Qt5::Widgets)
 target_link_libraries(yuzu PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
 
 if (YUZU_ENABLE_COMPATIBILITY_REPORTING)
-    add_definitions(-DYUZU_ENABLE_COMPATIBILITY_REPORTING)
+    target_compile_definitions(yuzu PRIVATE -DYUZU_ENABLE_COMPATIBILITY_REPORTING)
 endif()
 
 if (USE_DISCORD_PRESENCE)

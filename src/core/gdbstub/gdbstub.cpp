@@ -203,7 +203,7 @@ void RegisterModule(std::string name, VAddr beg, VAddr end, bool add_elf_ext) {
 
 static Kernel::Thread* FindThreadById(int id) {
     for (u32 core = 0; core < Core::NUM_CPU_CORES; core++) {
-        const auto& threads = Core::System::GetInstance().Scheduler(core)->GetThreadList();
+        const auto& threads = Core::System::GetInstance().Scheduler(core).GetThreadList();
         for (auto& thread : threads) {
             if (thread->GetThreadID() == static_cast<u32>(id)) {
                 current_core = core;
@@ -282,7 +282,7 @@ static void FpuWrite(std::size_t id, u128 val, Kernel::Thread* thread = nullptr)
     if (id >= UC_ARM64_REG_Q0 && id < FPCR_REGISTER) {
         thread_context.vector_registers[id - UC_ARM64_REG_Q0] = val;
     } else if (id == FPCR_REGISTER) {
-        thread_context.fpcr = val[0];
+        thread_context.fpcr = static_cast<u32>(val[0]);
     }
 }
 
@@ -528,6 +528,43 @@ BreakpointAddress GetNextBreakpointFromAddress(VAddr addr, BreakpointType type) 
     return breakpoint;
 }
 
+bool CheckBreakpoint(VAddr addr, BreakpointType type) {
+    if (!IsConnected()) {
+        return false;
+    }
+
+    const BreakpointMap& p = GetBreakpointMap(type);
+    const auto bp = p.find(addr);
+
+    if (bp == p.end()) {
+        return false;
+    }
+
+    u64 len = bp->second.len;
+
+    // IDA Pro defaults to 4-byte breakpoints for all non-hardware breakpoints
+    // no matter if it's a 4-byte or 2-byte instruction. When you execute a
+    // Thumb instruction with a 4-byte breakpoint set, it will set a breakpoint on
+    // two instructions instead of the single instruction you placed the breakpoint
+    // on. So, as a way to make sure that execution breakpoints are only breaking
+    // on the instruction that was specified, set the length of an execution
+    // breakpoint to 1. This should be fine since the CPU should never begin executing
+    // an instruction anywhere except the beginning of the instruction.
+    if (type == BreakpointType::Execute) {
+        len = 1;
+    }
+
+    if (bp->second.active && (addr >= bp->second.addr && addr < bp->second.addr + len)) {
+        LOG_DEBUG(Debug_GDBStub,
+                  "Found breakpoint type {} @ {:016X}, range: {:016X}"
+                  " - {:016X} ({:X} bytes)",
+                  static_cast<int>(type), addr, bp->second.addr, bp->second.addr + len, len);
+        return true;
+    }
+
+    return false;
+}
+
 /**
  * Send packet to gdb client.
  *
@@ -607,7 +644,7 @@ static void HandleQuery() {
     } else if (strncmp(query, "fThreadInfo", strlen("fThreadInfo")) == 0) {
         std::string val = "m";
         for (u32 core = 0; core < Core::NUM_CPU_CORES; core++) {
-            const auto& threads = Core::System::GetInstance().Scheduler(core)->GetThreadList();
+            const auto& threads = Core::System::GetInstance().Scheduler(core).GetThreadList();
             for (const auto& thread : threads) {
                 val += fmt::format("{:x},", thread->GetThreadID());
             }
@@ -621,7 +658,7 @@ static void HandleQuery() {
         buffer += "l<?xml version=\"1.0\"?>";
         buffer += "<threads>";
         for (u32 core = 0; core < Core::NUM_CPU_CORES; core++) {
-            const auto& threads = Core::System::GetInstance().Scheduler(core)->GetThreadList();
+            const auto& threads = Core::System::GetInstance().Scheduler(core).GetThreadList();
             for (const auto& thread : threads) {
                 buffer +=
                     fmt::format(R"*(<thread id="{:x}" core="{:d}" name="Thread {:x}"></thread>)*",
@@ -805,10 +842,10 @@ static void ReadRegister() {
         LongToGdbHex(reply + 16, r[1]);
     } else if (id == FPCR_REGISTER) {
         u128 r = FpuRead(id, current_thread);
-        IntToGdbHex(reply, (u32)r[0]);
+        IntToGdbHex(reply, static_cast<u32>(r[0]));
     } else if (id == FPCR_REGISTER + 1) {
         u128 r = FpuRead(id, current_thread);
-        IntToGdbHex(reply, (u32)(r[0] >> 32));
+        IntToGdbHex(reply, static_cast<u32>(r[0] >> 32));
     }
 
     SendReply(reinterpret_cast<char*>(reply));
@@ -846,7 +883,7 @@ static void ReadRegisters() {
     bufptr += 32 * 32;
 
     r = FpuRead(FPCR_REGISTER, current_thread);
-    IntToGdbHex(bufptr, (u32)r[0]);
+    IntToGdbHex(bufptr, static_cast<u32>(r[0]));
 
     bufptr += 8;
 
@@ -932,12 +969,6 @@ static void ReadMemory() {
     if (len * 2 > sizeof(reply)) {
         SendReply("E01");
     }
-
-    //const auto& vm_manager = Core::CurrentProcess()->VMManager();
-    //if (addr < vm_manager.GetCodeRegionBaseAddress() ||
-    //    addr >= vm_manager.GetMapRegionEndAddress()) {
-    //    return SendReply("E00");
-    //}
 
     if (!Memory::IsValidVirtualAddress(addr)) {
         return SendReply("E00");

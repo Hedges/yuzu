@@ -2,6 +2,9 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/logging/log.h"
+#include "core/file_sys/control_metadata.h"
+#include "core/file_sys/patch_manager.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/hle_ipc.h"
 #include "core/hle/service/ns/ns.h"
@@ -93,13 +96,23 @@ public:
             {86, nullptr, "EnableApplicationCrashReport"},
             {87, nullptr, "IsApplicationCrashReportEnabled"},
             {90, nullptr, "BoostSystemMemoryResourceLimit"},
+            {91, nullptr, "Unknown1"},
+            {92, nullptr, "Unknown2"},
+            {93, nullptr, "GetMainApplicationProgramIndex"},
+            {94, nullptr, "LaunchApplication2"},
+            {95, nullptr, "GetApplicationLaunchInfo"},
+            {96, nullptr, "AcquireApplicationLaunchInfo"},
+            {97, nullptr, "GetMainApplicationProgramIndex2"},
+            {98, nullptr, "EnableApplicationAllThreadDumpOnCrash"},
             {100, nullptr, "ResetToFactorySettings"},
             {101, nullptr, "ResetToFactorySettingsWithoutUserSaveData"},
             {102, nullptr, "ResetToFactorySettingsForRefurbishment"},
             {200, nullptr, "CalculateUserSaveDataStatistics"},
             {201, nullptr, "DeleteUserSaveDataAll"},
             {210, nullptr, "DeleteUserSystemSaveData"},
+            {211, nullptr, "DeleteSaveData"},
             {220, nullptr, "UnregisterNetworkServiceAccount"},
+            {221, nullptr, "UnregisterNetworkServiceAccountWithUserSaveDataDeletion"},
             {300, nullptr, "GetApplicationShellEvent"},
             {301, nullptr, "PopApplicationShellEventInfo"},
             {302, nullptr, "LaunchLibraryApplet"},
@@ -108,12 +121,13 @@ public:
             {305, nullptr, "TerminateSystemApplet"},
             {306, nullptr, "LaunchOverlayApplet"},
             {307, nullptr, "TerminateOverlayApplet"},
-            {400, nullptr, "GetApplicationControlData"},
+            {400, &IApplicationManagerInterface::GetApplicationControlData, "GetApplicationControlData"},
             {401, nullptr, "InvalidateAllApplicationControlCache"},
             {402, nullptr, "RequestDownloadApplicationControlData"},
             {403, nullptr, "GetMaxApplicationControlCacheCount"},
             {404, nullptr, "InvalidateApplicationControlCache"},
             {405, nullptr, "ListApplicationControlCacheEntryInfo"},
+            {406, nullptr, "GetApplicationControlProperty"},
             {502, nullptr, "RequestCheckGameCardRegistration"},
             {503, nullptr, "RequestGameCardRegistrationGoldPoint"},
             {504, nullptr, "RequestRegisterGameCard"},
@@ -129,6 +143,7 @@ public:
             {604, nullptr, "RegisterContentsExternalKey"},
             {605, nullptr, "ListApplicationContentMetaStatusWithRightsCheck"},
             {606, nullptr, "GetContentMetaStorage"},
+            {607, nullptr, "ListAvailableAddOnContent"},
             {700, nullptr, "PushDownloadTaskList"},
             {701, nullptr, "ClearTaskStatusList"},
             {702, nullptr, "RequestDownloadTaskList"},
@@ -148,6 +163,9 @@ public:
             {907, nullptr, "WithdrawApplicationUpdateRequest"},
             {908, nullptr, "ListApplicationRecordInstalledContentMeta"},
             {909, nullptr, "WithdrawCleanupAddOnContentsWithNoRightsRecommendation"},
+            {910, nullptr, "Unknown3"},
+            {911, nullptr, "SetPreInstalledApplication"},
+            {912, nullptr, "ClearPreInstalledApplicationFlag"},
             {1000, nullptr, "RequestVerifyApplicationDeprecated"},
             {1001, nullptr, "CorruptApplicationForDebug"},
             {1002, nullptr, "RequestVerifyAddOnContentsRights"},
@@ -162,6 +180,8 @@ public:
             {1305, nullptr, "TryDeleteRunningApplicationEntity"},
             {1306, nullptr, "TryDeleteRunningApplicationCompletely"},
             {1307, nullptr, "TryDeleteRunningApplicationContentEntities"},
+            {1308, nullptr, "DeleteApplicationCompletelyForDebug"},
+            {1309, nullptr, "CleanupUnavailableAddOnContents"},
             {1400, nullptr, "PrepareShutdown"},
             {1500, nullptr, "FormatSdCard"},
             {1501, nullptr, "NeedsSystemUpdateToFormatSdCard"},
@@ -199,10 +219,91 @@ public:
             {2015, nullptr, "CompareSystemDeliveryInfo"},
             {2016, nullptr, "ListNotCommittedContentMeta"},
             {2017, nullptr, "CreateDownloadTask"},
+            {2018, nullptr, "Unknown4"},
+            {2050, nullptr, "Unknown5"},
+            {2100, nullptr, "Unknown6"},
+            {2101, nullptr, "Unknown7"},
+            {2150, nullptr, "CreateRightsEnvironment"},
+            {2151, nullptr, "DestroyRightsEnvironment"},
+            {2152, nullptr, "ActivateRightsEnvironment"},
+            {2153, nullptr, "DeactivateRightsEnvironment"},
+            {2154, nullptr, "ForceActivateRightsContextForExit"},
+            {2160, nullptr, "AddTargetApplicationToRightsEnvironment"},
+            {2161, nullptr, "SetUsersToRightsEnvironment"},
+            {2170, nullptr, "GetRightsEnvironmentStatus"},
+            {2171, nullptr, "GetRightsEnvironmentStatusChangedEvent"},
+            {2180, nullptr, "RequestExtendRightsInRightsEnvironment"},
+            {2181, nullptr, "GetLastResultOfExtendRightsInRightsEnvironment"},
+            {2182, nullptr, "SetActiveRightsContextUsingStateToRightsEnvironment"},
+            {2190, nullptr, "GetRightsEnvironmentHandleForApplication"},
+            {2199, nullptr, "GetRightsEnvironmentCountForDebug"},
+            {2200, nullptr, "Unknown8"},
+            {2201, nullptr, "Unknown9"},
+            {2250, nullptr, "Unknown10"},
+            {2300, nullptr, "Unknown11"},
         };
         // clang-format on
 
         RegisterHandlers(functions);
+    }
+
+    void GetApplicationControlData(Kernel::HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto flag = rp.PopRaw<u64>();
+        LOG_DEBUG(Service_NS, "called with flag={:016X}", flag);
+
+        const auto title_id = rp.PopRaw<u64>();
+
+        const auto size = ctx.GetWriteBufferSize();
+
+        const FileSys::PatchManager pm{title_id};
+        const auto control = pm.GetControlMetadata();
+
+        std::vector<u8> out;
+
+        if (control.first != nullptr) {
+            if (size < 0x4000) {
+                LOG_ERROR(Service_NS,
+                          "output buffer is too small! (actual={:016X}, expected_min=0x4000)",
+                          size);
+                IPC::ResponseBuilder rb{ctx, 2};
+                // TODO(DarkLordZach): Find a better error code for this.
+                rb.Push(ResultCode(-1));
+                return;
+            }
+
+            out.resize(0x4000);
+            const auto bytes = control.first->GetRawBytes();
+            std::memcpy(out.data(), bytes.data(), bytes.size());
+        } else {
+            LOG_WARNING(Service_NS, "missing NACP data for title_id={:016X}, defaulting to zeros.",
+                        title_id);
+            out.resize(std::min<u64>(0x4000, size));
+        }
+
+        if (control.second != nullptr) {
+            if (size < 0x4000 + control.second->GetSize()) {
+                LOG_ERROR(Service_NS,
+                          "output buffer is too small! (actual={:016X}, expected_min={:016X})",
+                          size, 0x4000 + control.second->GetSize());
+                IPC::ResponseBuilder rb{ctx, 2};
+                // TODO(DarkLordZach): Find a better error code for this.
+                rb.Push(ResultCode(-1));
+                return;
+            }
+
+            out.resize(0x4000 + control.second->GetSize());
+            control.second->Read(out.data() + 0x4000, control.second->GetSize());
+        } else {
+            LOG_WARNING(Service_NS, "missing icon data for title_id={:016X}, defaulting to zeros.",
+                        title_id);
+        }
+
+        ctx.WriteBuffer(out);
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(RESULT_SUCCESS);
+        rb.Push<u32>(static_cast<u32>(out.size()));
     }
 };
 
@@ -332,11 +433,11 @@ public:
 private:
     template <typename T>
     void PushInterface(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_NS, "called");
+
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
         rb.PushIpcInterface<T>();
-
-        LOG_DEBUG(Service_NS, "called");
     }
 };
 
@@ -348,12 +449,15 @@ public:
             {0, nullptr, "LaunchProgram"},
             {1, nullptr, "TerminateProcess"},
             {2, nullptr, "TerminateProgram"},
-            {3, nullptr, "GetShellEventHandle"},
-            {4, nullptr, "GetShellEventInfo"},
-            {5, nullptr, "TerminateApplication"},
-            {6, nullptr, "PrepareLaunchProgramFromHost"},
-            {7, nullptr, "LaunchApplication"},
-            {8, nullptr, "LaunchApplicationWithStorageId"},
+            {4, nullptr, "GetShellEventHandle"},
+            {5, nullptr, "GetShellEventInfo"},
+            {6, nullptr, "TerminateApplication"},
+            {7, nullptr, "PrepareLaunchProgramFromHost"},
+            {8, nullptr, "LaunchApplication"},
+            {9, nullptr, "LaunchApplicationWithStorageId"},
+            {10, nullptr, "TerminateApplication2"},
+            {11, nullptr, "GetRunningApplicationProcessId"},
+            {12, nullptr, "SetCurrentApplicationRightsEnvironmentCanBeActive"},
         };
         // clang-format on
 
@@ -388,6 +492,7 @@ public:
             {19, nullptr, "GetReceivedEulaDataSize"},
             {20, nullptr, "GetReceivedEulaData"},
             {21, nullptr, "SetupToReceiveSystemUpdate"},
+            {22, nullptr, "RequestCheckLatestUpdateIncludesRebootlessUpdate"},
         };
         // clang-format on
 
@@ -421,11 +526,11 @@ public:
 
 private:
     void OpenSystemUpdateControl(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_NS, "called");
+
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
         rb.PushIpcInterface<ISystemUpdateControl>();
-
-        LOG_DEBUG(Service_NS, "called");
     }
 };
 

@@ -1,6 +1,6 @@
 add_library(video_core STATIC
-    command_processor.cpp
-    command_processor.h
+    dma_pusher.cpp
+    dma_pusher.h
     debug_utils/debug_utils.cpp
     debug_utils/debug_utils.h
     engines/fermi_2d.cpp
@@ -21,6 +21,9 @@ add_library(video_core STATIC
     macro_interpreter.h
     memory_manager.cpp
     memory_manager.h
+    morton.cpp
+    morton.h
+    rasterizer_cache.cpp
     rasterizer_cache.h
     rasterizer_interface.h
     renderer_base.cpp
@@ -33,6 +36,7 @@ add_library(video_core STATIC
     renderer_opengl/gl_rasterizer.h
     renderer_opengl/gl_rasterizer_cache.cpp
     renderer_opengl/gl_rasterizer_cache.h
+    renderer_opengl/gl_resource_manager.cpp
     renderer_opengl/gl_resource_manager.h
     renderer_opengl/gl_shader_cache.cpp
     renderer_opengl/gl_shader_cache.h
@@ -51,12 +55,15 @@ add_library(video_core STATIC
     renderer_opengl/maxwell_to_gl.h
     renderer_opengl/renderer_opengl.cpp
     renderer_opengl/renderer_opengl.h
+    renderer_opengl/utils.cpp
+    renderer_opengl/utils.h
+    surface.cpp
+    surface.h
     textures/astc.cpp
     textures/astc.h
     textures/decoders.cpp
     textures/decoders.h
     textures/texture.h
-    utils.h
     video_core.cpp
     video_core.h
 )

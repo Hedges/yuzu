@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <vector>
 #include <QByteArray>
 #include <QString>
@@ -59,9 +60,11 @@ struct Values {
 
     // Game List
     bool show_unknown;
+    bool show_add_ons;
     uint32_t icon_size;
     uint8_t row_1_text_id;
     uint8_t row_2_text_id;
+    std::atomic_bool is_game_list_reload_pending{false};
 };
 
 extern Values values;

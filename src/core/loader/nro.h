@@ -5,12 +5,17 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include "common/common_types.h"
 #include "core/loader/linker.h"
 #include "core/loader/loader.h"
 
 namespace FileSys {
 class NACP;
+}
+
+namespace Kernel {
+class Process;
 }
 
 namespace Loader {
@@ -41,7 +46,7 @@ public:
     bool IsRomFSUpdatable() const override;
 
 private:
-    bool LoadNro(FileSys::VirtualFile file, VAddr load_base);
+    bool LoadNro(Kernel::Process& process, const FileSys::VfsFile& file, VAddr load_base);
 
     std::vector<u8> icon_data;
     std::unique_ptr<FileSys::NACP> nacp;

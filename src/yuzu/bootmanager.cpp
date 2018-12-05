@@ -8,7 +8,6 @@
 
 #include "common/microprofile.h"
 #include "common/scm_rev.h"
-#include "common/string_util.h"
 #include "core/core.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "core/settings.h"
@@ -107,9 +106,8 @@ private:
 GRenderWindow::GRenderWindow(QWidget* parent, EmuThread* emu_thread)
     : QWidget(parent), child(nullptr), emu_thread(emu_thread) {
 
-    std::string window_title = fmt::format("yuzu {} | {}-{}", Common::g_build_name,
-                                           Common::g_scm_branch, Common::g_scm_desc);
-    setWindowTitle(QString::fromStdString(window_title));
+    setWindowTitle(QStringLiteral("yuzu %1 | %2-%3")
+                       .arg(Common::g_build_name, Common::g_scm_branch, Common::g_scm_desc));
     setAttribute(Qt::WA_AcceptTouchEvents);
 
     InputCommon::Init();
@@ -312,7 +310,7 @@ void GRenderWindow::InitRenderTarget() {
     // TODO: One of these flags might be interesting: WA_OpaquePaintEvent, WA_NoBackground,
     // WA_DontShowOnScreen, WA_DeleteOnClose
     QGLFormat fmt;
-    fmt.setVersion(3, 3);
+    fmt.setVersion(4, 3);
     fmt.setProfile(QGLFormat::CoreProfile);
     fmt.setSwapInterval(false);
 

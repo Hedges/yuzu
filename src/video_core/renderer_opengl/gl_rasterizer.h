@@ -8,12 +8,12 @@
 #include <cstddef>
 #include <map>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 #include <boost/icl/interval_map.hpp>
-#include <boost/optional.hpp>
 #include <boost/range/iterator_range.hpp>
 #include <glad/glad.h>
 
@@ -60,20 +60,6 @@ public:
     bool AccelerateDrawBatch(bool is_indexed) override;
     void UpdatePagesCachedCount(Tegra::GPUVAddr addr, u64 size, int delta) override;
 
-    /// OpenGL shader generated for a given Maxwell register state
-    struct MaxwellShader {
-        /// OpenGL shader resource
-        OGLProgram shader;
-    };
-
-    struct VertexShader {
-        OGLShader shader;
-    };
-
-    struct FragmentShader {
-        OGLShader shader;
-    };
-
     /// Maximum supported size that a constbuffer can have in bytes.
     static constexpr std::size_t MaxConstbufferSize = 0x10000;
     static_assert(MaxConstbufferSize % sizeof(GLvec4) == 0,
@@ -88,17 +74,23 @@ private:
         /// SamplerInfo struct.
         void Create();
         /// Syncs the sampler object with the config, updating any necessary state.
-        void SyncWithConfig(const Tegra::Texture::TSCEntry& config);
+        void SyncWithConfig(const Tegra::Texture::TSCEntry& info);
 
     private:
-        Tegra::Texture::TextureFilter mag_filter;
-        Tegra::Texture::TextureFilter min_filter;
-        Tegra::Texture::WrapMode wrap_u;
-        Tegra::Texture::WrapMode wrap_v;
-        Tegra::Texture::WrapMode wrap_p;
-        bool uses_depth_compare;
-        Tegra::Texture::DepthCompareFunc depth_compare_func;
-        GLvec4 border_color;
+        Tegra::Texture::TextureFilter mag_filter = Tegra::Texture::TextureFilter::Nearest;
+        Tegra::Texture::TextureFilter min_filter = Tegra::Texture::TextureFilter::Nearest;
+        Tegra::Texture::TextureMipmapFilter mip_filter = Tegra::Texture::TextureMipmapFilter::None;
+        Tegra::Texture::WrapMode wrap_u = Tegra::Texture::WrapMode::ClampToEdge;
+        Tegra::Texture::WrapMode wrap_v = Tegra::Texture::WrapMode::ClampToEdge;
+        Tegra::Texture::WrapMode wrap_p = Tegra::Texture::WrapMode::ClampToEdge;
+        bool uses_depth_compare = false;
+        Tegra::Texture::DepthCompareFunc depth_compare_func =
+            Tegra::Texture::DepthCompareFunc::Always;
+        GLvec4 border_color = {};
+        float min_lod = 0.0f;
+        float max_lod = 16.0f;
+        float lod_bias = 0.0f;
+        float max_anisotropic = 1.0f;
     };
 
     /**
@@ -108,9 +100,9 @@ private:
      * @param preserve_contents If true, tries to preserve data from a previously used framebuffer.
      * @param single_color_target Specifies if a single color buffer target should be used.
      */
-    void ConfigureFramebuffers(bool use_color_fb = true, bool using_depth_fb = true,
-                               bool preserve_contents = true,
-                               boost::optional<std::size_t> single_color_target = {});
+    void ConfigureFramebuffers(OpenGLState& current_state, bool use_color_fb = true,
+                               bool using_depth_fb = true, bool preserve_contents = true,
+                               std::optional<std::size_t> single_color_target = {});
 
     /*
      * Configures the current constbuffers to use for the draw command.
@@ -132,11 +124,12 @@ private:
     u32 SetupTextures(Tegra::Engines::Maxwell3D::Regs::ShaderStage stage, Shader& shader,
                       GLenum primitive_mode, u32 current_unit);
 
-    /// Syncs the viewport to match the guest state
-    void SyncViewport();
+    /// Syncs the viewport and depth range to match the guest state
+    void SyncViewport(OpenGLState& current_state);
 
     /// Syncs the clip enabled status to match the guest state
-    void SyncClipEnabled();
+    void SyncClipEnabled(
+        const std::array<bool, Tegra::Engines::Maxwell3D::Regs::NumClipDistances>& clip_mask);
 
     /// Syncs the clip coefficients to match the guest state
     void SyncClipCoef();
@@ -144,11 +137,8 @@ private:
     /// Syncs the cull mode to match the guest state
     void SyncCullMode();
 
-    /// Syncs the depth scale to match the guest state
-    void SyncDepthScale();
-
-    /// Syncs the depth offset to match the guest state
-    void SyncDepthOffset();
+    /// Syncs the primitve restart to match the guest state
+    void SyncPrimitiveRestart();
 
     /// Syncs the depth test state to match the guest state
     void SyncDepthTestState();
@@ -162,11 +152,14 @@ private:
     /// Syncs the LogicOp state to match the guest state
     void SyncLogicOpState();
 
-    /// Syncs the alpha test state to match the guest state
-    void SyncAlphaTest();
+    /// Syncs the the color clamp state
+    void SyncFragmentColorClampState();
+
+    /// Syncs the alpha coverage and alpha to one
+    void SyncMultiSampleState();
 
     /// Syncs the scissor test state to match the guest state
-    void SyncScissorTest();
+    void SyncScissorTest(OpenGLState& current_state);
 
     /// Syncs the transform feedback state to match the guest state
     void SyncTransformFeedback();
@@ -174,10 +167,18 @@ private:
     /// Syncs the point state to match the guest state
     void SyncPointState();
 
-    bool has_ARB_direct_state_access = false;
-    bool has_ARB_multi_bind = false;
-    bool has_ARB_separate_shader_objects = false;
-    bool has_ARB_vertex_attrib_binding = false;
+    /// Syncs Color Mask
+    void SyncColorMask();
+
+    /// Syncs the polygon offsets
+    void SyncPolygonOffset();
+
+    /// Check asserts for alpha testing.
+    void CheckAlphaTests();
+
+    /// Check for extension that are not strictly required
+    /// but are needed for correct emulation
+    void CheckExtensions();
 
     OpenGLState state;
 
@@ -206,7 +207,8 @@ private:
 
     std::size_t CalculateIndexBufferSize() const;
 
-    void SetupVertexArrays();
+    void SetupVertexFormat();
+    void SetupVertexBuffer();
 
     DrawParameters SetupDraw();
 

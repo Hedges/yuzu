@@ -5,6 +5,8 @@
 #include <cstring>
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "core/core_timing.h"
+#include "core/core_timing_util.h"
 #include "core/hle/service/nvdrv/devices/nvhost_ctrl_gpu.h"
 
 namespace Service::Nvidia::Devices {
@@ -33,6 +35,8 @@ u32 nvhost_ctrl_gpu::ioctl(Ioctl command, const std::vector<u8>& input, std::vec
         return ZBCQueryTable(input, output);
     case IoctlCommand::IocFlushL2:
         return FlushL2(input, output);
+    case IoctlCommand::IocGetGpuTime:
+        return GetGpuTime(input, output);
     }
     UNIMPLEMENTED_MSG("Unimplemented ioctl");
     return 0;
@@ -99,6 +103,7 @@ u32 nvhost_ctrl_gpu::GetTPCMasks(const std::vector<u8>& input, std::vector<u8>& 
 
 u32 nvhost_ctrl_gpu::GetActiveSlotMask(const std::vector<u8>& input, std::vector<u8>& output) {
     LOG_DEBUG(Service_NVDRV, "called");
+
     IoctlActiveSlotMask params{};
     if (input.size() > 0) {
         std::memcpy(&params, input.data(), input.size());
@@ -111,6 +116,7 @@ u32 nvhost_ctrl_gpu::GetActiveSlotMask(const std::vector<u8>& input, std::vector
 
 u32 nvhost_ctrl_gpu::ZCullGetCtxSize(const std::vector<u8>& input, std::vector<u8>& output) {
     LOG_DEBUG(Service_NVDRV, "called");
+
     IoctlZcullGetCtxSize params{};
     if (input.size() > 0) {
         std::memcpy(&params, input.data(), input.size());
@@ -122,6 +128,7 @@ u32 nvhost_ctrl_gpu::ZCullGetCtxSize(const std::vector<u8>& input, std::vector<u
 
 u32 nvhost_ctrl_gpu::ZCullGetInfo(const std::vector<u8>& input, std::vector<u8>& output) {
     LOG_DEBUG(Service_NVDRV, "called");
+
     IoctlNvgpuGpuZcullGetInfoArgs params{};
 
     if (input.size() > 0) {
@@ -144,6 +151,7 @@ u32 nvhost_ctrl_gpu::ZCullGetInfo(const std::vector<u8>& input, std::vector<u8>&
 
 u32 nvhost_ctrl_gpu::ZBCSetTable(const std::vector<u8>& input, std::vector<u8>& output) {
     LOG_WARNING(Service_NVDRV, "(STUBBED) called");
+
     IoctlZbcSetTable params{};
     std::memcpy(&params, input.data(), input.size());
     // TODO(ogniK): What does this even actually do?
@@ -153,6 +161,7 @@ u32 nvhost_ctrl_gpu::ZBCSetTable(const std::vector<u8>& input, std::vector<u8>& 
 
 u32 nvhost_ctrl_gpu::ZBCQueryTable(const std::vector<u8>& input, std::vector<u8>& output) {
     LOG_WARNING(Service_NVDRV, "(STUBBED) called");
+
     IoctlZbcQueryTable params{};
     std::memcpy(&params, input.data(), input.size());
     // TODO : To implement properly
@@ -162,9 +171,20 @@ u32 nvhost_ctrl_gpu::ZBCQueryTable(const std::vector<u8>& input, std::vector<u8>
 
 u32 nvhost_ctrl_gpu::FlushL2(const std::vector<u8>& input, std::vector<u8>& output) {
     LOG_WARNING(Service_NVDRV, "(STUBBED) called");
+
     IoctlFlushL2 params{};
     std::memcpy(&params, input.data(), input.size());
     // TODO : To implement properly
+    std::memcpy(output.data(), &params, output.size());
+    return 0;
+}
+
+u32 nvhost_ctrl_gpu::GetGpuTime(const std::vector<u8>& input, std::vector<u8>& output) {
+    LOG_DEBUG(Service_NVDRV, "called");
+
+    IoctlGetGpuTime params{};
+    std::memcpy(&params, input.data(), input.size());
+    params.gpu_time = CoreTiming::cyclesToNs(CoreTiming::GetTicks());
     std::memcpy(output.data(), &params, output.size());
     return 0;
 }

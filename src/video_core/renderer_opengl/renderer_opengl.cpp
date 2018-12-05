@@ -19,9 +19,9 @@
 #include "core/settings.h"
 #include "core/telemetry_session.h"
 #include "core/tracer/recorder.h"
+#include "video_core/morton.h"
 #include "video_core/renderer_opengl/gl_rasterizer.h"
 #include "video_core/renderer_opengl/renderer_opengl.h"
-#include "video_core/utils.h"
 
 namespace OpenGL {
 
@@ -115,7 +115,8 @@ RendererOpenGL::RendererOpenGL(Core::Frontend::EmuWindow& window)
 RendererOpenGL::~RendererOpenGL() = default;
 
 /// Swap buffers (render frame)
-void RendererOpenGL::SwapBuffers(boost::optional<const Tegra::FramebufferConfig&> framebuffer) {
+void RendererOpenGL::SwapBuffers(
+    std::optional<std::reference_wrapper<const Tegra::FramebufferConfig>> framebuffer) {
     ScopeAcquireGLContext acquire_context{render_window};
 
     Core::System::GetInstance().GetPerfStats().EndSystemFrame();
@@ -124,11 +125,11 @@ void RendererOpenGL::SwapBuffers(boost::optional<const Tegra::FramebufferConfig&
     OpenGLState prev_state = OpenGLState::GetCurState();
     state.Apply();
 
-    if (framebuffer != boost::none) {
+    if (framebuffer) {
         // If framebuffer is provided, reload it from memory to a texture
-        if (screen_info.texture.width != (GLsizei)framebuffer->width ||
-            screen_info.texture.height != (GLsizei)framebuffer->height ||
-            screen_info.texture.pixel_format != framebuffer->pixel_format) {
+        if (screen_info.texture.width != (GLsizei)framebuffer->get().width ||
+            screen_info.texture.height != (GLsizei)framebuffer->get().height ||
+            screen_info.texture.pixel_format != framebuffer->get().pixel_format) {
             // Reallocate texture if the framebuffer size has changed.
             // This is expected to not happen very often and hence should not be a
             // performance problem.
@@ -283,7 +284,8 @@ void RendererOpenGL::CreateRasterizer() {
     if (rasterizer) {
         return;
     }
-
+    // Initialize sRGB Usage
+    OpenGLState::ClearsRGBUsed();
     rasterizer = std::make_unique<RasterizerOpenGL>(render_window, screen_info);
 }
 
@@ -302,6 +304,12 @@ void RendererOpenGL::ConfigureFramebufferTexture(TextureInfo& texture,
         gl_framebuffer_data.resize(texture.width * texture.height * 4);
         break;
     default:
+        internal_format = GL_RGBA;
+        texture.gl_format = GL_RGBA;
+        texture.gl_type = GL_UNSIGNED_INT_8_8_8_8_REV;
+        gl_framebuffer_data.resize(texture.width * texture.height * 4);
+        LOG_CRITICAL(Render_OpenGL, "Unknown framebuffer pixel format: {}",
+                     static_cast<u32>(framebuffer.pixel_format));
         UNREACHABLE();
     }
 
@@ -356,13 +364,20 @@ void RendererOpenGL::DrawScreenTriangles(const ScreenInfo& screen_info, float x,
 
     state.texture_units[0].texture = screen_info.display_texture;
     state.texture_units[0].swizzle = {GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA};
+    // Workaround brigthness problems in SMO by enabling sRGB in the final output
+    // if it has been used in the frame
+    // Needed because of this bug in QT
+    // QTBUG-50987
+    state.framebuffer_srgb.enabled = OpenGLState::GetsRGBUsed();
     state.Apply();
-
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices.data());
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
+    // restore default state
+    state.framebuffer_srgb.enabled = false;
     state.texture_units[0].texture = 0;
     state.Apply();
+    // Clear sRGB state for the next frame
+    OpenGLState::ClearsRGBUsed();
 }
 
 /**
@@ -475,7 +490,7 @@ bool RendererOpenGL::Init() {
     Core::Telemetry().AddField(Telemetry::FieldType::UserSystem, "GPU_Model", gpu_model);
     Core::Telemetry().AddField(Telemetry::FieldType::UserSystem, "GPU_OpenGL_Version", gl_version);
 
-    if (!GLAD_GL_VERSION_3_3) {
+    if (!GLAD_GL_VERSION_4_3) {
         return false;
     }
 

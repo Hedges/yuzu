@@ -113,6 +113,18 @@ ResultCode VfsDirectoryServiceWrapper::DeleteDirectoryRecursively(const std::str
     return RESULT_SUCCESS;
 }
 
+ResultCode VfsDirectoryServiceWrapper::CleanDirectoryRecursively(const std::string& path) const {
+    const std::string sanitized_path(FileUtil::SanitizePath(path));
+    auto dir = GetDirectoryRelativeWrapped(backing, FileUtil::GetParentPath(sanitized_path));
+
+    if (!dir->CleanSubdirectoryRecursive(FileUtil::GetFilename(sanitized_path))) {
+        // TODO(DarkLordZach): Find a better error code for this
+        return ResultCode(-1);
+    }
+
+    return RESULT_SUCCESS;
+}
+
 ResultCode VfsDirectoryServiceWrapper::RenameFile(const std::string& src_path_,
                                                   const std::string& dest_path_) const {
     std::string src_path(FileUtil::SanitizePath(src_path_));
@@ -303,29 +315,38 @@ ResultVal<FileSys::VirtualDir> OpenSaveData(FileSys::SaveDataSpaceId space,
               static_cast<u8>(space), save_struct.DebugInfo());
 
     if (save_data_factory == nullptr) {
-        return ResultCode(ErrorModule::FS, FileSys::ErrCodes::TitleNotFound);
+        return FileSys::ERROR_ENTITY_NOT_FOUND;
     }
 
     return save_data_factory->Open(space, save_struct);
+}
+
+ResultVal<FileSys::VirtualDir> OpenSaveDataSpace(FileSys::SaveDataSpaceId space) {
+    LOG_TRACE(Service_FS, "Opening Save Data Space for space_id={:01X}", static_cast<u8>(space));
+
+    if (save_data_factory == nullptr) {
+        return FileSys::ERROR_ENTITY_NOT_FOUND;
+    }
+
+    return MakeResult(save_data_factory->GetSaveDataSpaceDirectory(space));
 }
 
 ResultVal<FileSys::VirtualDir> OpenSDMC() {
     LOG_TRACE(Service_FS, "Opening SDMC");
 
     if (sdmc_factory == nullptr) {
-        return ResultCode(ErrorModule::FS, FileSys::ErrCodes::SdCardNotFound);
+        return FileSys::ERROR_SD_CARD_NOT_FOUND;
     }
 
     return sdmc_factory->Open();
 }
 
-std::shared_ptr<FileSys::RegisteredCacheUnion> GetUnionContents() {
-    return std::make_shared<FileSys::RegisteredCacheUnion>(
-        std::vector<std::shared_ptr<FileSys::RegisteredCache>>{
-            GetSystemNANDContents(), GetUserNANDContents(), GetSDMCContents()});
+FileSys::RegisteredCacheUnion GetUnionContents() {
+    return FileSys::RegisteredCacheUnion{
+        {GetSystemNANDContents(), GetUserNANDContents(), GetSDMCContents()}};
 }
 
-std::shared_ptr<FileSys::RegisteredCache> GetSystemNANDContents() {
+FileSys::RegisteredCache* GetSystemNANDContents() {
     LOG_TRACE(Service_FS, "Opening System NAND Contents");
 
     if (bis_factory == nullptr)
@@ -334,7 +355,7 @@ std::shared_ptr<FileSys::RegisteredCache> GetSystemNANDContents() {
     return bis_factory->GetSystemNANDContents();
 }
 
-std::shared_ptr<FileSys::RegisteredCache> GetUserNANDContents() {
+FileSys::RegisteredCache* GetUserNANDContents() {
     LOG_TRACE(Service_FS, "Opening User NAND Contents");
 
     if (bis_factory == nullptr)
@@ -343,7 +364,7 @@ std::shared_ptr<FileSys::RegisteredCache> GetUserNANDContents() {
     return bis_factory->GetUserNANDContents();
 }
 
-std::shared_ptr<FileSys::RegisteredCache> GetSDMCContents() {
+FileSys::RegisteredCache* GetSDMCContents() {
     LOG_TRACE(Service_FS, "Opening SDMC Contents");
 
     if (sdmc_factory == nullptr)
@@ -361,26 +382,43 @@ FileSys::VirtualDir GetModificationLoadRoot(u64 title_id) {
     return bis_factory->GetModificationLoadRoot(title_id);
 }
 
-void CreateFactories(const FileSys::VirtualFilesystem& vfs, bool overwrite) {
+FileSys::VirtualDir GetModificationDumpRoot(u64 title_id) {
+    LOG_TRACE(Service_FS, "Opening mod dump root for tid={:016X}", title_id);
+
+    if (bis_factory == nullptr)
+        return nullptr;
+
+    return bis_factory->GetModificationDumpRoot(title_id);
+}
+
+void CreateFactories(FileSys::VfsFilesystem& vfs, bool overwrite) {
     if (overwrite) {
         bis_factory = nullptr;
         save_data_factory = nullptr;
         sdmc_factory = nullptr;
     }
 
-    auto nand_directory = vfs->OpenDirectory(FileUtil::GetUserPath(FileUtil::UserPath::NANDDir),
-                                             FileSys::Mode::ReadWrite);
-    auto sd_directory = vfs->OpenDirectory(FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir),
-                                           FileSys::Mode::ReadWrite);
-    auto load_directory = vfs->OpenDirectory(FileUtil::GetUserPath(FileUtil::UserPath::LoadDir),
-                                             FileSys::Mode::ReadWrite);
+    auto nand_directory = vfs.OpenDirectory(FileUtil::GetUserPath(FileUtil::UserPath::NANDDir),
+                                            FileSys::Mode::ReadWrite);
+    auto sd_directory = vfs.OpenDirectory(FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir),
+                                          FileSys::Mode::ReadWrite);
+    auto load_directory = vfs.OpenDirectory(FileUtil::GetUserPath(FileUtil::UserPath::LoadDir),
+                                            FileSys::Mode::ReadWrite);
+    auto dump_directory = vfs.OpenDirectory(FileUtil::GetUserPath(FileUtil::UserPath::DumpDir),
+                                            FileSys::Mode::ReadWrite);
 
-    if (bis_factory == nullptr)
-        bis_factory = std::make_unique<FileSys::BISFactory>(nand_directory, load_directory);
-    if (save_data_factory == nullptr)
+    if (bis_factory == nullptr) {
+        bis_factory =
+            std::make_unique<FileSys::BISFactory>(nand_directory, load_directory, dump_directory);
+    }
+
+    if (save_data_factory == nullptr) {
         save_data_factory = std::make_unique<FileSys::SaveDataFactory>(std::move(nand_directory));
-    if (sdmc_factory == nullptr)
+    }
+
+    if (sdmc_factory == nullptr) {
         sdmc_factory = std::make_unique<FileSys::SDMCFactory>(std::move(sd_directory));
+    }
 
     if (romfs_factory == nullptr) {
         if (&(Core::System::GetInstance().GetAppLoader()) != nullptr) {
@@ -391,7 +429,7 @@ void CreateFactories(const FileSys::VirtualFilesystem& vfs, bool overwrite) {
     }
 }
 
-void InstallInterfaces(SM::ServiceManager& service_manager, const FileSys::VirtualFilesystem& vfs) {
+void InstallInterfaces(SM::ServiceManager& service_manager, FileSys::VfsFilesystem& vfs) {
     romfs_factory = nullptr;
     CreateFactories(vfs, false);
     std::make_shared<FSP_LDR>()->InstallAsService(service_manager);

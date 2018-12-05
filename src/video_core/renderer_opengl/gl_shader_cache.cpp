@@ -6,9 +6,10 @@
 #include "core/core.h"
 #include "core/memory.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/renderer_opengl/gl_rasterizer.h"
 #include "video_core/renderer_opengl/gl_shader_cache.h"
 #include "video_core/renderer_opengl/gl_shader_manager.h"
-#include "video_core/utils.h"
+#include "video_core/renderer_opengl/utils.h"
 
 namespace OpenGL {
 
@@ -83,13 +84,14 @@ CachedShader::CachedShader(VAddr addr, Maxwell::ShaderProgram program_type)
     }
 
     entries = program_result.second;
+    shader_length = entries.shader_length;
 
     if (program_type != Maxwell::ShaderProgram::Geometry) {
         OGLShader shader;
         shader.Create(program_result.first.c_str(), gl_type);
         program.Create(true, shader.handle);
         SetShaderUniformBlockBindings(program.handle);
-        VideoCore::LabelGLObject(GL_PROGRAM, program.handle, addr);
+        LabelGLObject(GL_PROGRAM, program.handle, addr);
     } else {
         // Store shader's code to lazily build it on draw
         geometry_programs.code = program_result.first;
@@ -120,19 +122,25 @@ GLint CachedShader::GetUniformLocation(const GLShader::SamplerEntry& sampler) {
 }
 
 GLuint CachedShader::LazyGeometryProgram(OGLProgram& target_program,
-                                         const std::string& glsl_topology,
+                                         const std::string& glsl_topology, u32 max_vertices,
                                          const std::string& debug_name) {
     if (target_program.handle != 0) {
         return target_program.handle;
     }
-    const std::string source{geometry_programs.code + "layout (" + glsl_topology + ") in;\n"};
+    std::string source = "#version 430 core\n";
+    source += "layout (" + glsl_topology + ") in;\n";
+    source += "#define MAX_VERTEX_INPUT " + std::to_string(max_vertices) + '\n';
+    source += geometry_programs.code;
+
     OGLShader shader;
     shader.Create(source.c_str(), GL_GEOMETRY_SHADER);
     target_program.Create(true, shader.handle);
     SetShaderUniformBlockBindings(target_program.handle);
-    VideoCore::LabelGLObject(GL_PROGRAM, target_program.handle, addr, debug_name);
+    LabelGLObject(GL_PROGRAM, target_program.handle, addr, debug_name);
     return target_program.handle;
 };
+
+ShaderCacheOpenGL::ShaderCacheOpenGL(RasterizerOpenGL& rasterizer) : RasterizerCache{rasterizer} {}
 
 Shader ShaderCacheOpenGL::GetStageProgram(Maxwell::ShaderProgram program) {
     const VAddr program_addr{GetShaderAddress(program)};

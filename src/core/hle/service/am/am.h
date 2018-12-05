@@ -5,11 +5,9 @@
 #pragma once
 
 #include <memory>
+#include <queue>
+#include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/service.h"
-
-namespace Kernel {
-class Event;
-}
 
 namespace Service {
 namespace NVFlinger {
@@ -37,6 +35,31 @@ enum SystemLanguage {
     // 4.0.0+
     SimplifiedChinese = 15,
     TraditionalChinese = 16,
+};
+
+class AppletMessageQueue {
+public:
+    enum class AppletMessage : u32 {
+        NoMessage = 0,
+        FocusStateChanged = 15,
+        OperationModeChanged = 30,
+        PerformanceModeChanged = 31,
+    };
+
+    AppletMessageQueue();
+    ~AppletMessageQueue();
+
+    const Kernel::SharedPtr<Kernel::ReadableEvent>& GetMesssageRecieveEvent() const;
+    const Kernel::SharedPtr<Kernel::ReadableEvent>& GetOperationModeChangedEvent() const;
+    void PushMessage(AppletMessage msg);
+    AppletMessage PopMessage();
+    std::size_t GetMessageCount() const;
+    void OperationModeChanged();
+
+private:
+    std::queue<AppletMessage> messages;
+    Kernel::EventPair on_new_message;
+    Kernel::EventPair on_operation_mode_changed;
 };
 
 class IWindowController final : public ServiceFramework<IWindowController> {
@@ -96,13 +119,13 @@ private:
     void GetIdleTimeDetectionExtension(Kernel::HLERequestContext& ctx);
 
     std::shared_ptr<NVFlinger::NVFlinger> nvflinger;
-    Kernel::SharedPtr<Kernel::Event> launchable_event;
+    Kernel::EventPair launchable_event;
     u32 idle_time_detection_extension = 0;
 };
 
 class ICommonStateGetter final : public ServiceFramework<ICommonStateGetter> {
 public:
-    ICommonStateGetter();
+    explicit ICommonStateGetter(std::shared_ptr<AppletMessageQueue> msg_queue);
     ~ICommonStateGetter() override;
 
 private:
@@ -125,7 +148,35 @@ private:
     void GetBootMode(Kernel::HLERequestContext& ctx);
     void GetDefaultDisplayResolution(Kernel::HLERequestContext& ctx);
 
-    Kernel::SharedPtr<Kernel::Event> event;
+    std::shared_ptr<AppletMessageQueue> msg_queue;
+};
+
+class IStorage final : public ServiceFramework<IStorage> {
+public:
+    explicit IStorage(std::vector<u8> buffer);
+    ~IStorage() override;
+
+    const std::vector<u8>& GetData() const;
+
+private:
+    void Open(Kernel::HLERequestContext& ctx);
+
+    std::vector<u8> buffer;
+
+    friend class IStorageAccessor;
+};
+
+class IStorageAccessor final : public ServiceFramework<IStorageAccessor> {
+public:
+    explicit IStorageAccessor(IStorage& backing);
+    ~IStorageAccessor() override;
+
+private:
+    void GetSize(Kernel::HLERequestContext& ctx);
+    void Write(Kernel::HLERequestContext& ctx);
+    void Read(Kernel::HLERequestContext& ctx);
+
+    IStorage& backing;
 };
 
 class ILibraryAppletCreator final : public ServiceFramework<ILibraryAppletCreator> {
@@ -136,6 +187,7 @@ public:
 private:
     void CreateLibraryApplet(Kernel::HLERequestContext& ctx);
     void CreateStorage(Kernel::HLERequestContext& ctx);
+    void CreateTransferMemoryStorage(Kernel::HLERequestContext& ctx);
 };
 
 class IApplicationFunctions final : public ServiceFramework<IApplicationFunctions> {
@@ -154,6 +206,11 @@ private:
     void SetGamePlayRecordingState(Kernel::HLERequestContext& ctx);
     void NotifyRunning(Kernel::HLERequestContext& ctx);
     void GetPseudoDeviceId(Kernel::HLERequestContext& ctx);
+    void BeginBlockingHomeButtonShortAndLongPressed(Kernel::HLERequestContext& ctx);
+    void EndBlockingHomeButtonShortAndLongPressed(Kernel::HLERequestContext& ctx);
+    void BeginBlockingHomeButton(Kernel::HLERequestContext& ctx);
+    void EndBlockingHomeButton(Kernel::HLERequestContext& ctx);
+    void EnableApplicationCrashReport(Kernel::HLERequestContext& ctx);
 };
 
 class IHomeMenuFunctions final : public ServiceFramework<IHomeMenuFunctions> {

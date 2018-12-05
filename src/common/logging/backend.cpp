@@ -12,7 +12,8 @@
 #include <thread>
 #include <vector>
 #ifdef _WIN32
-#include <share.h> // For _SH_DENYWR
+#include <share.h>   // For _SH_DENYWR
+#include <windows.h> // For OutputDebugStringA
 #else
 #define _SH_DENYWR 0
 #endif
@@ -139,10 +140,16 @@ void FileBackend::Write(const Entry& entry) {
     if (!file.IsOpen() || bytes_written > MAX_BYTES_WRITTEN) {
         return;
     }
-    bytes_written += file.WriteString(FormatLogMessage(entry) + '\n');
+    bytes_written += file.WriteString(FormatLogMessage(entry).append(1, '\n'));
     if (entry.log_level >= Level::Error) {
         file.Flush();
     }
+}
+
+void DebuggerBackend::Write(const Entry& entry) {
+#ifdef _WIN32
+    ::OutputDebugStringA(FormatLogMessage(entry).append(1, '\n').c_str());
+#endif
 }
 
 /// Macro listing all log classes. Code should define CLS and SUB as desired before invoking this.
@@ -196,6 +203,7 @@ void FileBackend::Write(const Entry& entry) {
     SUB(Service, NFP)                                                                              \
     SUB(Service, NIFM)                                                                             \
     SUB(Service, NIM)                                                                              \
+    SUB(Service, NPNS)                                                                             \
     SUB(Service, NS)                                                                               \
     SUB(Service, NVDRV)                                                                            \
     SUB(Service, PCIE)                                                                             \
@@ -204,10 +212,12 @@ void FileBackend::Write(const Entry& entry) {
     SUB(Service, PM)                                                                               \
     SUB(Service, PREPO)                                                                            \
     SUB(Service, PSC)                                                                              \
+    SUB(Service, PSM)                                                                              \
     SUB(Service, SET)                                                                              \
     SUB(Service, SM)                                                                               \
     SUB(Service, SPL)                                                                              \
     SUB(Service, SSL)                                                                              \
+    SUB(Service, TCAP)                                                                             \
     SUB(Service, Time)                                                                             \
     SUB(Service, USB)                                                                              \
     SUB(Service, VI)                                                                               \
