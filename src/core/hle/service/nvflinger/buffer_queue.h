@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
-#include <boost/optional.hpp>
+
 #include "common/common_funcs.h"
 #include "common/math_util.h"
 #include "common/swap.h"
-#include "core/hle/kernel/event.h"
+#include "core/hle/kernel/object.h"
+#include "core/hle/kernel/writable_event.h"
 
 namespace CoreTiming {
 struct EventType;
@@ -57,9 +59,9 @@ public:
         /// Rotate source image 90 degrees clockwise
         Rotate90 = 0x04,
         /// Rotate source image 180 degrees
-        Roate180 = 0x03,
+        Rotate180 = 0x03,
         /// Rotate source image 270 degrees clockwise
-        Roate270 = 0x07,
+        Rotate270 = 0x07,
     };
 
     struct Buffer {
@@ -73,11 +75,11 @@ public:
     };
 
     void SetPreallocatedBuffer(u32 slot, const IGBPBuffer& igbp_buffer);
-    boost::optional<u32> DequeueBuffer(u32 width, u32 height);
+    std::optional<u32> DequeueBuffer(u32 width, u32 height);
     const IGBPBuffer& RequestBuffer(u32 slot) const;
     void QueueBuffer(u32 slot, BufferTransformFlags transform,
                      const MathUtil::Rectangle<int>& crop_rect);
-    boost::optional<const Buffer&> AcquireBuffer();
+    std::optional<std::reference_wrapper<const Buffer>> AcquireBuffer();
     void ReleaseBuffer(u32 slot);
     u32 Query(QueryType type);
 
@@ -85,16 +87,16 @@ public:
         return id;
     }
 
-    Kernel::SharedPtr<Kernel::Event> GetBufferWaitEvent() const {
-        return buffer_wait_event;
-    }
+    Kernel::SharedPtr<Kernel::WritableEvent> GetWritableBufferWaitEvent() const;
+
+    Kernel::SharedPtr<Kernel::ReadableEvent> GetBufferWaitEvent() const;
 
 private:
     u32 id;
     u64 layer_id;
 
     std::vector<Buffer> queue;
-    Kernel::SharedPtr<Kernel::Event> buffer_wait_event;
+    Kernel::EventPair buffer_wait_event;
 };
 
 } // namespace Service::NVFlinger

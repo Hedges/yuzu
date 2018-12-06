@@ -24,8 +24,6 @@ class ResourceLimit;
 class Thread;
 class Timer;
 
-enum class ResourceLimitCategory : u8;
-
 /// Represents a single instance of the kernel.
 class KernelCore {
 private:
@@ -47,14 +45,8 @@ public:
     /// Clears all resources in use by the kernel instance.
     void Shutdown();
 
-    /// Provides a reference to the handle table.
-    Kernel::HandleTable& HandleTable();
-
-    /// Provides a const reference to the handle table.
-    const Kernel::HandleTable& HandleTable() const;
-
-    /// Retrieves a shared pointer to a ResourceLimit identified by the given category.
-    SharedPtr<ResourceLimit> ResourceLimitForCategory(ResourceLimitCategory category) const;
+    /// Retrieves a shared pointer to the system resource limit instance.
+    SharedPtr<ResourceLimit> GetSystemResourceLimit() const;
 
     /// Retrieves a shared pointer to a Thread instance within the thread wakeup handle table.
     SharedPtr<Thread> RetrieveThreadFromWakeupCallbackHandleTable(Handle handle) const;

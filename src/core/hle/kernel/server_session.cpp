@@ -63,7 +63,7 @@ void ServerSession::Acquire(Thread* thread) {
 }
 
 ResultCode ServerSession::HandleDomainSyncRequest(Kernel::HLERequestContext& context) {
-    auto& domain_message_header = context.GetDomainMessageHeader();
+    auto* const domain_message_header = context.GetDomainMessageHeader();
     if (domain_message_header) {
         // Set domain handlers in HLE context, used for domain objects (IPC interfaces) as inputs
         context.SetDomainRequestHandlers(domain_request_handlers);
@@ -107,12 +107,11 @@ ResultCode ServerSession::HandleSyncRequest(SharedPtr<Thread> thread) {
     // similar.
     Kernel::HLERequestContext context(this);
     u32* cmd_buf = (u32*)Memory::GetPointer(thread->GetTLSAddress());
-    context.PopulateFromIncomingCommandBuffer(cmd_buf, *Core::CurrentProcess(),
-                                              kernel.HandleTable());
+    context.PopulateFromIncomingCommandBuffer(kernel.CurrentProcess()->GetHandleTable(), cmd_buf);
 
     ResultCode result = RESULT_SUCCESS;
     // If the session has been converted to a domain, handle the domain request
-    if (IsDomain() && context.GetDomainMessageHeader()) {
+    if (IsDomain() && context.HasDomainMessageHeader()) {
         result = HandleDomainSyncRequest(context);
         // If there is no domain header, the regular session handler is used
     } else if (hle_handler != nullptr) {

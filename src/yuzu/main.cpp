@@ -8,10 +8,13 @@
 #include <thread>
 
 // VFS includes must be before glad as they will conflict with Windows file api, which uses defines.
+#include "applets/software_keyboard.h"
 #include "core/file_sys/vfs.h"
 #include "core/file_sys/vfs_real.h"
+#include "core/hle/service/acc/profile_manager.h"
+#include "core/hle/service/am/applets/applets.h"
 
-// These are wrappers to avoid the calls to CreateDirectory and CreateFile becuase of the Windows
+// These are wrappers to avoid the calls to CreateDirectory and CreateFile because of the Windows
 // defines.
 static FileSys::VirtualDir VfsFilesystemCreateDirectoryWrapper(
     const FileSys::VirtualFilesystem& vfs, const std::string& path, FileSys::Mode mode) {
@@ -29,8 +32,10 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #define QT_NO_OPENGL
 #include <QDesktopWidget>
 #include <QDialogButtonBox>
+#include <QFile>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QtConcurrent/QtConcurrent>
 #include <QtGui>
 #include <QtWidgets>
 #include <fmt/format.h>
@@ -56,9 +61,12 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/file_sys/submission_package.h"
+#include "core/frontend/applets/software_keyboard.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/filesystem/fsp_ldr.h"
+#include "core/hle/service/nfp/nfp.h"
+#include "core/hle/service/sm/sm.h"
 #include "core/loader/loader.h"
 #include "core/perf_stats.h"
 #include "core/settings.h"
@@ -99,6 +107,8 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 #endif
 
+constexpr u64 DLC_BASE_TITLE_ID_MASK = 0xFFFFFFFFFFFFE000;
+
 /**
  * "Callouts" are one-time instructional messages shown to the user. In the config settings, there
  * is a bitfield "callout_flags" options, used to track if a message has already been shown to the
@@ -135,6 +145,9 @@ static void InitializeLogging() {
     const std::string& log_dir = FileUtil::GetUserPath(FileUtil::UserPath::LogDir);
     FileUtil::CreateFullPath(log_dir);
     Log::AddBackend(std::make_unique<Log::FileBackend>(log_dir + LOG_FILE));
+#ifdef _WIN32
+    Log::AddBackend(std::make_unique<Log::DebuggerBackend>());
+#endif
 }
 
 GMainWindow::GMainWindow()
@@ -171,8 +184,11 @@ GMainWindow::GMainWindow()
                        .arg(Common::g_build_fullname, Common::g_scm_branch, Common::g_scm_desc));
     show();
 
+    // Gen keys if necessary
+    OnReinitializeKeys(ReinitializeKeyBehavior::NoWarning);
+
     // Necessary to load titles from nand in gamelist.
-    Service::FileSystem::CreateFactories(vfs);
+    Service::FileSystem::CreateFactories(*vfs);
     game_list->LoadCompatibilityList();
     game_list->PopulateAsync(UISettings::values.gamedir, UISettings::values.gamedir_deepscan);
 
@@ -189,6 +205,27 @@ GMainWindow::~GMainWindow() {
     // will get automatically deleted otherwise
     if (render_window->parent() == nullptr)
         delete render_window;
+}
+
+void GMainWindow::SoftwareKeyboardGetText(
+    const Core::Frontend::SoftwareKeyboardParameters& parameters) {
+    QtSoftwareKeyboardDialog dialog(this, parameters);
+    dialog.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
+                          Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
+    dialog.setWindowModality(Qt::WindowModal);
+    dialog.exec();
+
+    if (!dialog.GetStatus()) {
+        emit SoftwareKeyboardFinishedText(std::nullopt);
+        return;
+    }
+
+    emit SoftwareKeyboardFinishedText(dialog.GetText());
+}
+
+void GMainWindow::SoftwareKeyboardInvokeCheckDialog(std::u16string error_message) {
+    QMessageBox::warning(this, tr("Text Check Failed"), QString::fromStdU16String(error_message));
+    emit SoftwareKeyboardFinishedCheckDialog();
 }
 
 void GMainWindow::InitializeWidgets() {
@@ -295,6 +332,8 @@ void GMainWindow::InitializeHotkeys() {
                                    Qt::ApplicationShortcut);
     hotkey_registry.RegisterHotkey("Main Window", "Decrease Speed Limit", QKeySequence("-"),
                                    Qt::ApplicationShortcut);
+    hotkey_registry.RegisterHotkey("Main Window", "Load Amiibo", QKeySequence(Qt::Key_F2),
+                                   Qt::ApplicationShortcut);
     hotkey_registry.LoadHotkeys();
 
     connect(hotkey_registry.GetHotkey("Main Window", "Load File", this), &QShortcut::activated,
@@ -346,6 +385,12 @@ void GMainWindow::InitializeHotkeys() {
                 if (Settings::values.frame_limit > SPEED_LIMIT_STEP) {
                     Settings::values.frame_limit -= SPEED_LIMIT_STEP;
                     UpdateStatusBar();
+                }
+            });
+    connect(hotkey_registry.GetHotkey("Main Window", "Load Amiibo", this), &QShortcut::activated,
+            this, [&] {
+                if (ui.action_Load_Amiibo->isEnabled()) {
+                    OnLoadAmiibo();
                 }
             });
 }
@@ -418,6 +463,7 @@ void GMainWindow::ConnectMenuEvents() {
     connect(ui.action_Select_SDMC_Directory, &QAction::triggered, this,
             [this] { OnMenuSelectEmulatedDirectory(EmulatedDirectoryTarget::SDMC); });
     connect(ui.action_Exit, &QAction::triggered, this, &QMainWindow::close);
+    connect(ui.action_Load_Amiibo, &QAction::triggered, this, &GMainWindow::OnLoadAmiibo);
 
     // Emulation
     connect(ui.action_Start, &QAction::triggered, this, &GMainWindow::OnStartGame);
@@ -443,6 +489,9 @@ void GMainWindow::ConnectMenuEvents() {
     connect(ui.action_Fullscreen, &QAction::triggered, this, &GMainWindow::ToggleFullscreen);
 
     // Help
+    connect(ui.action_Open_yuzu_Folder, &QAction::triggered, this, &GMainWindow::OnOpenYuzuFolder);
+    connect(ui.action_Rederive, &QAction::triggered, this,
+            std::bind(&GMainWindow::OnReinitializeKeys, this, ReinitializeKeyBehavior::Warning));
     connect(ui.action_About, &QAction::triggered, this, &GMainWindow::OnAbout);
 }
 
@@ -469,32 +518,20 @@ void GMainWindow::OnDisplayTitleBars(bool show) {
 QStringList GMainWindow::GetUnsupportedGLExtensions() {
     QStringList unsupported_ext;
 
-    if (!GLAD_GL_ARB_program_interface_query)
-        unsupported_ext.append("ARB_program_interface_query");
-    if (!GLAD_GL_ARB_separate_shader_objects)
-        unsupported_ext.append("ARB_separate_shader_objects");
-    if (!GLAD_GL_ARB_vertex_attrib_binding)
-        unsupported_ext.append("ARB_vertex_attrib_binding");
+    if (!GLAD_GL_ARB_direct_state_access)
+        unsupported_ext.append("ARB_direct_state_access");
     if (!GLAD_GL_ARB_vertex_type_10f_11f_11f_rev)
         unsupported_ext.append("ARB_vertex_type_10f_11f_11f_rev");
     if (!GLAD_GL_ARB_texture_mirror_clamp_to_edge)
         unsupported_ext.append("ARB_texture_mirror_clamp_to_edge");
-    if (!GLAD_GL_ARB_base_instance)
-        unsupported_ext.append("ARB_base_instance");
-    if (!GLAD_GL_ARB_texture_storage)
-        unsupported_ext.append("ARB_texture_storage");
     if (!GLAD_GL_ARB_multi_bind)
         unsupported_ext.append("ARB_multi_bind");
-    if (!GLAD_GL_ARB_copy_image)
-        unsupported_ext.append("ARB_copy_image");
 
     // Extensions required to support some texture formats.
     if (!GLAD_GL_EXT_texture_compression_s3tc)
         unsupported_ext.append("EXT_texture_compression_s3tc");
     if (!GLAD_GL_ARB_texture_compression_rgtc)
         unsupported_ext.append("ARB_texture_compression_rgtc");
-    if (!GLAD_GL_ARB_texture_compression_bptc)
-        unsupported_ext.append("ARB_texture_compression_bptc");
     if (!GLAD_GL_ARB_depth_buffer_float)
         unsupported_ext.append("ARB_depth_buffer_float");
 
@@ -513,8 +550,8 @@ bool GMainWindow::LoadROM(const QString& filename) {
     render_window->MakeCurrent();
 
     if (!gladLoadGL()) {
-        QMessageBox::critical(this, tr("Error while initializing OpenGL 3.3 Core!"),
-                              tr("Your GPU may not support OpenGL 3.3, or you do not "
+        QMessageBox::critical(this, tr("Error while initializing OpenGL 4.3 Core!"),
+                              tr("Your GPU may not support OpenGL 4.3, or you do not "
                                  "have the latest graphics driver."));
         return false;
     }
@@ -533,6 +570,8 @@ bool GMainWindow::LoadROM(const QString& filename) {
     system.SetFilesystem(vfs);
 
     system.SetGPUDebugContext(debug_context);
+
+    system.SetSoftwareKeyboard(std::make_unique<QtSoftwareKeyboard>(*this));
 
     const Core::System::ResultStatus result{system.Load(*render_window, filename.toStdString())};
 
@@ -684,6 +723,7 @@ void GMainWindow::ShutdownGame() {
     ui.action_Stop->setEnabled(false);
     ui.action_Restart->setEnabled(false);
     ui.action_Report_Compatibility->setEnabled(false);
+    ui.action_Load_Amiibo->setEnabled(false);
     render_window->hide();
     game_list->show();
     game_list->setFilterFocus();
@@ -745,12 +785,43 @@ void GMainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target
         open_target = "Save Data";
         const std::string nand_dir = FileUtil::GetUserPath(FileUtil::UserPath::NANDDir);
         ASSERT(program_id != 0);
-        // TODO(tech4me): Update this to work with arbitrary user profile
-        // Refer to core/hle/service/acc/profile_manager.cpp ProfileManager constructor
-        constexpr u128 user_id = {1, 0};
+
+        Service::Account::ProfileManager manager{};
+        const auto user_ids = manager.GetAllUsers();
+        QStringList list;
+        for (const auto& user_id : user_ids) {
+            if (user_id == Service::Account::UUID{})
+                continue;
+            Service::Account::ProfileBase base;
+            if (!manager.GetProfileBase(user_id, base))
+                continue;
+
+            list.push_back(QString::fromStdString(Common::StringFromFixedZeroTerminatedBuffer(
+                reinterpret_cast<const char*>(base.username.data()), base.username.size())));
+        }
+
+        bool ok = false;
+        const auto index_string =
+            QInputDialog::getItem(this, tr("Select User"),
+                                  tr("Please select the user's save data you would like to open."),
+                                  list, Settings::values.current_user, false, &ok);
+        if (!ok)
+            return;
+
+        const auto index = list.indexOf(index_string);
+        ASSERT(index != -1 && index < 8);
+
+        const auto user_id = manager.GetUser(index);
+        ASSERT(user_id);
         path = nand_dir + FileSys::SaveDataFactory::GetFullPath(FileSys::SaveDataSpaceId::NandUser,
                                                                 FileSys::SaveDataType::SaveData,
-                                                                program_id, user_id, 0);
+                                                                program_id, user_id->uuid, 0);
+
+        if (!FileUtil::Exists(path)) {
+            FileUtil::CreateFullPath(path);
+            FileUtil::CreateDir(path);
+        }
+
         break;
     }
     case GameListOpenTarget::ModData: {
@@ -817,14 +888,10 @@ static bool RomFSRawCopy(QProgressDialog& dialog, const FileSys::VirtualDir& src
 }
 
 void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_path) {
-    const auto path = fmt::format("{}{:016X}/romfs",
-                                  FileUtil::GetUserPath(FileUtil::UserPath::DumpDir), program_id);
-
-    const auto failed = [this, &path] {
+    const auto failed = [this] {
         QMessageBox::warning(this, tr("RomFS Extraction Failed!"),
                              tr("There was an error copying the RomFS files or the user "
                                 "cancelled the operation."));
-        vfs->DeleteDirectory(path);
     };
 
     const auto loader = Loader::GetLoader(vfs->OpenFile(game_path, FileSys::Mode::Read));
@@ -839,10 +906,24 @@ void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pa
         return;
     }
 
-    const auto romfs =
-        loader->IsRomFSUpdatable()
-            ? FileSys::PatchManager(program_id).PatchRomFS(file, loader->ReadRomFSIVFCOffset())
-            : file;
+    const auto installed = Service::FileSystem::GetUnionContents();
+    const auto romfs_title_id = SelectRomFSDumpTarget(installed, program_id);
+
+    if (!romfs_title_id) {
+        failed();
+        return;
+    }
+
+    const auto path = fmt::format(
+        "{}{:016X}/romfs", FileUtil::GetUserPath(FileUtil::UserPath::DumpDir), *romfs_title_id);
+
+    FileSys::VirtualFile romfs;
+
+    if (*romfs_title_id == program_id) {
+        romfs = file;
+    } else {
+        romfs = installed.GetEntry(*romfs_title_id, FileSys::ContentRecordType::Data)->GetRomFS();
+    }
 
     const auto extracted = FileSys::ExtractRomFS(romfs, FileSys::RomFSExtractionType::Full);
     if (extracted == nullptr) {
@@ -854,6 +935,7 @@ void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pa
 
     if (out == nullptr) {
         failed();
+        vfs->DeleteDirectory(path);
         return;
     }
 
@@ -864,13 +946,17 @@ void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pa
            "files into the new directory while <br>skeleton will only create the directory "
            "structure."),
         {"Full", "Skeleton"}, 0, false, &ok);
-    if (!ok)
+    if (!ok) {
         failed();
+        vfs->DeleteDirectory(path);
+        return;
+    }
 
     const auto full = res == "Full";
     const auto entry_size = CalculateRomFSEntrySize(extracted, full);
 
-    QProgressDialog progress(tr("Extracting RomFS..."), tr("Cancel"), 0, entry_size, this);
+    QProgressDialog progress(tr("Extracting RomFS..."), tr("Cancel"), 0,
+                             static_cast<s32>(entry_size), this);
     progress.setWindowModality(Qt::WindowModal);
     progress.setMinimumDuration(100);
 
@@ -882,6 +968,7 @@ void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pa
     } else {
         progress.close();
         failed();
+        vfs->DeleteDirectory(path);
     }
 }
 
@@ -902,22 +989,20 @@ void GMainWindow::OnGameListNavigateToGamedbEntry(u64 program_id,
 }
 
 void GMainWindow::OnMenuLoadFile() {
-    QString extensions;
-    for (const auto& piece : game_list->supported_file_extensions)
-        extensions += "*." + piece + " ";
+    const QString extensions =
+        QString("*.").append(GameList::supported_file_extensions.join(" *.")).append(" main");
+    const QString file_filter = tr("Switch Executable (%1);;All Files (*.*)",
+                                   "%1 is an identifier for the Switch executable file extensions.")
+                                    .arg(extensions);
+    const QString filename = QFileDialog::getOpenFileName(
+        this, tr("Load File"), UISettings::values.roms_path, file_filter);
 
-    extensions += "main ";
-
-    QString file_filter = tr("Switch Executable") + " (" + extensions + ")";
-    file_filter += ";;" + tr("All Files (*.*)");
-
-    QString filename = QFileDialog::getOpenFileName(this, tr("Load File"),
-                                                    UISettings::values.roms_path, file_filter);
-    if (!filename.isEmpty()) {
-        UISettings::values.roms_path = QFileInfo(filename).path();
-
-        BootGame(filename);
+    if (filename.isEmpty()) {
+        return;
     }
+
+    UISettings::values.roms_path = QFileInfo(filename).path();
+    BootGame(filename);
 }
 
 void GMainWindow::OnMenuLoadFolder() {
@@ -1022,14 +1107,14 @@ void GMainWindow::OnMenuInstallToNAND() {
             return;
         }
         const auto res =
-            Service::FileSystem::GetUserNANDContents()->InstallEntry(nsp, false, qt_raw_copy);
+            Service::FileSystem::GetUserNANDContents()->InstallEntry(*nsp, false, qt_raw_copy);
         if (res == FileSys::InstallResult::Success) {
             success();
         } else {
             if (res == FileSys::InstallResult::ErrorAlreadyExists) {
                 if (overwrite()) {
                     const auto res2 = Service::FileSystem::GetUserNANDContents()->InstallEntry(
-                        nsp, true, qt_raw_copy);
+                        *nsp, true, qt_raw_copy);
                     if (res2 == FileSys::InstallResult::Success) {
                         success();
                     } else {
@@ -1084,10 +1169,10 @@ void GMainWindow::OnMenuInstallToNAND() {
         FileSys::InstallResult res;
         if (index >= static_cast<size_t>(FileSys::TitleType::Application)) {
             res = Service::FileSystem::GetUserNANDContents()->InstallEntry(
-                nca, static_cast<FileSys::TitleType>(index), false, qt_raw_copy);
+                *nca, static_cast<FileSys::TitleType>(index), false, qt_raw_copy);
         } else {
             res = Service::FileSystem::GetSystemNANDContents()->InstallEntry(
-                nca, static_cast<FileSys::TitleType>(index), false, qt_raw_copy);
+                *nca, static_cast<FileSys::TitleType>(index), false, qt_raw_copy);
         }
 
         if (res == FileSys::InstallResult::Success) {
@@ -1095,7 +1180,7 @@ void GMainWindow::OnMenuInstallToNAND() {
         } else if (res == FileSys::InstallResult::ErrorAlreadyExists) {
             if (overwrite()) {
                 const auto res2 = Service::FileSystem::GetUserNANDContents()->InstallEntry(
-                    nca, static_cast<FileSys::TitleType>(index), true, qt_raw_copy);
+                    *nca, static_cast<FileSys::TitleType>(index), true, qt_raw_copy);
                 if (res2 == FileSys::InstallResult::Success) {
                     success();
                 } else {
@@ -1133,7 +1218,7 @@ void GMainWindow::OnMenuSelectEmulatedDirectory(EmulatedDirectoryTarget target) 
         FileUtil::GetUserPath(target == EmulatedDirectoryTarget::SDMC ? FileUtil::UserPath::SDMCDir
                                                                       : FileUtil::UserPath::NANDDir,
                               dir_path.toStdString());
-        Service::FileSystem::CreateFactories(vfs);
+        Service::FileSystem::CreateFactories(*vfs);
         game_list->PopulateAsync(UISettings::values.gamedir, UISettings::values.gamedir_deepscan);
     }
 }
@@ -1157,8 +1242,13 @@ void GMainWindow::OnMenuRecentFile() {
 
 void GMainWindow::OnStartGame() {
     emu_thread->SetRunning(true);
+
+    qRegisterMetaType<Core::Frontend::SoftwareKeyboardParameters>(
+        "Core::Frontend::SoftwareKeyboardParameters");
     qRegisterMetaType<Core::System::ResultStatus>("Core::System::ResultStatus");
     qRegisterMetaType<std::string>("std::string");
+    qRegisterMetaType<std::optional<std::u16string>>("std::optional<std::u16string>");
+
     connect(emu_thread.get(), &EmuThread::ErrorThrown, this, &GMainWindow::OnCoreError);
 
     ui.action_Start->setEnabled(false);
@@ -1170,6 +1260,7 @@ void GMainWindow::OnStartGame() {
     ui.action_Report_Compatibility->setEnabled(true);
 
     discord_rpc->Update();
+    ui.action_Load_Amiibo->setEnabled(true);
 }
 
 void GMainWindow::OnPauseGame() {
@@ -1269,9 +1360,61 @@ void GMainWindow::OnConfigure() {
             UpdateUITheme();
         if (UISettings::values.enable_discord_presence != old_discord_presence)
             SetDiscordEnabled(UISettings::values.enable_discord_presence);
-        game_list->PopulateAsync(UISettings::values.gamedir, UISettings::values.gamedir_deepscan);
+
+        const auto reload = UISettings::values.is_game_list_reload_pending.exchange(false);
+        if (reload) {
+            game_list->PopulateAsync(UISettings::values.gamedir,
+                                     UISettings::values.gamedir_deepscan);
+        }
+
         config->Save();
     }
+}
+
+void GMainWindow::OnLoadAmiibo() {
+    const QString extensions{"*.bin"};
+    const QString file_filter = tr("Amiibo File (%1);; All Files (*.*)").arg(extensions);
+    const QString filename = QFileDialog::getOpenFileName(this, tr("Load Amiibo"), "", file_filter);
+
+    if (filename.isEmpty()) {
+        return;
+    }
+
+    Core::System& system{Core::System::GetInstance()};
+    Service::SM::ServiceManager& sm = system.ServiceManager();
+    auto nfc = sm.GetService<Service::NFP::Module::Interface>("nfp:user");
+    if (nfc == nullptr) {
+        return;
+    }
+
+    QFile nfc_file{filename};
+    if (!nfc_file.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, tr("Error opening Amiibo data file"),
+                             tr("Unable to open Amiibo file \"%1\" for reading.").arg(filename));
+        return;
+    }
+
+    const u64 nfc_file_size = nfc_file.size();
+    std::vector<u8> buffer(nfc_file_size);
+    const u64 read_size = nfc_file.read(reinterpret_cast<char*>(buffer.data()), nfc_file_size);
+    if (nfc_file_size != read_size) {
+        QMessageBox::warning(this, tr("Error reading Amiibo data file"),
+                             tr("Unable to fully read Amiibo data. Expected to read %1 bytes, but "
+                                "was only able to read %2 bytes.")
+                                 .arg(nfc_file_size)
+                                 .arg(read_size));
+        return;
+    }
+
+    if (!nfc->LoadAmiibo(buffer)) {
+        QMessageBox::warning(this, tr("Error loading Amiibo data"),
+                             tr("Unable to load Amiibo data."));
+    }
+}
+
+void GMainWindow::OnOpenYuzuFolder() {
+    QDesktopServices::openUrl(QUrl::fromLocalFile(
+        QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::UserDir))));
 }
 
 void GMainWindow::OnAbout() {
@@ -1314,15 +1457,17 @@ void GMainWindow::UpdateStatusBar() {
 void GMainWindow::OnCoreError(Core::System::ResultStatus result, std::string details) {
     QMessageBox::StandardButton answer;
     QString status_message;
-    const QString common_message = tr(
-        "The game you are trying to load requires additional files from your Switch to be dumped "
-        "before playing.<br/><br/>For more information on dumping these files, please see the "
-        "following wiki page: <a "
-        "href='https://yuzu-emu.org/wiki/"
-        "dumping-system-archives-and-the-shared-fonts-from-a-switch-console/'>Dumping System "
-        "Archives and the Shared Fonts from a Switch Console</a>.<br/><br/>Would you like to quit "
-        "back to the game list? Continuing emulation may result in crashes, corrupted save "
-        "data, or other bugs.");
+    const QString common_message =
+        tr("The game you are trying to load requires additional files from your Switch to be "
+           "dumped "
+           "before playing.<br/><br/>For more information on dumping these files, please see the "
+           "following wiki page: <a "
+           "href='https://yuzu-emu.org/wiki/"
+           "dumping-system-archives-and-the-shared-fonts-from-a-switch-console/'>Dumping System "
+           "Archives and the Shared Fonts from a Switch Console</a>.<br/><br/>Would you like to "
+           "quit "
+           "back to the game list? Continuing emulation may result in crashes, corrupted save "
+           "data, or other bugs.");
     switch (result) {
     case Core::System::ResultStatus::ErrorSystemFiles: {
         QString message = "yuzu was unable to locate a Switch system archive";
@@ -1353,9 +1498,12 @@ void GMainWindow::OnCoreError(Core::System::ResultStatus result, std::string det
             this, tr("Fatal Error"),
             tr("yuzu has encountered a fatal error, please see the log for more details. "
                "For more information on accessing the log, please see the following page: "
-               "<a href='https://community.citra-emu.org/t/how-to-upload-the-log-file/296'>How to "
-               "Upload the Log File</a>.<br/><br/>Would you like to quit back to the game list? "
-               "Continuing emulation may result in crashes, corrupted save data, or other bugs."),
+               "<a href='https://community.citra-emu.org/t/how-to-upload-the-log-file/296'>How "
+               "to "
+               "Upload the Log File</a>.<br/><br/>Would you like to quit back to the game "
+               "list? "
+               "Continuing emulation may result in crashes, corrupted save data, or other "
+               "bugs."),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         status_message = "Fatal Error encountered";
         break;
@@ -1375,6 +1523,122 @@ void GMainWindow::OnCoreError(Core::System::ResultStatus result, std::string det
     }
 }
 
+void GMainWindow::OnReinitializeKeys(ReinitializeKeyBehavior behavior) {
+    if (behavior == ReinitializeKeyBehavior::Warning) {
+        const auto res = QMessageBox::information(
+            this, tr("Confirm Key Rederivation"),
+            tr("You are about to force rederive all of your keys. \nIf you do not know what this "
+               "means or what you are doing, \nthis is a potentially destructive action. \nPlease "
+               "make "
+               "sure this is what you want \nand optionally make backups.\n\nThis will delete your "
+               "autogenerated key files and re-run the key derivation module."),
+            QMessageBox::StandardButtons{QMessageBox::Ok, QMessageBox::Cancel});
+
+        if (res == QMessageBox::Cancel)
+            return;
+
+        FileUtil::Delete(FileUtil::GetUserPath(FileUtil::UserPath::KeysDir) +
+                         "prod.keys_autogenerated");
+        FileUtil::Delete(FileUtil::GetUserPath(FileUtil::UserPath::KeysDir) +
+                         "console.keys_autogenerated");
+        FileUtil::Delete(FileUtil::GetUserPath(FileUtil::UserPath::KeysDir) +
+                         "title.keys_autogenerated");
+    }
+
+    Core::Crypto::KeyManager keys{};
+    if (keys.BaseDeriveNecessary()) {
+        Core::Crypto::PartitionDataManager pdm{vfs->OpenDirectory(
+            FileUtil::GetUserPath(FileUtil::UserPath::SysDataDir), FileSys::Mode::Read)};
+
+        const auto function = [this, &keys, &pdm] {
+            keys.PopulateFromPartitionData(pdm);
+            Service::FileSystem::CreateFactories(*vfs);
+            keys.DeriveETicket(pdm);
+        };
+
+        QString errors;
+
+        if (!pdm.HasFuses())
+            errors += tr("- Missing fuses - Cannot derive SBK\n");
+        if (!pdm.HasBoot0())
+            errors += tr("- Missing BOOT0 - Cannot derive master keys\n");
+        if (!pdm.HasPackage2())
+            errors += tr("- Missing BCPKG2-1-Normal-Main - Cannot derive general keys\n");
+        if (!pdm.HasProdInfo())
+            errors += tr("- Missing PRODINFO - Cannot derive title keys\n");
+
+        if (!errors.isEmpty()) {
+
+            //QMessageBox::warning(
+            //    this, tr("Warning Missing Derivation Components"),
+            //    tr("The following are missing from your configuration that may hinder key "
+            //       "derivation. It will be attempted but may not complete.<br><br>") +
+            //        errors +
+            //        tr("<br><br>You can get all of these and dump all of your games easily by "
+            //           "following <a href='https://yuzu-emu.org/help/quickstart/'>the "
+            //           "quickstart guide</a>. Alternatively, you can use another method of dumping "
+            //           "to obtain all of your keys."));
+        }
+
+        QProgressDialog prog;
+        prog.setRange(0, 0);
+        prog.setLabelText(tr("Deriving keys...\nThis may take up to a minute depending \non your "
+                             "system's performance."));
+        prog.setWindowTitle(tr("Deriving Keys"));
+
+        prog.show();
+
+        auto future = QtConcurrent::run(function);
+        while (!future.isFinished()) {
+            QCoreApplication::processEvents();
+        }
+
+        prog.close();
+    }
+
+    Service::FileSystem::CreateFactories(*vfs);
+
+    if (behavior == ReinitializeKeyBehavior::Warning) {
+        game_list->PopulateAsync(UISettings::values.gamedir, UISettings::values.gamedir_deepscan);
+    }
+}
+
+std::optional<u64> GMainWindow::SelectRomFSDumpTarget(
+    const FileSys::RegisteredCacheUnion& installed, u64 program_id) {
+    const auto dlc_entries =
+        installed.ListEntriesFilter(FileSys::TitleType::AOC, FileSys::ContentRecordType::Data);
+    std::vector<FileSys::RegisteredCacheEntry> dlc_match;
+    dlc_match.reserve(dlc_entries.size());
+    std::copy_if(dlc_entries.begin(), dlc_entries.end(), std::back_inserter(dlc_match),
+                 [&program_id, &installed](const FileSys::RegisteredCacheEntry& entry) {
+                     return (entry.title_id & DLC_BASE_TITLE_ID_MASK) == program_id &&
+                            installed.GetEntry(entry)->GetStatus() == Loader::ResultStatus::Success;
+                 });
+
+    std::vector<u64> romfs_tids;
+    romfs_tids.push_back(program_id);
+    for (const auto& entry : dlc_match)
+        romfs_tids.push_back(entry.title_id);
+
+    if (romfs_tids.size() > 1) {
+        QStringList list{"Base"};
+        for (std::size_t i = 1; i < romfs_tids.size(); ++i)
+            list.push_back(QStringLiteral("DLC %1").arg(romfs_tids[i] & 0x7FF));
+
+        bool ok;
+        const auto res = QInputDialog::getItem(
+            this, tr("Select RomFS Dump Target"),
+            tr("Please select which RomFS you would like to dump."), list, 0, false, &ok);
+        if (!ok) {
+            return {};
+        }
+
+        return romfs_tids[list.indexOf(res)];
+    }
+
+    return program_id;
+}
+
 bool GMainWindow::ConfirmClose() {
     if (emu_thread == nullptr || !UISettings::values.confirm_before_closing)
         return true;
@@ -1391,7 +1655,7 @@ void GMainWindow::closeEvent(QCloseEvent* event) {
         return;
     }
 
-    if (ui.action_Fullscreen->isChecked()) {
+    if (!ui.action_Fullscreen->isChecked()) {
         UISettings::values.geometry = saveGeometry();
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
     }
@@ -1483,7 +1747,7 @@ void GMainWindow::UpdateUITheme() {
     emit UpdateThemedIcons();
 }
 
-void GMainWindow::SetDiscordEnabled(bool state) {
+void GMainWindow::SetDiscordEnabled([[maybe_unused]] bool state) {
 #ifdef USE_DISCORD_PRESENCE
     if (state) {
         discord_rpc = std::make_unique<DiscordRPC::DiscordImpl>();

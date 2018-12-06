@@ -15,17 +15,19 @@
 
 namespace OpenGL {
 
-struct CachedBufferEntry final {
-    VAddr GetAddr() const {
+class RasterizerOpenGL;
+
+struct CachedBufferEntry final : public RasterizerCacheObject {
+    VAddr GetAddr() const override {
         return addr;
     }
 
-    std::size_t GetSizeInBytes() const {
+    std::size_t GetSizeInBytes() const override {
         return size;
     }
 
     // We do not have to flush this cache as things in it are never modified by us.
-    void Flush() {}
+    void Flush() override {}
 
     VAddr addr;
     std::size_t size;
@@ -35,7 +37,7 @@ struct CachedBufferEntry final {
 
 class OGLBufferCache final : public RasterizerCache<std::shared_ptr<CachedBufferEntry>> {
 public:
-    explicit OGLBufferCache(std::size_t size);
+    explicit OGLBufferCache(RasterizerOpenGL& rasterizer, std::size_t size);
 
     /// Uploads data from a guest GPU address. Returns host's buffer offset where it's been
     /// allocated.
@@ -48,7 +50,7 @@ public:
     /// Reserves memory to be used by host's CPU. Returns mapped address and offset.
     std::tuple<u8*, GLintptr> ReserveMemory(std::size_t size, std::size_t alignment = 4);
 
-    void Map(std::size_t max_size);
+    bool Map(std::size_t max_size);
     void Unmap();
 
     GLuint GetHandle() const;

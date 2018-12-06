@@ -4,6 +4,8 @@
 
 #include <QSettings>
 #include "common/file_util.h"
+#include "core/hle/service/acc/profile_manager.h"
+#include "core/hle/service/hid/controllers/npad.h"
 #include "input_common/main.h"
 #include "yuzu/configuration/config.h"
 #include "yuzu/ui_settings.h"
@@ -12,9 +14,14 @@ Config::Config() {
     // TODO: Don't hardcode the path; let the frontend decide where to put the config files.
     qt_config_loc = FileUtil::GetUserPath(FileUtil::UserPath::ConfigDir) + "qt-config.ini";
     FileUtil::CreateFullPath(qt_config_loc);
-    qt_config = new QSettings(QString::fromStdString(qt_config_loc), QSettings::IniFormat);
+    qt_config =
+        std::make_unique<QSettings>(QString::fromStdString(qt_config_loc), QSettings::IniFormat);
 
     Reload();
+}
+
+Config::~Config() {
+    Save();
 }
 
 const std::array<int, Settings::NativeButton::NumButtons> Config::default_buttons = {
@@ -41,40 +48,313 @@ const std::array<std::array<int, 5>, Settings::NativeAnalog::NumAnalogs> Config:
     },
 }};
 
-void Config::ReadValues() {
-    qt_config->beginGroup("Controls");
+const std::array<int, Settings::NativeMouseButton::NumMouseButtons> Config::default_mouse_buttons =
+    {
+        Qt::Key_BracketLeft, Qt::Key_BracketRight, Qt::Key_Apostrophe, Qt::Key_Minus, Qt::Key_Equal,
+};
+
+const std::array<int, Settings::NativeKeyboard::NumKeyboardKeys> Config::default_keyboard_keys = {
+    0,
+    0,
+    0,
+    0,
+    Qt::Key_A,
+    Qt::Key_B,
+    Qt::Key_C,
+    Qt::Key_D,
+    Qt::Key_E,
+    Qt::Key_F,
+    Qt::Key_G,
+    Qt::Key_H,
+    Qt::Key_I,
+    Qt::Key_J,
+    Qt::Key_K,
+    Qt::Key_L,
+    Qt::Key_M,
+    Qt::Key_N,
+    Qt::Key_O,
+    Qt::Key_P,
+    Qt::Key_Q,
+    Qt::Key_R,
+    Qt::Key_S,
+    Qt::Key_T,
+    Qt::Key_U,
+    Qt::Key_V,
+    Qt::Key_W,
+    Qt::Key_X,
+    Qt::Key_Y,
+    Qt::Key_Z,
+    Qt::Key_1,
+    Qt::Key_2,
+    Qt::Key_3,
+    Qt::Key_4,
+    Qt::Key_5,
+    Qt::Key_6,
+    Qt::Key_7,
+    Qt::Key_8,
+    Qt::Key_9,
+    Qt::Key_0,
+    Qt::Key_Enter,
+    Qt::Key_Escape,
+    Qt::Key_Backspace,
+    Qt::Key_Tab,
+    Qt::Key_Space,
+    Qt::Key_Minus,
+    Qt::Key_Equal,
+    Qt::Key_BracketLeft,
+    Qt::Key_BracketRight,
+    Qt::Key_Backslash,
+    Qt::Key_Dead_Tilde,
+    Qt::Key_Semicolon,
+    Qt::Key_Apostrophe,
+    Qt::Key_Dead_Grave,
+    Qt::Key_Comma,
+    Qt::Key_Period,
+    Qt::Key_Slash,
+    Qt::Key_CapsLock,
+
+    Qt::Key_F1,
+    Qt::Key_F2,
+    Qt::Key_F3,
+    Qt::Key_F4,
+    Qt::Key_F5,
+    Qt::Key_F6,
+    Qt::Key_F7,
+    Qt::Key_F8,
+    Qt::Key_F9,
+    Qt::Key_F10,
+    Qt::Key_F11,
+    Qt::Key_F12,
+
+    Qt::Key_SysReq,
+    Qt::Key_ScrollLock,
+    Qt::Key_Pause,
+    Qt::Key_Insert,
+    Qt::Key_Home,
+    Qt::Key_PageUp,
+    Qt::Key_Delete,
+    Qt::Key_End,
+    Qt::Key_PageDown,
+    Qt::Key_Right,
+    Qt::Key_Left,
+    Qt::Key_Down,
+    Qt::Key_Up,
+
+    Qt::Key_NumLock,
+    Qt::Key_Slash,
+    Qt::Key_Asterisk,
+    Qt::Key_Minus,
+    Qt::Key_Plus,
+    Qt::Key_Enter,
+    Qt::Key_1,
+    Qt::Key_2,
+    Qt::Key_3,
+    Qt::Key_4,
+    Qt::Key_5,
+    Qt::Key_6,
+    Qt::Key_7,
+    Qt::Key_8,
+    Qt::Key_9,
+    Qt::Key_0,
+    Qt::Key_Period,
+
+    0,
+    0,
+    Qt::Key_PowerOff,
+    Qt::Key_Equal,
+
+    Qt::Key_F13,
+    Qt::Key_F14,
+    Qt::Key_F15,
+    Qt::Key_F16,
+    Qt::Key_F17,
+    Qt::Key_F18,
+    Qt::Key_F19,
+    Qt::Key_F20,
+    Qt::Key_F21,
+    Qt::Key_F22,
+    Qt::Key_F23,
+    Qt::Key_F24,
+
+    Qt::Key_Open,
+    Qt::Key_Help,
+    Qt::Key_Menu,
+    0,
+    Qt::Key_Stop,
+    Qt::Key_AudioRepeat,
+    Qt::Key_Undo,
+    Qt::Key_Cut,
+    Qt::Key_Copy,
+    Qt::Key_Paste,
+    Qt::Key_Find,
+    Qt::Key_VolumeMute,
+    Qt::Key_VolumeUp,
+    Qt::Key_VolumeDown,
+    Qt::Key_CapsLock,
+    Qt::Key_NumLock,
+    Qt::Key_ScrollLock,
+    Qt::Key_Comma,
+
+    Qt::Key_ParenLeft,
+    Qt::Key_ParenRight,
+};
+
+const std::array<int, Settings::NativeKeyboard::NumKeyboardMods> Config::default_keyboard_mods = {
+    Qt::Key_Control, Qt::Key_Shift, Qt::Key_Alt,   Qt::Key_ApplicationLeft,
+    Qt::Key_Control, Qt::Key_Shift, Qt::Key_AltGr, Qt::Key_ApplicationRight,
+};
+
+void Config::ReadPlayerValues() {
+    for (std::size_t p = 0; p < Settings::values.players.size(); ++p) {
+        Settings::values.players[p].connected =
+            qt_config->value(QString("player_%1_connected").arg(p), false).toBool();
+
+        Settings::values.players[p].type = static_cast<Settings::ControllerType>(
+            qt_config
+                ->value(QString("player_%1_type").arg(p),
+                        static_cast<u8>(Settings::ControllerType::DualJoycon))
+                .toUInt());
+
+        Settings::values.players[p].body_color_left =
+            qt_config
+                ->value(QString("player_%1_body_color_left").arg(p),
+                        Settings::JOYCON_BODY_NEON_BLUE)
+                .toUInt();
+        Settings::values.players[p].body_color_right =
+            qt_config
+                ->value(QString("player_%1_body_color_right").arg(p),
+                        Settings::JOYCON_BODY_NEON_RED)
+                .toUInt();
+        Settings::values.players[p].button_color_left =
+            qt_config
+                ->value(QString("player_%1_button_color_left").arg(p),
+                        Settings::JOYCON_BUTTONS_NEON_BLUE)
+                .toUInt();
+        Settings::values.players[p].button_color_right =
+            qt_config
+                ->value(QString("player_%1_button_color_right").arg(p),
+                        Settings::JOYCON_BUTTONS_NEON_RED)
+                .toUInt();
+
+        for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
+            std::string default_param = InputCommon::GenerateKeyboardParam(default_buttons[i]);
+            Settings::values.players[p].buttons[i] =
+                qt_config
+                    ->value(QString("player_%1_").arg(p) + Settings::NativeButton::mapping[i],
+                            QString::fromStdString(default_param))
+                    .toString()
+                    .toStdString();
+            if (Settings::values.players[p].buttons[i].empty())
+                Settings::values.players[p].buttons[i] = default_param;
+        }
+
+        for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
+            std::string default_param = InputCommon::GenerateAnalogParamFromKeys(
+                default_analogs[i][0], default_analogs[i][1], default_analogs[i][2],
+                default_analogs[i][3], default_analogs[i][4], 0.5f);
+            Settings::values.players[p].analogs[i] =
+                qt_config
+                    ->value(QString("player_%1_").arg(p) + Settings::NativeAnalog::mapping[i],
+                            QString::fromStdString(default_param))
+                    .toString()
+                    .toStdString();
+            if (Settings::values.players[p].analogs[i].empty())
+                Settings::values.players[p].analogs[i] = default_param;
+        }
+    }
+
+    std::stable_partition(
+        Settings::values.players.begin(),
+        Settings::values.players.begin() +
+            Service::HID::Controller_NPad::NPadIdToIndex(Service::HID::NPAD_HANDHELD),
+        [](const auto& player) { return player.connected; });
+}
+
+void Config::ReadDebugValues() {
+    Settings::values.debug_pad_enabled = qt_config->value("debug_pad_enabled", false).toBool();
     for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
         std::string default_param = InputCommon::GenerateKeyboardParam(default_buttons[i]);
-        Settings::values.buttons[i] =
+        Settings::values.debug_pad_buttons[i] =
             qt_config
-                ->value(Settings::NativeButton::mapping[i], QString::fromStdString(default_param))
+                ->value(QString("debug_pad_") + Settings::NativeButton::mapping[i],
+                        QString::fromStdString(default_param))
                 .toString()
                 .toStdString();
-        if (Settings::values.buttons[i].empty())
-            Settings::values.buttons[i] = default_param;
+        if (Settings::values.debug_pad_buttons[i].empty())
+            Settings::values.debug_pad_buttons[i] = default_param;
     }
 
     for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
         std::string default_param = InputCommon::GenerateAnalogParamFromKeys(
             default_analogs[i][0], default_analogs[i][1], default_analogs[i][2],
             default_analogs[i][3], default_analogs[i][4], 0.5f);
-        Settings::values.analogs[i] =
+        Settings::values.debug_pad_analogs[i] =
             qt_config
-                ->value(Settings::NativeAnalog::mapping[i], QString::fromStdString(default_param))
+                ->value(QString("debug_pad_") + Settings::NativeAnalog::mapping[i],
+                        QString::fromStdString(default_param))
                 .toString()
                 .toStdString();
-        if (Settings::values.analogs[i].empty())
-            Settings::values.analogs[i] = default_param;
+        if (Settings::values.debug_pad_analogs[i].empty())
+            Settings::values.debug_pad_analogs[i] = default_param;
     }
+}
+
+void Config::ReadKeyboardValues() {
+    Settings::values.keyboard_enabled = qt_config->value("keyboard_enabled", false).toBool();
+
+    std::transform(default_keyboard_keys.begin(), default_keyboard_keys.end(),
+                   Settings::values.keyboard_keys.begin(), InputCommon::GenerateKeyboardParam);
+    std::transform(default_keyboard_mods.begin(), default_keyboard_mods.end(),
+                   Settings::values.keyboard_keys.begin() +
+                       Settings::NativeKeyboard::LeftControlKey,
+                   InputCommon::GenerateKeyboardParam);
+    std::transform(default_keyboard_mods.begin(), default_keyboard_mods.end(),
+                   Settings::values.keyboard_mods.begin(), InputCommon::GenerateKeyboardParam);
+}
+
+void Config::ReadMouseValues() {
+    Settings::values.mouse_enabled = qt_config->value("mouse_enabled", false).toBool();
+
+    for (int i = 0; i < Settings::NativeMouseButton::NumMouseButtons; ++i) {
+        std::string default_param = InputCommon::GenerateKeyboardParam(default_mouse_buttons[i]);
+        Settings::values.mouse_buttons[i] =
+            qt_config
+                ->value(QString("mouse_") + Settings::NativeMouseButton::mapping[i],
+                        QString::fromStdString(default_param))
+                .toString()
+                .toStdString();
+        if (Settings::values.mouse_buttons[i].empty())
+            Settings::values.mouse_buttons[i] = default_param;
+    }
+}
+
+void Config::ReadTouchscreenValues() {
+    Settings::values.touchscreen.enabled = qt_config->value("touchscreen_enabled", true).toBool();
+    Settings::values.touchscreen.device =
+        qt_config->value("touchscreen_device", "engine:emu_window").toString().toStdString();
+
+    Settings::values.touchscreen.finger = qt_config->value("touchscreen_finger", 0).toUInt();
+    Settings::values.touchscreen.rotation_angle = qt_config->value("touchscreen_angle", 0).toUInt();
+    Settings::values.touchscreen.diameter_x =
+        qt_config->value("touchscreen_diameter_x", 15).toUInt();
+    Settings::values.touchscreen.diameter_y =
+        qt_config->value("touchscreen_diameter_y", 15).toUInt();
+    qt_config->endGroup();
+}
+
+void Config::ReadValues() {
+    qt_config->beginGroup("Controls");
+
+    ReadPlayerValues();
+    ReadDebugValues();
+    ReadKeyboardValues();
+    ReadMouseValues();
+    ReadTouchscreenValues();
 
     Settings::values.motion_device =
         qt_config->value("motion_device", "engine:motion_emu,update_period:100,sensitivity:0.01")
             .toString()
             .toStdString();
-    Settings::values.touch_device =
-        qt_config->value("touch_device", "engine:emu_window").toString().toStdString();
-
-    qt_config->endGroup();
 
     qt_config->beginGroup("Core");
     Settings::values.use_cpu_jit = qt_config->value("use_cpu_jit", true).toBool();
@@ -85,8 +365,8 @@ void Config::ReadValues() {
     Settings::values.resolution_factor = qt_config->value("resolution_factor", 1.0).toFloat();
     Settings::values.use_frame_limit = qt_config->value("use_frame_limit", true).toBool();
     Settings::values.frame_limit = qt_config->value("frame_limit", 100).toInt();
-    Settings::values.use_accurate_framebuffers =
-        qt_config->value("use_accurate_framebuffers", false).toBool();
+    Settings::values.use_accurate_gpu_emulation =
+        qt_config->value("use_accurate_gpu_emulation", false).toBool();
 
     Settings::values.bg_red = qt_config->value("bg_red", 0.0).toFloat();
     Settings::values.bg_green = qt_config->value("bg_green", 0.0).toFloat();
@@ -120,10 +400,27 @@ void Config::ReadValues() {
             .toStdString());
     qt_config->endGroup();
 
+    qt_config->beginGroup("Core");
+    Settings::values.use_cpu_jit = qt_config->value("use_cpu_jit", true).toBool();
+    Settings::values.use_multi_core = qt_config->value("use_multi_core", false).toBool();
+    qt_config->endGroup();
+
     qt_config->beginGroup("System");
     Settings::values.use_docked_mode = qt_config->value("use_docked_mode", false).toBool();
-    Settings::values.username = qt_config->value("username", "yuzu").toString().toStdString();
+    Settings::values.enable_nfc = qt_config->value("enable_nfc", true).toBool();
+
+    Settings::values.current_user = std::clamp<int>(qt_config->value("current_user", 0).toInt(), 0,
+                                                    Service::Account::MAX_USERS - 1);
+
     Settings::values.language_index = qt_config->value("language_index", 1).toInt();
+
+    const auto enabled = qt_config->value("rng_seed_enabled", false).toBool();
+    if (enabled) {
+        Settings::values.rng_seed = qt_config->value("rng_seed", 0).toULongLong();
+    } else {
+        Settings::values.rng_seed = std::nullopt;
+    }
+
     qt_config->endGroup();
 
     qt_config->beginGroup("Miscellaneous");
@@ -135,6 +432,8 @@ void Config::ReadValues() {
     Settings::values.use_gdbstub = qt_config->value("use_gdbstub", false).toBool();
     Settings::values.gdbstub_port = qt_config->value("gdbstub_port", 24689).toInt();
     Settings::values.program_args = qt_config->value("program_args", "").toString().toStdString();
+    Settings::values.dump_exefs = qt_config->value("dump_exefs", false).toBool();
+    Settings::values.dump_nso = qt_config->value("dump_nso", false).toBool();
     qt_config->endGroup();
 
     qt_config->beginGroup("WebService");
@@ -152,6 +451,7 @@ void Config::ReadValues() {
 
     qt_config->beginGroup("UIGameList");
     UISettings::values.show_unknown = qt_config->value("show_unknown", true).toBool();
+    UISettings::values.show_add_ons = qt_config->value("show_add_ons", true).toBool();
     UISettings::values.icon_size = qt_config->value("icon_size", 64).toUInt();
     UISettings::values.row_1_text_id = qt_config->value("row_1_text_id", 3).toUInt();
     UISettings::values.row_2_text_id = qt_config->value("row_2_text_id", 2).toUInt();
@@ -210,18 +510,81 @@ void Config::ReadValues() {
     qt_config->endGroup();
 }
 
-void Config::SaveValues() {
-    qt_config->beginGroup("Controls");
+void Config::SavePlayerValues() {
+    for (int p = 0; p < Settings::values.players.size(); ++p) {
+        qt_config->setValue(QString("player_%1_connected").arg(p),
+                            Settings::values.players[p].connected);
+        qt_config->setValue(QString("player_%1_type").arg(p),
+                            static_cast<u8>(Settings::values.players[p].type));
+
+        qt_config->setValue(QString("player_%1_body_color_left").arg(p),
+                            Settings::values.players[p].body_color_left);
+        qt_config->setValue(QString("player_%1_body_color_right").arg(p),
+                            Settings::values.players[p].body_color_right);
+        qt_config->setValue(QString("player_%1_button_color_left").arg(p),
+                            Settings::values.players[p].button_color_left);
+        qt_config->setValue(QString("player_%1_button_color_right").arg(p),
+                            Settings::values.players[p].button_color_right);
+
+        for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
+            qt_config->setValue(QString("player_%1_").arg(p) +
+                                    QString::fromStdString(Settings::NativeButton::mapping[i]),
+                                QString::fromStdString(Settings::values.players[p].buttons[i]));
+        }
+        for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
+            qt_config->setValue(QString("player_%1_").arg(p) +
+                                    QString::fromStdString(Settings::NativeAnalog::mapping[i]),
+                                QString::fromStdString(Settings::values.players[p].analogs[i]));
+        }
+    }
+}
+
+void Config::SaveDebugValues() {
+    qt_config->setValue("debug_pad_enabled", Settings::values.debug_pad_enabled);
     for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
-        qt_config->setValue(QString::fromStdString(Settings::NativeButton::mapping[i]),
-                            QString::fromStdString(Settings::values.buttons[i]));
+        qt_config->setValue(QString("debug_pad_") +
+                                QString::fromStdString(Settings::NativeButton::mapping[i]),
+                            QString::fromStdString(Settings::values.debug_pad_buttons[i]));
     }
     for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
-        qt_config->setValue(QString::fromStdString(Settings::NativeAnalog::mapping[i]),
-                            QString::fromStdString(Settings::values.analogs[i]));
+        qt_config->setValue(QString("debug_pad_") +
+                                QString::fromStdString(Settings::NativeAnalog::mapping[i]),
+                            QString::fromStdString(Settings::values.debug_pad_analogs[i]));
     }
+}
+
+void Config::SaveMouseValues() {
+    qt_config->setValue("mouse_enabled", Settings::values.mouse_enabled);
+
+    for (int i = 0; i < Settings::NativeMouseButton::NumMouseButtons; ++i) {
+        qt_config->setValue(QString("mouse_") +
+                                QString::fromStdString(Settings::NativeMouseButton::mapping[i]),
+                            QString::fromStdString(Settings::values.mouse_buttons[i]));
+    }
+}
+
+void Config::SaveTouchscreenValues() {
+    qt_config->setValue("touchscreen_enabled", Settings::values.touchscreen.enabled);
+    qt_config->setValue("touchscreen_device",
+                        QString::fromStdString(Settings::values.touchscreen.device));
+
+    qt_config->setValue("touchscreen_finger", Settings::values.touchscreen.finger);
+    qt_config->setValue("touchscreen_angle", Settings::values.touchscreen.rotation_angle);
+    qt_config->setValue("touchscreen_diameter_x", Settings::values.touchscreen.diameter_x);
+    qt_config->setValue("touchscreen_diameter_y", Settings::values.touchscreen.diameter_y);
+}
+
+void Config::SaveValues() {
+    qt_config->beginGroup("Controls");
+
+    SavePlayerValues();
+    SaveDebugValues();
+    SaveMouseValues();
+    SaveTouchscreenValues();
+
     qt_config->setValue("motion_device", QString::fromStdString(Settings::values.motion_device));
-    qt_config->setValue("touch_device", QString::fromStdString(Settings::values.touch_device));
+    qt_config->setValue("keyboard_enabled", Settings::values.keyboard_enabled);
+
     qt_config->endGroup();
 
     qt_config->beginGroup("Core");
@@ -233,7 +596,7 @@ void Config::SaveValues() {
     qt_config->setValue("resolution_factor", (double)Settings::values.resolution_factor);
     qt_config->setValue("use_frame_limit", Settings::values.use_frame_limit);
     qt_config->setValue("frame_limit", Settings::values.frame_limit);
-    qt_config->setValue("use_accurate_framebuffers", Settings::values.use_accurate_framebuffers);
+    qt_config->setValue("use_accurate_gpu_emulation", Settings::values.use_accurate_gpu_emulation);
 
     // Cast to double because Qt's written float values are not human-readable
     qt_config->setValue("bg_red", (double)Settings::values.bg_red);
@@ -258,8 +621,13 @@ void Config::SaveValues() {
 
     qt_config->beginGroup("System");
     qt_config->setValue("use_docked_mode", Settings::values.use_docked_mode);
-    qt_config->setValue("username", QString::fromStdString(Settings::values.username));
+    qt_config->setValue("enable_nfc", Settings::values.enable_nfc);
+    qt_config->setValue("current_user", Settings::values.current_user);
     qt_config->setValue("language_index", Settings::values.language_index);
+
+    qt_config->setValue("rng_seed_enabled", Settings::values.rng_seed.has_value());
+    qt_config->setValue("rng_seed", Settings::values.rng_seed.value_or(0));
+
     qt_config->endGroup();
 
     qt_config->beginGroup("Miscellaneous");
@@ -271,6 +639,8 @@ void Config::SaveValues() {
     qt_config->setValue("use_gdbstub", Settings::values.use_gdbstub);
     qt_config->setValue("gdbstub_port", Settings::values.gdbstub_port);
     qt_config->setValue("program_args", QString::fromStdString(Settings::values.program_args));
+    qt_config->setValue("dump_exefs", Settings::values.dump_exefs);
+    qt_config->setValue("dump_nso", Settings::values.dump_nso);
     qt_config->endGroup();
 
     qt_config->beginGroup("WebService");
@@ -286,6 +656,7 @@ void Config::SaveValues() {
 
     qt_config->beginGroup("UIGameList");
     qt_config->setValue("show_unknown", UISettings::values.show_unknown);
+    qt_config->setValue("show_add_ons", UISettings::values.show_add_ons);
     qt_config->setValue("icon_size", UISettings::values.icon_size);
     qt_config->setValue("row_1_text_id", UISettings::values.row_1_text_id);
     qt_config->setValue("row_2_text_id", UISettings::values.row_2_text_id);
@@ -334,10 +705,4 @@ void Config::Reload() {
 
 void Config::Save() {
     SaveValues();
-}
-
-Config::~Config() {
-    Save();
-
-    delete qt_config;
 }

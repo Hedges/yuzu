@@ -12,12 +12,16 @@ add_library(core STATIC
     core_timing.h
     core_timing_util.cpp
     core_timing_util.h
+    cpu_core_manager.cpp
+    cpu_core_manager.h
     crypto/aes_util.cpp
     crypto/aes_util.h
     crypto/encryption_layer.cpp
     crypto/encryption_layer.h
     crypto/key_manager.cpp
     crypto/key_manager.h
+    crypto/partition_data_manager.cpp
+    crypto/partition_data_manager.h
     crypto/ctr_encryption_layer.cpp
     crypto/ctr_encryption_layer.h
     crypto/xts_encryption_layer.cpp
@@ -59,6 +63,10 @@ add_library(core STATIC
     file_sys/sdmc_factory.h
     file_sys/submission_package.cpp
     file_sys/submission_package.h
+    file_sys/system_archive/ng_word.cpp
+    file_sys/system_archive/ng_word.h
+    file_sys/system_archive/system_archive.cpp
+    file_sys/system_archive/system_archive.h
     file_sys/vfs.cpp
     file_sys/vfs.h
     file_sys/vfs_concat.cpp
@@ -70,10 +78,13 @@ add_library(core STATIC
     file_sys/vfs_real.cpp
     file_sys/vfs_real.h
     file_sys/vfs_static.h
+    file_sys/vfs_types.h
     file_sys/vfs_vector.cpp
     file_sys/vfs_vector.h
     file_sys/xts_archive.cpp
     file_sys/xts_archive.h
+    frontend/applets/software_keyboard.cpp
+    frontend/applets/software_keyboard.h
     frontend/emu_window.cpp
     frontend/emu_window.h
     frontend/framebuffer_layout.cpp
@@ -90,8 +101,6 @@ add_library(core STATIC
     hle/kernel/client_session.cpp
     hle/kernel/client_session.h
     hle/kernel/errors.h
-    hle/kernel/event.cpp
-    hle/kernel/event.h
     hle/kernel/handle_table.cpp
     hle/kernel/handle_table.h
     hle/kernel/hle_ipc.cpp
@@ -104,6 +113,8 @@ add_library(core STATIC
     hle/kernel/object.h
     hle/kernel/process.cpp
     hle/kernel/process.h
+    hle/kernel/readable_event.cpp
+    hle/kernel/readable_event.h
     hle/kernel/resource_limit.cpp
     hle/kernel/resource_limit.h
     hle/kernel/scheduler.cpp
@@ -126,6 +137,8 @@ add_library(core STATIC
     hle/kernel/vm_manager.h
     hle/kernel/wait_object.cpp
     hle/kernel/wait_object.h
+    hle/kernel/writable_event.cpp
+    hle/kernel/writable_event.h
     hle/lock.cpp
     hle/lock.h
     hle/result.h
@@ -147,12 +160,20 @@ add_library(core STATIC
     hle/service/am/applet_ae.h
     hle/service/am/applet_oe.cpp
     hle/service/am/applet_oe.h
+    hle/service/am/applets/applets.cpp
+    hle/service/am/applets/applets.h
+    hle/service/am/applets/software_keyboard.cpp
+    hle/service/am/applets/software_keyboard.h
+    hle/service/am/applets/stub_applet.cpp
+    hle/service/am/applets/stub_applet.h
     hle/service/am/idle.cpp
     hle/service/am/idle.h
     hle/service/am/omm.cpp
     hle/service/am/omm.h
     hle/service/am/spsm.cpp
     hle/service/am/spsm.h
+    hle/service/am/tcap.cpp
+    hle/service/am/tcap.h
     hle/service/aoc/aoc_u.cpp
     hle/service/aoc/aoc_u.h
     hle/service/apm/apm.cpp
@@ -233,6 +254,24 @@ add_library(core STATIC
     hle/service/hid/irs.h
     hle/service/hid/xcd.cpp
     hle/service/hid/xcd.h
+    hle/service/hid/controllers/controller_base.cpp
+    hle/service/hid/controllers/controller_base.h
+    hle/service/hid/controllers/debug_pad.cpp
+    hle/service/hid/controllers/debug_pad.h
+    hle/service/hid/controllers/gesture.cpp
+    hle/service/hid/controllers/gesture.h
+    hle/service/hid/controllers/keyboard.cpp
+    hle/service/hid/controllers/keyboard.h
+    hle/service/hid/controllers/mouse.cpp
+    hle/service/hid/controllers/mouse.h
+    hle/service/hid/controllers/npad.cpp
+    hle/service/hid/controllers/npad.h
+    hle/service/hid/controllers/stubbed.cpp
+    hle/service/hid/controllers/stubbed.h
+    hle/service/hid/controllers/touchscreen.cpp
+    hle/service/hid/controllers/touchscreen.h
+    hle/service/hid/controllers/xpad.cpp
+    hle/service/hid/controllers/xpad.h
     hle/service/lbl/lbl.cpp
     hle/service/lbl/lbl.h
     hle/service/ldn/ldn.cpp
@@ -259,6 +298,8 @@ add_library(core STATIC
     hle/service/nifm/nifm.h
     hle/service/nim/nim.cpp
     hle/service/nim/nim.h
+    hle/service/npns/npns.cpp
+    hle/service/npns/npns.h
     hle/service/ns/ns.cpp
     hle/service/ns/ns.h
     hle/service/ns/pl_u.cpp
@@ -306,6 +347,8 @@ add_library(core STATIC
     hle/service/prepo/prepo.h
     hle/service/psc/psc.cpp
     hle/service/psc/psc.h
+    hle/service/ptm/psm.cpp
+    hle/service/ptm/psm.h
     hle/service/service.cpp
     hle/service/service.h
     hle/service/set/set.cpp
@@ -397,8 +440,8 @@ create_target_directory_groups(core)
 target_link_libraries(core PUBLIC common PRIVATE audio_core video_core)
 target_link_libraries(core PUBLIC Boost::boost PRIVATE fmt lz4_static mbedtls opus unicorn open_source_archives)
 if (ENABLE_WEB_SERVICE)
-    add_definitions(-DENABLE_WEB_SERVICE)
-    target_link_libraries(core PUBLIC json-headers web_service)
+    target_compile_definitions(core PRIVATE -DENABLE_WEB_SERVICE)
+    target_link_libraries(core PRIVATE web_service)
 endif()
 
 if (ARCHITECTURE_x86_64)

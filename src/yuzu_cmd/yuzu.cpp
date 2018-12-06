@@ -76,6 +76,9 @@ static void InitializeLogging() {
     const std::string& log_dir = FileUtil::GetUserPath(FileUtil::UserPath::LogDir);
     FileUtil::CreateFullPath(log_dir);
     Log::AddBackend(std::make_unique<Log::FileBackend>(log_dir + LOG_FILE));
+#ifdef _WIN32
+    Log::AddBackend(std::make_unique<Log::DebuggerBackend>());
+#endif
 }
 
 /// Application entry point
@@ -175,7 +178,7 @@ int main(int argc, char** argv) {
 
     Core::System& system{Core::System::GetInstance()};
     system.SetFilesystem(std::make_shared<FileSys::RealVfsFilesystem>());
-    Service::FileSystem::CreateFactories(system.GetFilesystem());
+    Service::FileSystem::CreateFactories(*system.GetFilesystem());
 
     SCOPE_EXIT({ system.Shutdown(); });
 

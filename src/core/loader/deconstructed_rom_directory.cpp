@@ -7,7 +7,6 @@
 #include "common/common_funcs.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
-#include "core/core.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
@@ -139,14 +138,22 @@ ResultStatus AppLoader_DeconstructedRomDirectory::Load(Kernel::Process& process)
     for (const auto& module : {"rtld", "main", "subsdk0", "subsdk1", "subsdk2", "subsdk3",
                                "subsdk4", "subsdk5", "subsdk6", "subsdk7", "sdk"}) {
         const FileSys::VirtualFile module_file = dir->GetFile(module);
-        if (module_file != nullptr) {
-            const VAddr load_addr = next_load_addr;
-            next_load_addr = AppLoader_NSO::LoadModule(module_file, load_addr,
-                                                       std::strcmp(module, "rtld") == 0, pm);
-            LOG_DEBUG(Loader, "loaded module {} @ 0x{:X}", module, load_addr);
-            // Register module with GDBStub
-            GDBStub::RegisterModule(module, load_addr, next_load_addr - 1, false);
+        if (module_file == nullptr) {
+            continue;
         }
+
+        const VAddr load_addr = next_load_addr;
+        const bool should_pass_arguments = std::strcmp(module, "rtld") == 0;
+        const auto tentative_next_load_addr =
+            AppLoader_NSO::LoadModule(process, *module_file, load_addr, should_pass_arguments, pm);
+        if (!tentative_next_load_addr) {
+            return ResultStatus::ErrorLoadingNSO;
+        }
+
+        next_load_addr = *tentative_next_load_addr;
+        LOG_DEBUG(Loader, "loaded module {} @ 0x{:X}", module, load_addr);
+        // Register module with GDBStub
+        GDBStub::RegisterModule(module, load_addr, next_load_addr - 1, false);
     }
 
     process.Run(base_address, metadata.GetMainThreadPriority(), metadata.GetMainThreadStackSize());

@@ -143,6 +143,26 @@ ResultVal<VMManager::VMAHandle> VMManager::MapBackingMemory(VAddr target, u8* me
     return MakeResult<VMAHandle>(MergeAdjacent(vma_handle));
 }
 
+ResultVal<VAddr> VMManager::FindFreeRegion(u64 size) const {
+    // Find the first Free VMA.
+    const VAddr base = GetASLRRegionBaseAddress();
+    const VMAHandle vma_handle = std::find_if(vma_map.begin(), vma_map.end(), [&](const auto& vma) {
+        if (vma.second.type != VMAType::Free)
+            return false;
+
+        const VAddr vma_end = vma.second.base + vma.second.size;
+        return vma_end > base && vma_end >= base + size;
+    });
+
+    if (vma_handle == vma_map.end()) {
+        // TODO(Subv): Find the correct error code here.
+        return ResultCode(-1);
+    }
+
+    const VAddr target = std::max(base, vma_handle->second.base);
+    return MakeResult<VAddr>(target);
+}
+
 ResultVal<VMManager::VMAHandle> VMManager::MapMMIO(VAddr target, PAddr paddr, u64 size,
                                                    MemoryState state,
                                                    Memory::MemoryHookPointer mmio_handler) {
@@ -219,6 +239,85 @@ ResultCode VMManager::ReprotectRange(VAddr target, u64 size, VMAPermission new_p
     while (vma != end && vma->second.base < target_end) {
         vma = std::next(StripIterConstness(Reprotect(vma, new_perms)));
     }
+
+    return RESULT_SUCCESS;
+}
+
+ResultVal<VAddr> VMManager::HeapAllocate(VAddr target, u64 size, VMAPermission perms) {
+    if (target < GetHeapRegionBaseAddress() || target + size > GetHeapRegionEndAddress() ||
+        target + size < target) {
+        return ERR_INVALID_ADDRESS;
+    }
+
+    if (heap_memory == nullptr) {
+        // Initialize heap
+        heap_memory = std::make_shared<std::vector<u8>>();
+        heap_start = heap_end = target;
+    } else {
+        UnmapRange(heap_start, heap_end - heap_start);
+    }
+
+    // If necessary, expand backing vector to cover new heap extents.
+    if (target < heap_start) {
+        heap_memory->insert(begin(*heap_memory), heap_start - target, 0);
+        heap_start = target;
+        RefreshMemoryBlockMappings(heap_memory.get());
+    }
+    if (target + size > heap_end) {
+        heap_memory->insert(end(*heap_memory), (target + size) - heap_end, 0);
+        heap_end = target + size;
+        RefreshMemoryBlockMappings(heap_memory.get());
+    }
+    ASSERT(heap_end - heap_start == heap_memory->size());
+
+    CASCADE_RESULT(auto vma, MapMemoryBlock(target, heap_memory, target - heap_start, size,
+                                            MemoryState::Heap));
+    Reprotect(vma, perms);
+
+    heap_used = size;
+
+    return MakeResult<VAddr>(heap_end - size);
+}
+
+ResultCode VMManager::HeapFree(VAddr target, u64 size) {
+    if (target < GetHeapRegionBaseAddress() || target + size > GetHeapRegionEndAddress() ||
+        target + size < target) {
+        return ERR_INVALID_ADDRESS;
+    }
+
+    if (size == 0) {
+        return RESULT_SUCCESS;
+    }
+
+    const ResultCode result = UnmapRange(target, size);
+    if (result.IsError()) {
+        return result;
+    }
+
+    heap_used -= size;
+    return RESULT_SUCCESS;
+}
+
+ResultCode VMManager::MirrorMemory(VAddr dst_addr, VAddr src_addr, u64 size, MemoryState state) {
+    const auto vma = FindVMA(src_addr);
+
+    ASSERT_MSG(vma != vma_map.end(), "Invalid memory address");
+    ASSERT_MSG(vma->second.backing_block, "Backing block doesn't exist for address");
+
+    // The returned VMA might be a bigger one encompassing the desired address.
+    const auto vma_offset = src_addr - vma->first;
+    ASSERT_MSG(vma_offset + size <= vma->second.size,
+               "Shared memory exceeds bounds of mapped block");
+
+    const std::shared_ptr<std::vector<u8>>& backing_block = vma->second.backing_block;
+    const std::size_t backing_block_offset = vma->second.offset + vma_offset;
+
+    CASCADE_RESULT(auto new_vma,
+                   MapMemoryBlock(dst_addr, backing_block, backing_block_offset, size, state));
+    // Protect mirror with permissions from old region
+    Reprotect(new_vma, vma->second.permissions);
+    // Remove permissions from old region
+    Reprotect(vma, VMAPermission::None);
 
     return RESULT_SUCCESS;
 }
@@ -393,30 +492,35 @@ void VMManager::InitializeMemoryRegionRanges(FileSys::ProgramAddressSpaceType ty
 
     switch (type) {
     case FileSys::ProgramAddressSpaceType::Is32Bit:
+    case FileSys::ProgramAddressSpaceType::Is32BitNoMap:
         address_space_width = 32;
         code_region_base = 0x200000;
         code_region_end = code_region_base + 0x3FE00000;
-        map_region_size = 0x40000000;
-        heap_region_size = 0x40000000;
+        aslr_region_base = 0x200000;
+        aslr_region_end = aslr_region_base + 0xFFE00000;
+        if (type == FileSys::ProgramAddressSpaceType::Is32Bit) {
+            map_region_size = 0x40000000;
+            heap_region_size = 0x40000000;
+        } else {
+            map_region_size = 0;
+            heap_region_size = 0x80000000;
+        }
         break;
     case FileSys::ProgramAddressSpaceType::Is36Bit:
         address_space_width = 36;
         code_region_base = 0x8000000;
         code_region_end = code_region_base + 0x78000000;
+        aslr_region_base = 0x8000000;
+        aslr_region_end = aslr_region_base + 0xFF8000000;
         map_region_size = 0x180000000;
         heap_region_size = 0x180000000;
-        break;
-    case FileSys::ProgramAddressSpaceType::Is32BitNoMap:
-        address_space_width = 32;
-        code_region_base = 0x200000;
-        code_region_end = code_region_base + 0x3FE00000;
-        map_region_size = 0;
-        heap_region_size = 0x80000000;
         break;
     case FileSys::ProgramAddressSpaceType::Is39Bit:
         address_space_width = 39;
         code_region_base = 0x8000000;
         code_region_end = code_region_base + 0x80000000;
+        aslr_region_base = 0x8000000;
+        aslr_region_end = aslr_region_base + 0x7FF8000000;
         map_region_size = 0x1000000000;
         heap_region_size = 0x180000000;
         new_map_region_size = 0x80000000;
@@ -470,8 +574,7 @@ u64 VMManager::GetTotalMemoryUsage() const {
 }
 
 u64 VMManager::GetTotalHeapUsage() const {
-    LOG_WARNING(Kernel, "(STUBBED) called");
-    return 0x0;
+    return heap_used;
 }
 
 VAddr VMManager::GetAddressSpaceBaseAddress() const {
@@ -488,6 +591,38 @@ u64 VMManager::GetAddressSpaceSize() const {
 
 u64 VMManager::GetAddressSpaceWidth() const {
     return address_space_width;
+}
+
+VAddr VMManager::GetASLRRegionBaseAddress() const {
+    return aslr_region_base;
+}
+
+VAddr VMManager::GetASLRRegionEndAddress() const {
+    return aslr_region_end;
+}
+
+u64 VMManager::GetASLRRegionSize() const {
+    return aslr_region_end - aslr_region_base;
+}
+
+bool VMManager::IsWithinASLRRegion(VAddr begin, u64 size) const {
+    const VAddr range_end = begin + size;
+    const VAddr aslr_start = GetASLRRegionBaseAddress();
+    const VAddr aslr_end = GetASLRRegionEndAddress();
+
+    if (aslr_start > begin || begin > range_end || range_end - 1 > aslr_end - 1) {
+        return false;
+    }
+
+    if (range_end > heap_region_base && heap_region_end > begin) {
+        return false;
+    }
+
+    if (range_end > map_region_base && map_region_end > begin) {
+        return false;
+    }
+
+    return true;
 }
 
 VAddr VMManager::GetCodeRegionBaseAddress() const {

@@ -382,12 +382,13 @@ void GraphicsSurfaceWidget::OnUpdate() {
     // TODO: Implement a good way to visualize alpha components!
 
     QImage decoded_image(surface_width, surface_height, QImage::Format_ARGB32);
-    boost::optional<VAddr> address = gpu.MemoryManager().GpuToCpuAddress(surface_address);
+    std::optional<VAddr> address = gpu.MemoryManager().GpuToCpuAddress(surface_address);
 
     // TODO(bunnei): Will not work with BCn formats that swizzle 4x4 tiles.
     // Needs to be fixed if we plan to use this feature more, otherwise we may remove it.
     auto unswizzled_data = Tegra::Texture::UnswizzleTexture(
-        *address, 1, Tegra::Texture::BytesPerPixel(surface_format), surface_width, surface_height);
+        *address, 1, 1, Tegra::Texture::BytesPerPixel(surface_format), surface_width,
+        surface_height, 1U);
 
     auto texture_data = Tegra::Texture::DecodeTexture(unswizzled_data, surface_format,
                                                       surface_width, surface_height);
@@ -443,7 +444,7 @@ void GraphicsSurfaceWidget::SaveSurface() {
             pixmap->save(&file, "PNG");
     } else if (selectedFilter == bin_filter) {
         auto& gpu = Core::System::GetInstance().GPU();
-        boost::optional<VAddr> address = gpu.MemoryManager().GpuToCpuAddress(surface_address);
+        std::optional<VAddr> address = gpu.MemoryManager().GpuToCpuAddress(surface_address);
 
         const u8* buffer = Memory::GetPointer(*address);
         ASSERT_MSG(buffer != nullptr, "Memory not accessible");

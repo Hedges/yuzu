@@ -16,6 +16,8 @@ namespace OpenGL::GLShader {
 constexpr std::size_t MAX_PROGRAM_CODE_LENGTH{0x1000};
 using ProgramCode = std::vector<u64>;
 
+enum : u32 { POSITION_VARYING_LOCATION = 0, GENERIC_VARYING_START_LOCATION = 1 };
+
 class ConstBufferEntry {
     using Maxwell = Tegra::Engines::Maxwell3D::Regs;
 
@@ -161,6 +163,8 @@ private:
 struct ShaderEntries {
     std::vector<ConstBufferEntry> const_buffer_entries;
     std::vector<SamplerEntry> texture_samplers;
+    std::array<bool, Tegra::Engines::Maxwell3D::Regs::NumClipDistances> clip_distances;
+    std::size_t shader_length;
 };
 
 using ProgramResult = std::pair<std::string, ShaderEntries>;

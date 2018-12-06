@@ -36,20 +36,36 @@ ConfigureGameList::ConfigureGameList(QWidget* parent)
     InitializeRowComboBoxes();
 
     this->setConfiguration();
+
+    // Force game list reload if any of the relevant settings are changed.
+    connect(ui->show_unknown, &QCheckBox::stateChanged, this,
+            &ConfigureGameList::RequestGameListUpdate);
+    connect(ui->icon_size_combobox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigureGameList::RequestGameListUpdate);
+    connect(ui->row_1_text_combobox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigureGameList::RequestGameListUpdate);
+    connect(ui->row_2_text_combobox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigureGameList::RequestGameListUpdate);
 }
 
 ConfigureGameList::~ConfigureGameList() = default;
 
 void ConfigureGameList::applyConfiguration() {
     UISettings::values.show_unknown = ui->show_unknown->isChecked();
+    UISettings::values.show_add_ons = ui->show_add_ons->isChecked();
     UISettings::values.icon_size = ui->icon_size_combobox->currentData().toUInt();
     UISettings::values.row_1_text_id = ui->row_1_text_combobox->currentData().toUInt();
     UISettings::values.row_2_text_id = ui->row_2_text_combobox->currentData().toUInt();
     Settings::Apply();
 }
 
+void ConfigureGameList::RequestGameListUpdate() {
+    UISettings::values.is_game_list_reload_pending.exchange(true);
+}
+
 void ConfigureGameList::setConfiguration() {
     ui->show_unknown->setChecked(UISettings::values.show_unknown);
+    ui->show_add_ons->setChecked(UISettings::values.show_add_ons);
     ui->icon_size_combobox->setCurrentIndex(
         ui->icon_size_combobox->findData(UISettings::values.icon_size));
     ui->row_1_text_combobox->setCurrentIndex(

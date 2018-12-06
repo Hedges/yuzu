@@ -12,8 +12,10 @@
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/event.h"
 #include "core/hle/kernel/hle_ipc.h"
+#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/readable_event.h"
+#include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/audio/audren_u.h"
 
 namespace Service::Audio {
@@ -22,94 +24,122 @@ class IAudioRenderer final : public ServiceFramework<IAudioRenderer> {
 public:
     explicit IAudioRenderer(AudioCore::AudioRendererParameter audren_params)
         : ServiceFramework("IAudioRenderer") {
+        // clang-format off
         static const FunctionInfo functions[] = {
-            {0, &IAudioRenderer::GetAudioRendererSampleRate, "GetAudioRendererSampleRate"},
-            {1, &IAudioRenderer::GetAudioRendererSampleCount, "GetAudioRendererSampleCount"},
-            {2, &IAudioRenderer::GetAudioRendererMixBufferCount, "GetAudioRendererMixBufferCount"},
-            {3, &IAudioRenderer::GetAudioRendererState, "GetAudioRendererState"},
-            {4, &IAudioRenderer::RequestUpdateAudioRenderer, "RequestUpdateAudioRenderer"},
-            {5, &IAudioRenderer::StartAudioRenderer, "StartAudioRenderer"},
-            {6, &IAudioRenderer::StopAudioRenderer, "StopAudioRenderer"},
+            {0, &IAudioRenderer::GetSampleRate, "GetSampleRate"},
+            {1, &IAudioRenderer::GetSampleCount, "GetSampleCount"},
+            {2, &IAudioRenderer::GetMixBufferCount, "GetMixBufferCount"},
+            {3, &IAudioRenderer::GetState, "GetState"},
+            {4, &IAudioRenderer::RequestUpdateImpl, "RequestUpdate"},
+            {5, &IAudioRenderer::Start, "Start"},
+            {6, &IAudioRenderer::Stop, "Stop"},
             {7, &IAudioRenderer::QuerySystemEvent, "QuerySystemEvent"},
-            {8, nullptr, "SetAudioRendererRenderingTimeLimit"},
-            {9, nullptr, "GetAudioRendererRenderingTimeLimit"},
-            {10, nullptr, "RequestUpdateAudioRendererAuto"},
+            {8, &IAudioRenderer::SetRenderingTimeLimit, "SetRenderingTimeLimit"},
+            {9, &IAudioRenderer::GetRenderingTimeLimit, "GetRenderingTimeLimit"},
+            {10, &IAudioRenderer::RequestUpdateImpl, "RequestUpdateAuto"},
             {11, nullptr, "ExecuteAudioRendererRendering"},
         };
+        // clang-format on
         RegisterHandlers(functions);
 
         auto& kernel = Core::System::GetInstance().Kernel();
-        system_event =
-            Kernel::Event::Create(kernel, Kernel::ResetType::Sticky, "IAudioRenderer:SystemEvent");
-        renderer = std::make_unique<AudioCore::AudioRenderer>(audren_params, system_event);
+        system_event = Kernel::WritableEvent::CreateEventPair(kernel, Kernel::ResetType::Sticky,
+                                                              "IAudioRenderer:SystemEvent");
+        renderer = std::make_unique<AudioCore::AudioRenderer>(audren_params, system_event.writable);
     }
 
 private:
     void UpdateAudioCallback() {
-        system_event->Signal();
+        system_event.writable->Signal();
     }
 
-    void GetAudioRendererSampleRate(Kernel::HLERequestContext& ctx) {
+    void GetSampleRate(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Audio, "called");
+
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(RESULT_SUCCESS);
         rb.Push<u32>(renderer->GetSampleRate());
-        LOG_DEBUG(Service_Audio, "called");
     }
 
-    void GetAudioRendererSampleCount(Kernel::HLERequestContext& ctx) {
+    void GetSampleCount(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Audio, "called");
+
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(RESULT_SUCCESS);
         rb.Push<u32>(renderer->GetSampleCount());
-        LOG_DEBUG(Service_Audio, "called");
     }
 
-    void GetAudioRendererState(Kernel::HLERequestContext& ctx) {
+    void GetState(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Audio, "called");
+
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(RESULT_SUCCESS);
         rb.Push<u32>(static_cast<u32>(renderer->GetStreamState()));
-        LOG_DEBUG(Service_Audio, "called");
     }
 
-    void GetAudioRendererMixBufferCount(Kernel::HLERequestContext& ctx) {
+    void GetMixBufferCount(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Audio, "called");
+
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(RESULT_SUCCESS);
         rb.Push<u32>(renderer->GetMixBufferCount());
-        LOG_DEBUG(Service_Audio, "called");
     }
 
-    void RequestUpdateAudioRenderer(Kernel::HLERequestContext& ctx) {
+    void RequestUpdateImpl(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_Audio, "(STUBBED) called");
+
         ctx.WriteBuffer(renderer->UpdateAudioRenderer(ctx.ReadBuffer()));
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
-        LOG_WARNING(Service_Audio, "(STUBBED) called");
     }
 
-    void StartAudioRenderer(Kernel::HLERequestContext& ctx) {
+    void Start(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_Audio, "(STUBBED) called");
+
         IPC::ResponseBuilder rb{ctx, 2};
 
         rb.Push(RESULT_SUCCESS);
-
-        LOG_WARNING(Service_Audio, "(STUBBED) called");
     }
 
-    void StopAudioRenderer(Kernel::HLERequestContext& ctx) {
+    void Stop(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_Audio, "(STUBBED) called");
+
         IPC::ResponseBuilder rb{ctx, 2};
 
         rb.Push(RESULT_SUCCESS);
-
-        LOG_WARNING(Service_Audio, "(STUBBED) called");
     }
 
     void QuerySystemEvent(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_Audio, "(STUBBED) called");
+
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(system_event);
-
-        LOG_WARNING(Service_Audio, "(STUBBED) called");
+        rb.PushCopyObjects(system_event.readable);
     }
 
-    Kernel::SharedPtr<Kernel::Event> system_event;
+    void SetRenderingTimeLimit(Kernel::HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        rendering_time_limit_percent = rp.Pop<u32>();
+        LOG_DEBUG(Service_Audio, "called. rendering_time_limit_percent={}",
+                  rendering_time_limit_percent);
+
+        ASSERT(rendering_time_limit_percent >= 0 && rendering_time_limit_percent <= 100);
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
+
+    void GetRenderingTimeLimit(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Audio, "called");
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(RESULT_SUCCESS);
+        rb.Push(rendering_time_limit_percent);
+    }
+
+    Kernel::EventPair system_event;
     std::unique_ptr<AudioCore::AudioRenderer> renderer;
+    u32 rendering_time_limit_percent = 100;
 };
 
 class IAudioDevice final : public ServiceFramework<IAudioDevice> {
@@ -129,12 +159,13 @@ public:
             {10, &IAudioDevice::GetActiveAudioDeviceName, "GetActiveAudioDeviceNameAuto"},
             {11, nullptr, "QueryAudioDeviceInputEvent"},
             {12, nullptr, "QueryAudioDeviceOutputEvent"},
+            {13, nullptr, "GetAudioSystemMasterVolumeSetting"},
         };
         RegisterHandlers(functions);
 
         auto& kernel = Core::System::GetInstance().Kernel();
-        buffer_event = Kernel::Event::Create(kernel, Kernel::ResetType::OneShot,
-                                             "IAudioOutBufferReleasedEvent");
+        buffer_event = Kernel::WritableEvent::CreateEventPair(kernel, Kernel::ResetType::OneShot,
+                                                              "IAudioOutBufferReleasedEvent");
     }
 
 private:
@@ -178,21 +209,22 @@ private:
     void QueryAudioDeviceSystemEvent(Kernel::HLERequestContext& ctx) {
         LOG_WARNING(Service_Audio, "(STUBBED) called");
 
-        buffer_event->Signal();
+        buffer_event.writable->Signal();
 
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(buffer_event);
+        rb.PushCopyObjects(buffer_event.readable);
     }
 
     void GetActiveChannelCount(Kernel::HLERequestContext& ctx) {
         LOG_WARNING(Service_Audio, "(STUBBED) called");
+
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(RESULT_SUCCESS);
         rb.Push<u32>(1);
     }
 
-    Kernel::SharedPtr<Kernel::Event> buffer_event;
+    Kernel::EventPair buffer_event;
 
 }; // namespace Audio
 
@@ -211,19 +243,20 @@ AudRenU::AudRenU() : ServiceFramework("audren:u") {
 AudRenU::~AudRenU() = default;
 
 void AudRenU::OpenAudioRenderer(Kernel::HLERequestContext& ctx) {
+    LOG_DEBUG(Service_Audio, "called");
+
     IPC::RequestParser rp{ctx};
     auto params = rp.PopRaw<AudioCore::AudioRendererParameter>();
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
 
     rb.Push(RESULT_SUCCESS);
     rb.PushIpcInterface<Audio::IAudioRenderer>(std::move(params));
-
-    LOG_DEBUG(Service_Audio, "called");
 }
 
 void AudRenU::GetAudioRendererWorkBufferSize(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     auto params = rp.PopRaw<AudioCore::AudioRendererParameter>();
+    LOG_DEBUG(Service_Audio, "called");
 
     u64 buffer_sz = Common::AlignUp(4 * params.mix_buffer_count, 0x40);
     buffer_sz += params.unknown_c * 1024;
@@ -277,26 +310,26 @@ void AudRenU::GetAudioRendererWorkBufferSize(Kernel::HLERequestContext& ctx) {
     rb.Push(RESULT_SUCCESS);
     rb.Push<u64>(output_sz);
 
-    LOG_DEBUG(Service_Audio, "called, buffer_size=0x{:X}", output_sz);
+    LOG_DEBUG(Service_Audio, "buffer_size=0x{:X}", output_sz);
 }
 
 void AudRenU::GetAudioDevice(Kernel::HLERequestContext& ctx) {
+    LOG_DEBUG(Service_Audio, "called");
+
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
 
     rb.Push(RESULT_SUCCESS);
     rb.PushIpcInterface<Audio::IAudioDevice>();
-
-    LOG_DEBUG(Service_Audio, "called");
 }
 
 void AudRenU::GetAudioDeviceServiceWithRevisionInfo(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_Audio, "(STUBBED) called");
+
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
 
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<Audio::IAudioDevice>();
-
-    LOG_WARNING(Service_Audio, "(STUBBED) called"); // TODO(ogniK): Figure out what is different
-                                                    // based on the current revision
+    rb.PushIpcInterface<Audio::IAudioDevice>(); // TODO(ogniK): Figure out what is different
+                                                // based on the current revision
 }
 
 bool AudRenU::IsFeatureSupported(AudioFeatures feature, u32_le revision) const {

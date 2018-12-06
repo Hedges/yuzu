@@ -158,6 +158,14 @@ public:
     ResultVal<VMAHandle> MapBackingMemory(VAddr target, u8* memory, u64 size, MemoryState state);
 
     /**
+     * Finds the first free address that can hold a region of the desired size.
+     *
+     * @param size Size of the desired region.
+     * @return The found free address.
+     */
+    ResultVal<VAddr> FindFreeRegion(u64 size) const;
+
+    /**
      * Maps a memory-mapped IO region at a given address.
      *
      * @param target The guest address to start the mapping at.
@@ -177,6 +185,12 @@ public:
 
     /// Changes the permissions of a range of addresses, splitting VMAs as necessary.
     ResultCode ReprotectRange(VAddr target, u64 size, VMAPermission new_perms);
+
+    ResultVal<VAddr> HeapAllocate(VAddr target, u64 size, VMAPermission perms);
+    ResultCode HeapFree(VAddr target, u64 size);
+
+    ResultCode MirrorMemory(VAddr dst_addr, VAddr src_addr, u64 size,
+                            MemoryState state = MemoryState::Mapped);
 
     /**
      * Scans all VMAs and updates the page table range of any that use the given vector as backing
@@ -204,6 +218,18 @@ public:
 
     /// Gets the address space width in bits.
     u64 GetAddressSpaceWidth() const;
+
+    /// Gets the base address of the ASLR region.
+    VAddr GetASLRRegionBaseAddress() const;
+
+    /// Gets the end address of the ASLR region.
+    VAddr GetASLRRegionEndAddress() const;
+
+    /// Determines whether or not the specified address range is within the ASLR region.
+    bool IsWithinASLRRegion(VAddr address, u64 size) const;
+
+    /// Gets the size of the ASLR region
+    u64 GetASLRRegionSize() const;
 
     /// Gets the base address of the code region.
     VAddr GetCodeRegionBaseAddress() const;
@@ -306,6 +332,9 @@ private:
     VAddr address_space_base = 0;
     VAddr address_space_end = 0;
 
+    VAddr aslr_region_base = 0;
+    VAddr aslr_region_end = 0;
+
     VAddr code_region_base = 0;
     VAddr code_region_end = 0;
 
@@ -320,5 +349,15 @@ private:
 
     VAddr tls_io_region_base = 0;
     VAddr tls_io_region_end = 0;
+
+    // Memory used to back the allocations in the regular heap. A single vector is used to cover
+    // the entire virtual address space extents that bound the allocations, including any holes.
+    // This makes deallocation and reallocation of holes fast and keeps process memory contiguous
+    // in the emulator address space, allowing Memory::GetPointer to be reasonably safe.
+    std::shared_ptr<std::vector<u8>> heap_memory;
+    // The left/right bounds of the address space covered by heap_memory.
+    VAddr heap_start = 0;
+    VAddr heap_end = 0;
+    u64 heap_used = 0;
 };
 } // namespace Kernel

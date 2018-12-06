@@ -167,13 +167,13 @@ std::string VfsFile::GetExtension() const {
 
 VfsDirectory::~VfsDirectory() = default;
 
-boost::optional<u8> VfsFile::ReadByte(std::size_t offset) const {
+std::optional<u8> VfsFile::ReadByte(std::size_t offset) const {
     u8 out{};
     std::size_t size = Read(&out, 1, offset);
     if (size == 1)
         return out;
 
-    return boost::none;
+    return {};
 }
 
 std::vector<u8> VfsFile::ReadBytes(std::size_t size, std::size_t offset) const {
@@ -384,6 +384,28 @@ bool VfsDirectory::DeleteSubdirectoryRecursive(std::string_view name) {
     return success;
 }
 
+bool VfsDirectory::CleanSubdirectoryRecursive(std::string_view name) {
+    auto dir = GetSubdirectory(name);
+    if (dir == nullptr) {
+        return false;
+    }
+
+    bool success = true;
+    for (const auto& file : dir->GetFiles()) {
+        if (!dir->DeleteFile(file->GetName())) {
+            success = false;
+        }
+    }
+
+    for (const auto& sdir : dir->GetSubdirectories()) {
+        if (!dir->DeleteSubdirectoryRecursive(sdir->GetName())) {
+            success = false;
+        }
+    }
+
+    return success;
+}
+
 bool VfsDirectory::Copy(std::string_view src, std::string_view dest) {
     const auto f1 = GetFile(src);
     auto f2 = CreateFile(dest);
@@ -431,7 +453,31 @@ std::shared_ptr<VfsFile> ReadOnlyVfsDirectory::CreateFile(std::string_view name)
     return nullptr;
 }
 
+std::shared_ptr<VfsFile> ReadOnlyVfsDirectory::CreateFileAbsolute(std::string_view path) {
+    return nullptr;
+}
+
+std::shared_ptr<VfsFile> ReadOnlyVfsDirectory::CreateFileRelative(std::string_view path) {
+    return nullptr;
+}
+
+std::shared_ptr<VfsDirectory> ReadOnlyVfsDirectory::CreateDirectoryAbsolute(std::string_view path) {
+    return nullptr;
+}
+
+std::shared_ptr<VfsDirectory> ReadOnlyVfsDirectory::CreateDirectoryRelative(std::string_view path) {
+    return nullptr;
+}
+
 bool ReadOnlyVfsDirectory::DeleteSubdirectory(std::string_view name) {
+    return false;
+}
+
+bool ReadOnlyVfsDirectory::DeleteSubdirectoryRecursive(std::string_view name) {
+    return false;
+}
+
+bool ReadOnlyVfsDirectory::CleanSubdirectoryRecursive(std::string_view name) {
     return false;
 }
 
@@ -472,10 +518,14 @@ bool VfsRawCopy(const VirtualFile& src, const VirtualFile& dest, std::size_t blo
     std::vector<u8> temp(std::min(block_size, src->GetSize()));
     for (std::size_t i = 0; i < src->GetSize(); i += block_size) {
         const auto read = std::min(block_size, src->GetSize() - i);
-        const auto block = src->Read(temp.data(), read, i);
 
-        if (dest->Write(temp.data(), read, i) != read)
+        if (src->Read(temp.data(), read, i) != read) {
             return false;
+        }
+
+        if (dest->Write(temp.data(), read, i) != read) {
+            return false;
+        }
     }
 
     return true;

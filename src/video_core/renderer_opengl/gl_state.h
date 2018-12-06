@@ -36,6 +36,28 @@ constexpr TextureUnit ProcTexDiffLUT{9};
 class OpenGLState {
 public:
     struct {
+        bool enabled; // GL_FRAMEBUFFER_SRGB
+    } framebuffer_srgb;
+
+    struct {
+        bool alpha_to_coverage; // GL_ALPHA_TO_COVERAGE
+        bool alpha_to_one;      // GL_ALPHA_TO_ONE
+    } multisample_control;
+
+    struct {
+        bool enabled; // GL_CLAMP_FRAGMENT_COLOR_ARB
+    } fragment_color_clamp;
+
+    struct {
+        bool far_plane;
+        bool near_plane;
+    } depth_clamp; // GL_DEPTH_CLAMP
+
+    struct {
+        bool enabled; // viewports arrays are only supported when geometry shaders are enabled.
+    } geometry_shaders;
+
+    struct {
         bool enabled;      // GL_CULL_FACE
         GLenum mode;       // GL_CULL_FACE_MODE
         GLenum front_face; // GL_FRONT_FACE
@@ -48,12 +70,18 @@ public:
     } depth;
 
     struct {
+        bool enabled;
+        GLuint index;
+    } primitive_restart; // GL_PRIMITIVE_RESTART
+
+    struct ColorMask {
         GLboolean red_enabled;
         GLboolean green_enabled;
         GLboolean blue_enabled;
         GLboolean alpha_enabled;
-    } color_mask; // GL_COLOR_WRITEMASK
-
+    };
+    std::array<ColorMask, Tegra::Engines::Maxwell3D::Regs::NumRenderTargets>
+        color_mask; // GL_COLOR_WRITEMASK
     struct {
         bool test_enabled; // GL_STENCIL_TEST
         struct {
@@ -67,7 +95,7 @@ public:
         } front, back;
     } stencil;
 
-    struct {
+    struct Blend {
         bool enabled;        // GL_BLEND
         GLenum rgb_equation; // GL_BLEND_EQUATION_RGB
         GLenum a_equation;   // GL_BLEND_EQUATION_ALPHA
@@ -75,14 +103,19 @@ public:
         GLenum dst_rgb_func; // GL_BLEND_DST_RGB
         GLenum src_a_func;   // GL_BLEND_SRC_ALPHA
         GLenum dst_a_func;   // GL_BLEND_DST_ALPHA
+    };
+    std::array<Blend, Tegra::Engines::Maxwell3D::Regs::NumRenderTargets> blend;
 
-        struct {
-            GLclampf red;
-            GLclampf green;
-            GLclampf blue;
-            GLclampf alpha;
-        } color; // GL_BLEND_COLOR
-    } blend;
+    struct {
+        bool enabled;
+    } independant_blend;
+
+    struct {
+        GLclampf red;
+        GLclampf green;
+        GLclampf blue;
+        GLclampf alpha;
+    } blend_color; // GL_BLEND_COLOR
 
     struct {
         bool enabled; // GL_LOGIC_OP_MODE
@@ -127,26 +160,37 @@ public:
         GLuint program_pipeline; // GL_PROGRAM_PIPELINE_BINDING
     } draw;
 
-    struct {
-        bool enabled; // GL_SCISSOR_TEST
+    struct viewport {
         GLint x;
         GLint y;
-        GLsizei width;
-        GLsizei height;
-    } scissor;
-
-    struct {
-        GLint x;
-        GLint y;
-        GLsizei width;
-        GLsizei height;
-    } viewport;
+        GLint width;
+        GLint height;
+        GLfloat depth_range_near; // GL_DEPTH_RANGE
+        GLfloat depth_range_far;  // GL_DEPTH_RANGE
+        struct {
+            bool enabled; // GL_SCISSOR_TEST
+            GLint x;
+            GLint y;
+            GLsizei width;
+            GLsizei height;
+        } scissor;
+    };
+    std::array<viewport, Tegra::Engines::Maxwell3D::Regs::NumViewports> viewports;
 
     struct {
         float size; // GL_POINT_SIZE
     } point;
 
-    std::array<bool, 2> clip_distance; // GL_CLIP_DISTANCE
+    struct {
+        bool point_enable;
+        bool line_enable;
+        bool fill_enable;
+        GLfloat units;
+        GLfloat factor;
+        GLfloat clamp;
+    } polygon_offset;
+
+    std::array<bool, 8> clip_distance; // GL_CLIP_DISTANCE
 
     OpenGLState();
 
@@ -154,10 +198,20 @@ public:
     static OpenGLState GetCurState() {
         return cur_state;
     }
-
+    static bool GetsRGBUsed() {
+        return s_rgb_used;
+    }
+    static void ClearsRGBUsed() {
+        s_rgb_used = false;
+    }
     /// Apply this state as the current OpenGL state
     void Apply() const;
-
+    /// Apply only the state afecting the framebuffer
+    void ApplyFramebufferState() const;
+    /// Apply only the state afecting the vertex buffer
+    void ApplyVertexBufferState() const;
+    /// Set the initial OpenGL state
+    static void ApplyDefaultState();
     /// Resets any references to the given resource
     OpenGLState& UnbindTexture(GLuint handle);
     OpenGLState& ResetSampler(GLuint handle);
@@ -166,9 +220,28 @@ public:
     OpenGLState& ResetBuffer(GLuint handle);
     OpenGLState& ResetVertexArray(GLuint handle);
     OpenGLState& ResetFramebuffer(GLuint handle);
+    void EmulateViewportWithScissor();
 
 private:
     static OpenGLState cur_state;
+    // Workaround for sRGB problems caused by
+    // QT not supporting srgb output
+    static bool s_rgb_used;
+    void ApplySRgb() const;
+    void ApplyCulling() const;
+    void ApplyColorMask() const;
+    void ApplyDepth() const;
+    void ApplyPrimitiveRestart() const;
+    void ApplyStencilTest() const;
+    void ApplyViewport() const;
+    void ApplyTargetBlending(std::size_t target, bool force) const;
+    void ApplyGlobalBlending() const;
+    void ApplyBlending() const;
+    void ApplyLogicOp() const;
+    void ApplyTextures() const;
+    void ApplySamplers() const;
+    void ApplyDepthClamp() const;
+    void ApplyPolygonOffset() const;
 };
 
 } // namespace OpenGL

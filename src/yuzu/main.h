@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <unordered_map>
 
 #include <QMainWindow>
@@ -28,9 +29,14 @@ class ProfilerWidget;
 class WaitTreeWidget;
 enum class GameListOpenTarget;
 
+namespace Core::Frontend {
+struct SoftwareKeyboardParameters;
+} // namespace Core::Frontend
+
 namespace FileSys {
+class RegisteredCacheUnion;
 class VfsFilesystem;
-}
+} // namespace FileSys
 
 namespace Tegra {
 class DebugContext;
@@ -39,6 +45,11 @@ class DebugContext;
 enum class EmulatedDirectoryTarget {
     NAND,
     SDMC,
+};
+
+enum class ReinitializeKeyBehavior {
+    NoWarning,
+    Warning,
 };
 
 namespace DiscordRPC {
@@ -87,6 +98,13 @@ signals:
 
     // Signal that tells widgets to update icons to use the current theme
     void UpdateThemedIcons();
+
+    void SoftwareKeyboardFinishedText(std::optional<std::u16string> text);
+    void SoftwareKeyboardFinishedCheckDialog();
+
+public slots:
+    void SoftwareKeyboardGetText(const Core::Frontend::SoftwareKeyboardParameters& parameters);
+    void SoftwareKeyboardInvokeCheckDialog(std::u16string error_message);
 
 private:
     void InitializeWidgets();
@@ -159,6 +177,8 @@ private slots:
     void OnMenuSelectEmulatedDirectory(EmulatedDirectoryTarget target);
     void OnMenuRecentFile();
     void OnConfigure();
+    void OnLoadAmiibo();
+    void OnOpenYuzuFolder();
     void OnAbout();
     void OnToggleFilterBar();
     void OnDisplayTitleBars(bool);
@@ -167,8 +187,10 @@ private slots:
     void HideFullscreen();
     void ToggleWindowMode();
     void OnCoreError(Core::System::ResultStatus, std::string);
+    void OnReinitializeKeys(ReinitializeKeyBehavior behavior);
 
 private:
+    std::optional<u64> SelectRomFSDumpTarget(const FileSys::RegisteredCacheUnion&, u64 program_id);
     void UpdateStatusBar();
 
     Ui::MainWindow ui;

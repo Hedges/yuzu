@@ -161,7 +161,7 @@ PL_U::PL_U() : ServiceFramework("pl:u"), impl{std::make_unique<Impl>()} {
     };
     RegisterHandlers(functions);
     // Attempt to load shared font data from disk
-    const auto nand = FileSystem::GetSystemNANDContents();
+    const auto* nand = FileSystem::GetSystemNANDContents();
     std::size_t offset = 0;
     // Rebuild shared fonts from data ncas
     if (nand->HasEntry(static_cast<u64>(FontArchives::Standard),
@@ -281,6 +281,7 @@ void PL_U::RequestLoad(Kernel::HLERequestContext& ctx) {
     const u32 shared_font_type{rp.Pop<u32>()};
     // Games don't call this so all fonts should be loaded
     LOG_DEBUG(Service_NS, "called, shared_font_type={}", shared_font_type);
+
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(RESULT_SUCCESS);
 }
@@ -288,8 +289,8 @@ void PL_U::RequestLoad(Kernel::HLERequestContext& ctx) {
 void PL_U::GetLoadState(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const u32 font_id{rp.Pop<u32>()};
-
     LOG_DEBUG(Service_NS, "called, font_id={}", font_id);
+
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(RESULT_SUCCESS);
     rb.Push<u32>(static_cast<u32>(LoadState::Done));
@@ -298,8 +299,8 @@ void PL_U::GetLoadState(Kernel::HLERequestContext& ctx) {
 void PL_U::GetSize(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const u32 font_id{rp.Pop<u32>()};
-
     LOG_DEBUG(Service_NS, "called, font_id={}", font_id);
+
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(RESULT_SUCCESS);
     rb.Push<u32>(impl->GetSharedFontRegion(font_id).size);
@@ -308,8 +309,8 @@ void PL_U::GetSize(Kernel::HLERequestContext& ctx) {
 void PL_U::GetSharedMemoryAddressOffset(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const u32 font_id{rp.Pop<u32>()};
-
     LOG_DEBUG(Service_NS, "called, font_id={}", font_id);
+
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(RESULT_SUCCESS);
     rb.Push<u32>(impl->GetSharedFontRegion(font_id).offset);
@@ -317,6 +318,7 @@ void PL_U::GetSharedMemoryAddressOffset(Kernel::HLERequestContext& ctx) {
 
 void PL_U::GetSharedMemoryNativeHandle(Kernel::HLERequestContext& ctx) {
     // Map backing memory for the font data
+    LOG_DEBUG(Service_NS, "called");
     Core::CurrentProcess()->VMManager().MapMemoryBlock(SHARED_FONT_MEM_VADDR, impl->shared_font, 0,
                                                        SHARED_FONT_MEM_SIZE,
                                                        Kernel::MemoryState::Shared);
@@ -328,7 +330,6 @@ void PL_U::GetSharedMemoryNativeHandle(Kernel::HLERequestContext& ctx) {
         Kernel::MemoryPermission::Read, SHARED_FONT_MEM_VADDR, Kernel::MemoryRegion::BASE,
         "PL_U:shared_font_mem");
 
-    LOG_DEBUG(Service_NS, "called");
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
     rb.PushCopyObjects(impl->shared_font_mem);
@@ -338,6 +339,7 @@ void PL_U::GetSharedFontInOrderOfPriority(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const u64 language_code{rp.Pop<u64>()}; // TODO(ogniK): Find out what this is used for
     LOG_DEBUG(Service_NS, "called, language_code={:X}", language_code);
+
     IPC::ResponseBuilder rb{ctx, 4};
     std::vector<u32> font_codes;
     std::vector<u32> font_offsets;
@@ -350,6 +352,14 @@ void PL_U::GetSharedFontInOrderOfPriority(Kernel::HLERequestContext& ctx) {
         font_offsets.push_back(region.offset);
         font_sizes.push_back(region.size);
     }
+
+    // Resize buffers if game requests smaller size output.
+    font_codes.resize(
+        std::min<std::size_t>(font_codes.size(), ctx.GetWriteBufferSize(0) / sizeof(u32)));
+    font_offsets.resize(
+        std::min<std::size_t>(font_offsets.size(), ctx.GetWriteBufferSize(1) / sizeof(u32)));
+    font_sizes.resize(
+        std::min<std::size_t>(font_sizes.size(), ctx.GetWriteBufferSize(2) / sizeof(u32)));
 
     ctx.WriteBuffer(font_codes, 0);
     ctx.WriteBuffer(font_offsets, 1);

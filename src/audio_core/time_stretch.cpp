@@ -10,8 +10,7 @@
 
 namespace AudioCore {
 
-TimeStretcher::TimeStretcher(u32 sample_rate, u32 channel_count)
-    : m_sample_rate(sample_rate), m_channel_count(channel_count) {
+TimeStretcher::TimeStretcher(u32 sample_rate, u32 channel_count) : m_sample_rate{sample_rate} {
     m_sound_touch.setChannels(channel_count);
     m_sound_touch.setSampleRate(sample_rate);
     m_sound_touch.setPitch(1.0);
@@ -33,10 +32,10 @@ std::size_t TimeStretcher::Process(const s16* in, std::size_t num_in, s16* out,
     // We were given actual_samples number of samples, and num_samples were requested from us.
     double current_ratio = static_cast<double>(num_in) / static_cast<double>(num_out);
 
-    const double max_latency = 1.0; // seconds
+    const double max_latency = 0.25; // seconds
     const double max_backlog = m_sample_rate * max_latency;
     const double backlog_fullness = m_sound_touch.numSamples() / max_backlog;
-    if (backlog_fullness > 5.0) {
+    if (backlog_fullness > 4.0) {
         // Too many samples in backlog: Don't push anymore on
         num_in = 0;
     }
@@ -50,7 +49,7 @@ std::size_t TimeStretcher::Process(const s16* in, std::size_t num_in, s16* out,
 
     // This low-pass filter smoothes out variance in the calculated stretch ratio.
     // The time-scale determines how responsive this filter is.
-    constexpr double lpf_time_scale = 2.0; // seconds
+    constexpr double lpf_time_scale = 0.712; // seconds
     const double lpf_gain = 1.0 - std::exp(-time_delta / lpf_time_scale);
     m_stretch_ratio += lpf_gain * (current_ratio - m_stretch_ratio);
 

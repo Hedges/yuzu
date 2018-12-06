@@ -2,8 +2,10 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "core/core.h"
 #include "core/memory.h"
 #include "video_core/engines/fermi_2d.h"
+#include "video_core/engines/maxwell_3d.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/textures/decoders.h"
 
@@ -12,13 +14,13 @@ namespace Tegra::Engines {
 Fermi2D::Fermi2D(VideoCore::RasterizerInterface& rasterizer, MemoryManager& memory_manager)
     : memory_manager(memory_manager), rasterizer{rasterizer} {}
 
-void Fermi2D::WriteReg(u32 method, u32 value) {
-    ASSERT_MSG(method < Regs::NUM_REGS,
+void Fermi2D::CallMethod(const GPU::MethodCall& method_call) {
+    ASSERT_MSG(method_call.method < Regs::NUM_REGS,
                "Invalid Fermi2D register, increase the size of the Regs structure");
 
-    regs.reg_array[method] = value;
+    regs.reg_array[method_call.method] = method_call.argument;
 
-    switch (method) {
+    switch (method_call.method) {
     case FERMI2D_REG_INDEX(trigger): {
         HandleSurfaceCopy();
         break;
@@ -47,9 +49,15 @@ void Fermi2D::HandleSurfaceCopy() {
     u32 dst_bytes_per_pixel = RenderTargetBytesPerPixel(regs.dst.format);
 
     if (!rasterizer.AccelerateSurfaceCopy(regs.src, regs.dst)) {
-        // TODO(bunnei): The below implementation currently will not get hit, as
-        // AccelerateSurfaceCopy tries to always copy and will always return success. This should be
-        // changed once we properly support flushing.
+        // All copies here update the main memory, so mark all rasterizer states as invalid.
+        Core::System::GetInstance().GPU().Maxwell3D().dirty_flags.OnMemoryWrite();
+
+        rasterizer.FlushRegion(source_cpu, src_bytes_per_pixel * regs.src.width * regs.src.height);
+        // We have to invalidate the destination region to evict any outdated surfaces from the
+        // cache. We do this before actually writing the new data because the destination address
+        // might contain a dirty surface that will have to be written back to memory.
+        rasterizer.InvalidateRegion(dest_cpu,
+                                    dst_bytes_per_pixel * regs.dst.width * regs.dst.height);
 
         if (regs.src.linear == regs.dst.linear) {
             // If the input layout and the output layout are the same, just perform a raw copy.
@@ -62,14 +70,16 @@ void Fermi2D::HandleSurfaceCopy() {
         u8* dst_buffer = Memory::GetPointer(dest_cpu);
         if (!regs.src.linear && regs.dst.linear) {
             // If the input is tiled and the output is linear, deswizzle the input and copy it over.
-            Texture::CopySwizzledData(regs.src.width, regs.src.height, src_bytes_per_pixel,
-                                      dst_bytes_per_pixel, src_buffer, dst_buffer, true,
-                                      regs.src.BlockHeight());
+            Texture::CopySwizzledData(regs.src.width, regs.src.height, regs.src.depth,
+                                      src_bytes_per_pixel, dst_bytes_per_pixel, src_buffer,
+                                      dst_buffer, true, regs.src.BlockHeight(),
+                                      regs.src.BlockDepth(), 0);
         } else {
             // If the input is linear and the output is tiled, swizzle the input and copy it over.
-            Texture::CopySwizzledData(regs.src.width, regs.src.height, src_bytes_per_pixel,
-                                      dst_bytes_per_pixel, dst_buffer, src_buffer, false,
-                                      regs.dst.BlockHeight());
+            Texture::CopySwizzledData(regs.src.width, regs.src.height, regs.src.depth,
+                                      src_bytes_per_pixel, dst_bytes_per_pixel, dst_buffer,
+                                      src_buffer, false, regs.dst.BlockHeight(),
+                                      regs.dst.BlockDepth(), 0);
         }
     }
 }

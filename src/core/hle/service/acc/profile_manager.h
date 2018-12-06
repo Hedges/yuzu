@@ -5,15 +5,14 @@
 #pragma once
 
 #include <array>
+#include <optional>
 
-#include "boost/optional.hpp"
 #include "common/common_types.h"
 #include "common/swap.h"
 #include "core/hle/result.h"
 
 namespace Service::Account {
 constexpr std::size_t MAX_USERS = 8;
-constexpr std::size_t MAX_DATA = 128;
 constexpr u128 INVALID_UUID{{0, 0}};
 
 struct UUID {
@@ -36,21 +35,33 @@ struct UUID {
     }
 
     // TODO(ogniK): Properly generate uuids based on RFC-4122
-    const UUID& Generate();
+    static UUID Generate();
 
     // Set the UUID to {0,0} to be considered an invalid user
     void Invalidate() {
         uuid = INVALID_UUID;
     }
-    std::string Format() const {
-        return fmt::format("0x{:016X}{:016X}", uuid[1], uuid[0]);
-    }
+
+    std::string Format() const;
+    std::string FormatSwitch() const;
 };
 static_assert(sizeof(UUID) == 16, "UUID is an invalid size!");
 
-using ProfileUsername = std::array<u8, 0x20>;
-using ProfileData = std::array<u8, MAX_DATA>;
+constexpr std::size_t profile_username_size = 32;
+using ProfileUsername = std::array<u8, profile_username_size>;
 using UserIDArray = std::array<UUID, MAX_USERS>;
+
+/// Contains extra data related to a user.
+/// TODO: RE this structure
+struct ProfileData {
+    INSERT_PADDING_WORDS(1);
+    u32 icon_id;
+    u8 bg_color_id;
+    INSERT_PADDING_BYTES(0x7);
+    INSERT_PADDING_BYTES(0x10);
+    INSERT_PADDING_BYTES(0x60);
+};
+static_assert(sizeof(ProfileData) == 0x80, "ProfileData structure has incorrect size");
 
 /// This holds general information about a users profile. This is where we store all the information
 /// based on a specific user
@@ -81,18 +92,19 @@ static_assert(sizeof(ProfileBase) == 0x38, "ProfileBase is an invalid size");
 /// objects
 class ProfileManager {
 public:
-    ProfileManager(); // TODO(ogniK): Load from system save
+    ProfileManager();
     ~ProfileManager();
 
     ResultCode AddUser(const ProfileInfo& user);
     ResultCode CreateNewUser(UUID uuid, const ProfileUsername& username);
     ResultCode CreateNewUser(UUID uuid, const std::string& username);
-    boost::optional<std::size_t> GetUserIndex(const UUID& uuid) const;
-    boost::optional<std::size_t> GetUserIndex(const ProfileInfo& user) const;
-    bool GetProfileBase(boost::optional<std::size_t> index, ProfileBase& profile) const;
+    std::optional<UUID> GetUser(std::size_t index) const;
+    std::optional<std::size_t> GetUserIndex(const UUID& uuid) const;
+    std::optional<std::size_t> GetUserIndex(const ProfileInfo& user) const;
+    bool GetProfileBase(std::optional<std::size_t> index, ProfileBase& profile) const;
     bool GetProfileBase(UUID uuid, ProfileBase& profile) const;
     bool GetProfileBase(const ProfileInfo& user, ProfileBase& profile) const;
-    bool GetProfileBaseAndData(boost::optional<std::size_t> index, ProfileBase& profile,
+    bool GetProfileBaseAndData(std::optional<std::size_t> index, ProfileBase& profile,
                                ProfileData& data) const;
     bool GetProfileBaseAndData(UUID uuid, ProfileBase& profile, ProfileData& data) const;
     bool GetProfileBaseAndData(const ProfileInfo& user, ProfileBase& profile,
@@ -100,6 +112,7 @@ public:
     std::size_t GetUserCount() const;
     std::size_t GetOpenUserCount() const;
     bool UserExists(UUID uuid) const;
+    bool UserExistsIndex(std::size_t index) const;
     void OpenUser(UUID uuid);
     void CloseUser(UUID uuid);
     UserIDArray GetOpenUsers() const;
@@ -108,11 +121,17 @@ public:
 
     bool CanSystemRegisterUser() const;
 
+    bool RemoveUser(UUID uuid);
+    bool SetProfileBase(UUID uuid, const ProfileBase& profile_new);
+
 private:
+    void ParseUserSaveFile();
+    void WriteUserSaveFile();
+    std::optional<std::size_t> AddToProfiles(const ProfileInfo& profile);
+    bool RemoveProfileAtIndex(std::size_t index);
+
     std::array<ProfileInfo, MAX_USERS> profiles{};
     std::size_t user_count = 0;
-    boost::optional<std::size_t> AddToProfiles(const ProfileInfo& profile);
-    bool RemoveProfileAtIndex(std::size_t index);
     UUID last_opened_user{INVALID_UUID};
 };
 
