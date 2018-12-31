@@ -194,10 +194,16 @@ static ResultCode SetHeapSize(VAddr* heap_addr, u64 heap_size) {
         return ERR_INVALID_SIZE;
     }
 
-    auto& process = *Core::CurrentProcess();
-    const VAddr heap_base = process.VMManager().GetHeapRegionBaseAddress();
-    CASCADE_RESULT(*heap_addr,
-                   process.HeapAllocate(heap_base, heap_size, VMAPermission::ReadWrite));
+    auto& vm_manager = Core::CurrentProcess()->VMManager();
+    const VAddr heap_base = vm_manager.GetHeapRegionBaseAddress();
+    const auto alloc_result =
+        vm_manager.HeapAllocate(heap_base, heap_size, VMAPermission::ReadWrite);
+
+    if (alloc_result.Failed()) {
+        return alloc_result.Code();
+    }
+
+    *heap_addr = *alloc_result;
     return RESULT_SUCCESS;
 }
 
@@ -311,15 +317,14 @@ static ResultCode MapMemory(VAddr dst_addr, VAddr src_addr, u64 size) {
     LOG_TRACE(Kernel_SVC, "called, dst_addr=0x{:X}, src_addr=0x{:X}, size=0x{:X}", dst_addr,
               src_addr, size);
 
-    auto* const current_process = Core::CurrentProcess();
-    const auto& vm_manager = current_process->VMManager();
-
+    auto& vm_manager = Core::CurrentProcess()->VMManager();
     const auto result = MapUnmapMemorySanityChecks(vm_manager, dst_addr, src_addr, size);
-    if (result != RESULT_SUCCESS) {
+
+    if (result.IsError()) {
         return result;
     }
 
-    return current_process->MirrorMemory(dst_addr, src_addr, size, MemoryState::Stack);
+    return vm_manager.MirrorMemory(dst_addr, src_addr, size, MemoryState::Stack);
 }
 
 /// Unmaps a region that was previously mapped with svcMapMemory
@@ -327,15 +332,14 @@ static ResultCode UnmapMemory(VAddr dst_addr, VAddr src_addr, u64 size) {
     LOG_TRACE(Kernel_SVC, "called, dst_addr=0x{:X}, src_addr=0x{:X}, size=0x{:X}", dst_addr,
               src_addr, size);
 
-    auto* const current_process = Core::CurrentProcess();
-    const auto& vm_manager = current_process->VMManager();
-
+    auto& vm_manager = Core::CurrentProcess()->VMManager();
     const auto result = MapUnmapMemorySanityChecks(vm_manager, dst_addr, src_addr, size);
-    if (result != RESULT_SUCCESS) {
+
+    if (result.IsError()) {
         return result;
     }
 
-    return current_process->UnmapMemory(dst_addr, src_addr, size);
+    return vm_manager.UnmapRange(dst_addr, size);
 }
 
 /// Connect to an OS service given the port name, returns the handle to the port to out
@@ -684,6 +688,9 @@ static void Break(u32 reason, u64 info1, u64 info2) {
             "Emulated program broke execution! reason=0x{:016X}, info1=0x{:016X}, info2=0x{:016X}",
             reason, info1, info2);
         handle_debug_buffer(info1, info2);
+        Core::System::GetInstance()
+            .ArmInterface(static_cast<std::size_t>(GetCurrentThread()->GetProcessorID()))
+            .LogBacktrace();
         ASSERT(false);
 
         Core::CurrentProcess()->PrepareForTermination();
