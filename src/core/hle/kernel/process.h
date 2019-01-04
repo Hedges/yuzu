@@ -14,7 +14,6 @@
 #include "common/common_types.h"
 #include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/process_capability.h"
-#include "core/hle/kernel/thread.h"
 #include "core/hle/kernel/vm_manager.h"
 #include "core/hle/kernel/wait_object.h"
 #include "core/hle/result.h"
@@ -27,6 +26,7 @@ namespace Kernel {
 
 class KernelCore;
 class ResourceLimit;
+class Thread;
 
 struct AddressMapping {
     // Address and size must be page-aligned
@@ -173,13 +173,13 @@ public:
         return ideal_core;
     }
 
-    /// Gets the bitmask of allowed CPUs that this process' threads can run on.
-    u64 GetAllowedProcessorMask() const {
+    /// Gets the bitmask of allowed cores that this process' threads can run on.
+    u64 GetCoreMask() const {
         return capabilities.GetCoreMask();
     }
 
     /// Gets the bitmask of allowed thread priorities.
-    u64 GetAllowedThreadPriorityMask() const {
+    u64 GetPriorityMask() const {
         return capabilities.GetPriorityMask();
     }
 
