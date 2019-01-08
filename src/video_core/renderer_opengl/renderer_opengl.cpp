@@ -331,6 +331,17 @@ void RendererOpenGL::ConfigureFramebufferTexture(TextureInfo& texture,
 
 void RendererOpenGL::DrawScreenTriangles(const ScreenInfo& screen_info, float x, float y, float w,
                                          float h) {
+
+    bool hack = (framebuffer_crop_rect.top == 360.0f);
+
+    if(hack)
+    {
+        x -= framebuffer_crop_rect.left;
+        y -= framebuffer_crop_rect.top;
+        w += framebuffer_crop_rect.left;
+        h += framebuffer_crop_rect.top;
+    }
+
     const auto& texcoords = screen_info.display_texcoords;
     auto left = texcoords.left;
     auto right = texcoords.right;
@@ -347,17 +358,33 @@ void RendererOpenGL::DrawScreenTriangles(const ScreenInfo& screen_info, float x,
         }
     }
 
-    ASSERT_MSG(framebuffer_crop_rect.top == 0, "Unimplemented");
-    ASSERT_MSG(framebuffer_crop_rect.left == 0, "Unimplemented");
+    //ASSERT_MSG(framebuffer_crop_rect.top == 0, "Unimplemented");
+    //ASSERT_MSG(framebuffer_crop_rect.left == 0, "Unimplemented");
 
     // Scale the output by the crop width/height. This is commonly used with 1280x720 rendering
     // (e.g. handheld mode) on a 1920x1080 framebuffer.
     f32 scale_u = 1.f, scale_v = 1.f;
-    if (framebuffer_crop_rect.GetWidth() > 0) {
-        scale_u = static_cast<f32>(framebuffer_crop_rect.GetWidth()) / screen_info.texture.width;
+    if(hack)
+    {
+        if(framebuffer_crop_rect.GetWidth() > 0)
+        {
+            scale_u = w / screen_info.texture.width;
+        }
+        if(framebuffer_crop_rect.GetHeight() > 0)
+        {
+            scale_v = h / screen_info.texture.height;
+        }
     }
-    if (framebuffer_crop_rect.GetHeight() > 0) {
-        scale_v = static_cast<f32>(framebuffer_crop_rect.GetHeight()) / screen_info.texture.height;
+    else
+    {
+        if(framebuffer_crop_rect.GetWidth() > 0)
+        {
+            scale_u = static_cast<f32>(framebuffer_crop_rect.GetWidth()) / screen_info.texture.width;
+        }
+        if(framebuffer_crop_rect.GetHeight() > 0)
+        {
+            scale_v = static_cast<f32>(framebuffer_crop_rect.GetHeight()) / screen_info.texture.height;
+        }
     }
 
     std::array<ScreenRectVertex, 4> vertices = {{

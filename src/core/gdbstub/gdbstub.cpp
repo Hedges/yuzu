@@ -970,6 +970,13 @@ static void ReadMemory() {
         SendReply("E01");
     }
 
+    const auto& vm_manager = Core::CurrentProcess()->VMManager();
+    if(addr < vm_manager.GetAddressSpaceBaseAddress() ||
+       addr >= vm_manager.GetAddressSpaceEndAddress())
+    {
+        return SendReply("E00");
+    }
+
     if (!Memory::IsValidVirtualAddress(addr)) {
         return SendReply("E00");
     }
