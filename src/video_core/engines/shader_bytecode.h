@@ -217,9 +217,9 @@ enum class StoreType : u64 {
     Signed8 = 1,
     Unsigned16 = 2,
     Signed16 = 3,
-    Bytes32 = 4,
-    Bytes64 = 5,
-    Bytes128 = 6,
+    Bits32 = 4,
+    Bits64 = 5,
+    Bits128 = 6,
 };
 
 enum class IMinMaxExchange : u64 {
@@ -980,6 +980,10 @@ union Instruction {
                 break;
             }
             return false;
+        }
+
+        bool IsComponentEnabled(std::size_t component) const {
+            return ((1ULL << component) & component_mask) != 0;
         }
     } txq;
 
