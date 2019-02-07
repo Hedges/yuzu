@@ -887,6 +887,9 @@ void GMainWindow::BootGame(const QString& filename) {
     connect(emu_thread.get(), &EmuThread::DebugModeLeft, waitTreeWidget,
             &WaitTreeWidget::OnDebugModeLeft, Qt::BlockingQueuedConnection);
 
+    connect(emu_thread.get(), &EmuThread::LoadProgress, loading_screen,
+            &LoadingScreen::OnLoadProgress, Qt::QueuedConnection);
+
     // Update the GUI
     if (ui.action_Single_Window_Mode->isChecked()) {
         game_list->hide();
@@ -1682,12 +1685,16 @@ void GMainWindow::OnToggleFilterBar() {
 
 void GMainWindow::OnCaptureScreenshot() {
     OnPauseGame();
-    const QString path =
-        QFileDialog::getSaveFileName(this, tr("Capture Screenshot"),
-                                     UISettings::values.screenshot_path, tr("PNG Image (*.png)"));
-    if (!path.isEmpty()) {
-        UISettings::values.screenshot_path = QFileInfo(path).path();
-        render_window->CaptureScreenshot(UISettings::values.screenshot_resolution_factor, path);
+    QFileDialog png_dialog(this, tr("Capture Screenshot"), UISettings::values.screenshot_path,
+                           tr("PNG Image (*.png)"));
+    png_dialog.setAcceptMode(QFileDialog::AcceptSave);
+    png_dialog.setDefaultSuffix("png");
+    if (png_dialog.exec()) {
+        const QString path = png_dialog.selectedFiles().first();
+        if (!path.isEmpty()) {
+            UISettings::values.screenshot_path = QFileInfo(path).path();
+            render_window->CaptureScreenshot(UISettings::values.screenshot_resolution_factor, path);
+        }
     }
     OnStartGame();
 }

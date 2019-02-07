@@ -171,7 +171,7 @@ public:
             code.AddLine(fmt::format("case 0x{:x}u: {{", address));
             ++code.scope;
 
-            VisitBasicBlock(bb);
+            VisitBlock(bb);
 
             --code.scope;
             code.AddLine('}');
@@ -193,15 +193,14 @@ public:
     ShaderEntries GetShaderEntries() const {
         ShaderEntries entries;
         for (const auto& cbuf : ir.GetConstantBuffers()) {
-            entries.const_buffers.emplace_back(cbuf.second, stage, GetConstBufferBlock(cbuf.first),
+            entries.const_buffers.emplace_back(cbuf.second.GetMaxOffset(), cbuf.second.IsIndirect(),
                                                cbuf.first);
         }
         for (const auto& sampler : ir.GetSamplers()) {
-            entries.samplers.emplace_back(sampler, stage, GetSampler(sampler));
+            entries.samplers.emplace_back(sampler);
         }
         for (const auto& gmem : ir.GetGlobalMemoryBases()) {
-            entries.global_memory_entries.emplace_back(gmem.cbuf_index, gmem.cbuf_offset, stage,
-                                                       GetGlobalMemoryBlock(gmem));
+            entries.global_memory_entries.emplace_back(gmem.cbuf_index, gmem.cbuf_offset);
         }
         entries.clip_distances = ir.GetClipDistances();
         entries.shader_length = ir.GetLength();
@@ -424,7 +423,7 @@ private:
             code.AddNewLine();
     }
 
-    void VisitBasicBlock(const BasicBlock& bb) {
+    void VisitBlock(const NodeBlock& bb) {
         for (const Node node : bb) {
             if (const std::string expr = Visit(node); !expr.empty()) {
                 code.AddLine(expr);
@@ -576,7 +575,7 @@ private:
             code.AddLine("if (" + Visit(conditional->GetCondition()) + ") {");
             ++code.scope;
 
-            VisitBasicBlock(conditional->GetCode());
+            VisitBlock(conditional->GetCode());
 
             --code.scope;
             code.AddLine('}');
