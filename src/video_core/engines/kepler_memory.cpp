@@ -52,7 +52,7 @@ void KeplerMemory::ProcessData(u32 data) {
     Memory::Write32(*dest_address, data);
     Core::System::GetInstance().GPU().Maxwell3D().dirty_flags.OnMemoryWrite();
 
-    rasterizer.InvalidateRegion(dest_address, sizeof(u32));
+    rasterizer.InvalidateRegion(*dest_address, sizeof(u32));
 
     state.write_offset++;
 }

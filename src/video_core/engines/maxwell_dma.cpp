@@ -125,7 +125,7 @@ void MaxwellDMA::HandleCopy() {
     }
 
     // We have to invalidate the destination region to evict any outdated surfaces from the cache.
-    rasterizer.InvalidateRegion(dest_cpu, copy_size);
+    rasterizer.InvalidateRegion(*dest_cpu, copy_size);
 }
 
 } // namespace Tegra::Engines
