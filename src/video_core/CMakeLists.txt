@@ -80,6 +80,7 @@ add_library(video_core STATIC
     shader/decode/hfma2.cpp
     shader/decode/conversion.cpp
     shader/decode/memory.cpp
+    shader/decode/texture.cpp
     shader/decode/float_set_predicate.cpp
     shader/decode/integer_set_predicate.cpp
     shader/decode/half_set_predicate.cpp
@@ -112,6 +113,8 @@ add_library(video_core STATIC
 if (ENABLE_VULKAN)
     target_sources(video_core PRIVATE
         renderer_vulkan/declarations.h
+        renderer_vulkan/maxwell_to_vk.cpp
+        renderer_vulkan/maxwell_to_vk.h
         renderer_vulkan/vk_buffer_cache.cpp
         renderer_vulkan/vk_buffer_cache.h
         renderer_vulkan/vk_device.cpp
