@@ -44,8 +44,12 @@ void MaxwellDMA::HandleCopy() {
 
     const auto source_cpu = memory_manager.GpuToCpuAddress(source);
     const auto dest_cpu = memory_manager.GpuToCpuAddress(dest);
-    ASSERT_MSG(source_cpu, "Invalid source GPU address");
-    ASSERT_MSG(dest_cpu, "Invalid destination GPU address");
+    //ASSERT_MSG(source_cpu, "Invalid source GPU address");
+    //ASSERT_MSG(dest_cpu, "Invalid destination GPU address");
+    if(!source_cpu || !dest_cpu)
+    {
+        return;
+    }
 
     // TODO(Subv): Perform more research and implement all features of this engine.
     // ASSERT(regs.exec.enable_swizzle == 0);
