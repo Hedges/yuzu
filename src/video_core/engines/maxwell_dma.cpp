@@ -44,12 +44,12 @@ void MaxwellDMA::HandleCopy() {
     const GPUVAddr dest = regs.dst_address.Address();
 
     // TODO(Subv): Perform more research and implement all features of this engine.
-    // ASSERT(regs.exec.enable_swizzle == 0);
-    // ASSERT(regs.exec.query_mode == Regs::QueryMode::None);
-    // ASSERT(regs.exec.query_intr == Regs::QueryIntr::None);
-    // ASSERT(regs.exec.copy_mode == Regs::CopyMode::Unk2);
-    // ASSERT(regs.dst_params.pos_x == 0);
-    // ASSERT(regs.dst_params.pos_y == 0);
+    //ASSERT(regs.exec.enable_swizzle == 0);
+    //ASSERT(regs.exec.query_mode == Regs::QueryMode::None);
+    //ASSERT(regs.exec.query_intr == Regs::QueryIntr::None);
+    //ASSERT(regs.exec.copy_mode == Regs::CopyMode::Unk2);
+    //ASSERT(regs.dst_params.pos_x == 0);
+    //ASSERT(regs.dst_params.pos_y == 0);
 
     if (!regs.exec.is_dst_linear && !regs.exec.is_src_linear) {
         // If both the source and the destination are in block layout, assert.
@@ -88,7 +88,13 @@ void MaxwellDMA::HandleCopy() {
     auto source_ptr{memory_manager.GetPointer(source)};
     auto dst_ptr{memory_manager.GetPointer(dest)};
 
-    if (!source_ptr || !dst_ptr) {
+    if (!source_ptr) {
+        LOG_ERROR(HW_GPU, "source_ptr is invalid");
+        return;
+    }
+
+    if (!dst_ptr) {
+        LOG_ERROR(HW_GPU, "dst_ptr is invalid");
         return;
     }
 
@@ -104,7 +110,7 @@ void MaxwellDMA::HandleCopy() {
     };
 
     if (regs.exec.is_dst_linear && !regs.exec.is_src_linear) {
-        ASSERT(regs.src_params.size_z == 1);
+        //ASSERT(regs.src_params.size_z == 1);
         // If the input is tiled and the output is linear, deswizzle the input and copy it over.
 
         const u32 src_bytes_per_pixel = regs.src_pitch / regs.src_params.size_x;
@@ -117,8 +123,8 @@ void MaxwellDMA::HandleCopy() {
                                   regs.src_params.BlockHeight(), regs.src_params.pos_x,
                                   regs.src_params.pos_y);
     } else {
-        // ASSERT(regs.dst_params.size_z == 1);
-        // ASSERT(regs.src_pitch == regs.x_count);
+        //ASSERT(regs.dst_params.size_z == 1);
+        //ASSERT(regs.src_pitch == regs.x_count);
 
         const u32 src_bpp = regs.src_pitch / regs.x_count;
 

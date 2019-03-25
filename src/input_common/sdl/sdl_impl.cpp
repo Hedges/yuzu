@@ -475,12 +475,11 @@ SDLState::SDLState() {
 
     initialized = true;
     if (start_thread) {
-        poll_thread = std::thread([&] {
+        poll_thread = std::thread([this] {
             using namespace std::chrono_literals;
-            SDL_Event event;
             while (initialized) {
                 SDL_PumpEvents();
-                std::this_thread::sleep_for(std::chrono::duration(10ms));
+                std::this_thread::sleep_for(10ms);
             }
         });
     }
@@ -651,9 +650,9 @@ private:
 };
 } // namespace Polling
 
-std::vector<std::unique_ptr<InputCommon::Polling::DevicePoller>> SDLState::GetPollers(
-    InputCommon::Polling::DeviceType type) {
-    std::vector<std::unique_ptr<InputCommon::Polling::DevicePoller>> pollers;
+SDLState::Pollers SDLState::GetPollers(InputCommon::Polling::DeviceType type) {
+    Pollers pollers;
+
     switch (type) {
     case InputCommon::Polling::DeviceType::Analog:
         pollers.emplace_back(std::make_unique<Polling::SDLAnalogPoller>(*this));
@@ -661,8 +660,9 @@ std::vector<std::unique_ptr<InputCommon::Polling::DevicePoller>> SDLState::GetPo
     case InputCommon::Polling::DeviceType::Button:
         pollers.emplace_back(std::make_unique<Polling::SDLButtonPoller>(*this));
         break;
-        return pollers;
     }
+
+    return pollers;
 }
 
 } // namespace SDL
