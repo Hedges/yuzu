@@ -36,6 +36,7 @@
 #include "core/hle/kernel/svc.h"
 #include "core/hle/kernel/svc_wrap.h"
 #include "core/hle/kernel/thread.h"
+#include "core/hle/kernel/transfer_memory.h"
 #include "core/hle/kernel/writable_event.h"
 #include "core/hle/lock.h"
 #include "core/hle/result.h"
@@ -555,9 +556,9 @@ static ResultCode ArbitrateLock(Handle holding_thread_handle, VAddr mutex_addr,
         return ERR_INVALID_ADDRESS;
     }
 
-    auto& handle_table = Core::CurrentProcess()->GetHandleTable();
-    return Mutex::TryAcquire(handle_table, mutex_addr, holding_thread_handle,
-                             requesting_thread_handle);
+    auto* const current_process = Core::System::GetInstance().Kernel().CurrentProcess();
+    return current_process->GetMutex().TryAcquire(mutex_addr, holding_thread_handle,
+                                                  requesting_thread_handle);
 }
 
 /// Unlock a mutex
@@ -575,7 +576,8 @@ static ResultCode ArbitrateUnlock(VAddr mutex_addr) {
         return ERR_INVALID_ADDRESS;
     }
 
-    return Mutex::Release(mutex_addr);
+    auto* const current_process = Core::System::GetInstance().Kernel().CurrentProcess();
+    return current_process->GetMutex().Release(mutex_addr);
 }
 
 enum class BreakType : u32 {
@@ -1347,11 +1349,15 @@ static ResultCode WaitProcessWideKeyAtomic(VAddr mutex_addr, VAddr condition_var
         "called mutex_addr={:X}, condition_variable_addr={:X}, thread_handle=0x{:08X}, timeout={}",
         mutex_addr, condition_variable_addr, thread_handle, nano_seconds);
 
-    const auto& handle_table = Core::CurrentProcess()->GetHandleTable();
+    auto* const current_process = Core::System::GetInstance().Kernel().CurrentProcess();
+    const auto& handle_table = current_process->GetHandleTable();
     SharedPtr<Thread> thread = handle_table.Get<Thread>(thread_handle);
     ASSERT(thread);
 
-    CASCADE_CODE(Mutex::Release(mutex_addr));
+    const auto release_result = current_process->GetMutex().Release(mutex_addr);
+    if (release_result.IsError()) {
+        return release_result;
+    }
 
     SharedPtr<Thread> current_thread = GetCurrentThread();
     current_thread->SetCondVarWaitAddress(condition_variable_addr);
@@ -1591,12 +1597,119 @@ static ResultCode CreateTransferMemory(Handle* handle, VAddr addr, u64 size, u32
     }
 
     auto& kernel = Core::System::GetInstance().Kernel();
-    auto process = kernel.CurrentProcess();
-    auto& handle_table = process->GetHandleTable();
-    const auto shared_mem_handle = SharedMemory::Create(kernel, process, size, perms, perms, addr);
+    auto transfer_mem_handle = TransferMemory::Create(kernel, addr, size, perms);
 
-    CASCADE_RESULT(*handle, handle_table.Create(shared_mem_handle));
+    auto& handle_table = kernel.CurrentProcess()->GetHandleTable();
+    const auto result = handle_table.Create(std::move(transfer_mem_handle));
+    if (result.Failed()) {
+        return result.Code();
+    }
+
+    *handle = *result;
     return RESULT_SUCCESS;
+}
+
+static ResultCode MapTransferMemory(Handle handle, VAddr address, u64 size, u32 permission_raw) {
+    LOG_DEBUG(Kernel_SVC,
+              "called. handle=0x{:08X}, address=0x{:016X}, size=0x{:016X}, permissions=0x{:08X}",
+              handle, address, size, permission_raw);
+
+    if (!Common::Is4KBAligned(address)) {
+        LOG_ERROR(Kernel_SVC, "Transfer memory addresses must be 4KB aligned (size=0x{:016X}).",
+                  address);
+        return ERR_INVALID_ADDRESS;
+    }
+
+    if (size == 0 || !Common::Is4KBAligned(size)) {
+        LOG_ERROR(Kernel_SVC,
+                  "Transfer memory sizes must be 4KB aligned and not be zero (size=0x{:016X}).",
+                  size);
+        return ERR_INVALID_SIZE;
+    }
+
+    if (!IsValidAddressRange(address, size)) {
+        LOG_ERROR(Kernel_SVC,
+                  "Given address and size overflows the 64-bit range (address=0x{:016X}, "
+                  "size=0x{:016X}).",
+                  address, size);
+        return ERR_INVALID_ADDRESS_STATE;
+    }
+
+    const auto permissions = static_cast<MemoryPermission>(permission_raw);
+    if (permissions != MemoryPermission::None && permissions != MemoryPermission::Read &&
+        permissions != MemoryPermission::ReadWrite) {
+        LOG_ERROR(Kernel_SVC, "Invalid transfer memory permissions given (permissions=0x{:08X}).",
+                  permission_raw);
+        return ERR_INVALID_STATE;
+    }
+
+    const auto& kernel = Core::System::GetInstance().Kernel();
+    const auto* const current_process = kernel.CurrentProcess();
+    const auto& handle_table = current_process->GetHandleTable();
+
+    auto transfer_memory = handle_table.Get<TransferMemory>(handle);
+    if (!transfer_memory) {
+        LOG_ERROR(Kernel_SVC, "Nonexistent transfer memory handle given (handle=0x{:08X}).",
+                  handle);
+        return ERR_INVALID_HANDLE;
+    }
+
+    if (!current_process->VMManager().IsWithinASLRRegion(address, size)) {
+        LOG_ERROR(Kernel_SVC,
+                  "Given address and size don't fully fit within the ASLR region "
+                  "(address=0x{:016X}, size=0x{:016X}).",
+                  address, size);
+        return ERR_INVALID_MEMORY_RANGE;
+    }
+
+    return transfer_memory->MapMemory(address, size, permissions);
+}
+
+static ResultCode UnmapTransferMemory(Handle handle, VAddr address, u64 size) {
+    LOG_DEBUG(Kernel_SVC, "called. handle=0x{:08X}, address=0x{:016X}, size=0x{:016X}", handle,
+              address, size);
+
+    if (!Common::Is4KBAligned(address)) {
+        LOG_ERROR(Kernel_SVC, "Transfer memory addresses must be 4KB aligned (size=0x{:016X}).",
+                  address);
+        return ERR_INVALID_ADDRESS;
+    }
+
+    if (size == 0 || !Common::Is4KBAligned(size)) {
+        LOG_ERROR(Kernel_SVC,
+                  "Transfer memory sizes must be 4KB aligned and not be zero (size=0x{:016X}).",
+                  size);
+        return ERR_INVALID_SIZE;
+    }
+
+    if (!IsValidAddressRange(address, size)) {
+        LOG_ERROR(Kernel_SVC,
+                  "Given address and size overflows the 64-bit range (address=0x{:016X}, "
+                  "size=0x{:016X}).",
+                  address, size);
+        return ERR_INVALID_ADDRESS_STATE;
+    }
+
+    const auto& kernel = Core::System::GetInstance().Kernel();
+    const auto* const current_process = kernel.CurrentProcess();
+    const auto& handle_table = current_process->GetHandleTable();
+
+    auto transfer_memory = handle_table.Get<TransferMemory>(handle);
+    if (!transfer_memory) {
+        LOG_ERROR(Kernel_SVC, "Nonexistent transfer memory handle given (handle=0x{:08X}).",
+                  handle);
+        return ERR_INVALID_HANDLE;
+    }
+
+    if (!current_process->VMManager().IsWithinASLRRegion(address, size)) {
+        LOG_ERROR(Kernel_SVC,
+                  "Given address and size don't fully fit within the ASLR region "
+                  "(address=0x{:016X}, size=0x{:016X}).",
+                  address, size);
+        return ERR_INVALID_MEMORY_RANGE;
+    }
+
+    return transfer_memory->UnmapMemory(address, size);
 }
 
 static ResultCode GetThreadCoreMask(Handle thread_handle, u32* core, u64* mask) {
@@ -1974,8 +2087,8 @@ static const FunctionDef SVC_Table[] = {
     {0x4E, nullptr, "ReadWriteRegister"},
     {0x4F, nullptr, "SetProcessActivity"},
     {0x50, SvcWrap<CreateSharedMemory>, "CreateSharedMemory"},
-    {0x51, nullptr, "MapTransferMemory"},
-    {0x52, nullptr, "UnmapTransferMemory"},
+    {0x51, SvcWrap<MapTransferMemory>, "MapTransferMemory"},
+    {0x52, SvcWrap<UnmapTransferMemory>, "UnmapTransferMemory"},
     {0x53, nullptr, "CreateInterruptEvent"},
     {0x54, nullptr, "QueryPhysicalAddress"},
     {0x55, nullptr, "QueryIoMapping"},
