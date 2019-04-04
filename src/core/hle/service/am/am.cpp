@@ -13,7 +13,7 @@
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/shared_memory.h"
+#include "core/hle/kernel/transfer_memory.h"
 #include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/am.h"
@@ -239,8 +239,8 @@ ISelfController::ISelfController(std::shared_ptr<NVFlinger::NVFlinger> nvflinger
         {0, nullptr, "Exit"},
         {1, &ISelfController::LockExit, "LockExit"},
         {2, &ISelfController::UnlockExit, "UnlockExit"},
-        {3, nullptr, "EnterFatalSection"},
-        {4, nullptr, "LeaveFatalSection"},
+        {3, &ISelfController::EnterFatalSection, "EnterFatalSection"},
+        {4, &ISelfController::LeaveFatalSection, "LeaveFatalSection"},
         {9, &ISelfController::GetLibraryAppletLaunchableEvent, "GetLibraryAppletLaunchableEvent"},
         {10, &ISelfController::SetScreenShotPermission, "SetScreenShotPermission"},
         {11, &ISelfController::SetOperationModeChangedNotification, "SetOperationModeChangedNotification"},
@@ -285,6 +285,81 @@ ISelfController::ISelfController(std::shared_ptr<NVFlinger::NVFlinger> nvflinger
 
 ISelfController::~ISelfController() = default;
 
+void ISelfController::LockExit(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+void ISelfController::UnlockExit(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+void ISelfController::EnterFatalSection(Kernel::HLERequestContext& ctx) {
+    ++num_fatal_sections_entered;
+    LOG_DEBUG(Service_AM, "called. Num fatal sections entered: {}", num_fatal_sections_entered);
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+void ISelfController::LeaveFatalSection(Kernel::HLERequestContext& ctx) {
+    LOG_DEBUG(Service_AM, "called.");
+
+    // Entry and exit of fatal sections must be balanced.
+    if (num_fatal_sections_entered == 0) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultCode{ErrorModule::AM, 512});
+        return;
+    }
+
+    --num_fatal_sections_entered;
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+void ISelfController::GetLibraryAppletLaunchableEvent(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    launchable_event.writable->Signal();
+
+    IPC::ResponseBuilder rb{ctx, 2, 1};
+    rb.Push(RESULT_SUCCESS);
+    rb.PushCopyObjects(launchable_event.readable);
+}
+
+void ISelfController::SetScreenShotPermission(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+void ISelfController::SetOperationModeChangedNotification(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+
+    bool flag = rp.Pop<bool>();
+    LOG_WARNING(Service_AM, "(STUBBED) called flag={}", flag);
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+void ISelfController::SetPerformanceModeChangedNotification(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+
+    bool flag = rp.Pop<bool>();
+    LOG_WARNING(Service_AM, "(STUBBED) called flag={}", flag);
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
 void ISelfController::SetFocusHandlingMode(Kernel::HLERequestContext& ctx) {
     // Takes 3 input u8s with each field located immediately after the previous
     // u8, these are bool flags. No output.
@@ -310,33 +385,6 @@ void ISelfController::SetRestartMessageEnabled(Kernel::HLERequestContext& ctx) {
     rb.Push(RESULT_SUCCESS);
 }
 
-void ISelfController::SetPerformanceModeChangedNotification(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp{ctx};
-
-    bool flag = rp.Pop<bool>();
-    LOG_WARNING(Service_AM, "(STUBBED) called flag={}", flag);
-
-    IPC::ResponseBuilder rb{ctx, 2};
-    rb.Push(RESULT_SUCCESS);
-}
-
-void ISelfController::SetScreenShotPermission(Kernel::HLERequestContext& ctx) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-
-    IPC::ResponseBuilder rb{ctx, 2};
-    rb.Push(RESULT_SUCCESS);
-}
-
-void ISelfController::SetOperationModeChangedNotification(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp{ctx};
-
-    bool flag = rp.Pop<bool>();
-    LOG_WARNING(Service_AM, "(STUBBED) called flag={}", flag);
-
-    IPC::ResponseBuilder rb{ctx, 2};
-    rb.Push(RESULT_SUCCESS);
-}
-
 void ISelfController::SetOutOfFocusSuspendingEnabled(Kernel::HLERequestContext& ctx) {
     // Takes 3 input u8s with each field located immediately after the previous
     // u8, these are bool flags. No output.
@@ -347,30 +395,6 @@ void ISelfController::SetOutOfFocusSuspendingEnabled(Kernel::HLERequestContext& 
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(RESULT_SUCCESS);
-}
-
-void ISelfController::LockExit(Kernel::HLERequestContext& ctx) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-
-    IPC::ResponseBuilder rb{ctx, 2};
-    rb.Push(RESULT_SUCCESS);
-}
-
-void ISelfController::UnlockExit(Kernel::HLERequestContext& ctx) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-
-    IPC::ResponseBuilder rb{ctx, 2};
-    rb.Push(RESULT_SUCCESS);
-}
-
-void ISelfController::GetLibraryAppletLaunchableEvent(Kernel::HLERequestContext& ctx) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-
-    launchable_event.writable->Signal();
-
-    IPC::ResponseBuilder rb{ctx, 2, 1};
-    rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(launchable_event.readable);
 }
 
 void ISelfController::SetScreenShotImageOrientation(Kernel::HLERequestContext& ctx) {
@@ -907,19 +931,19 @@ void ILibraryAppletCreator::CreateTransferMemoryStorage(Kernel::HLERequestContex
     rp.SetCurrentOffset(3);
     const auto handle{rp.Pop<Kernel::Handle>()};
 
-    const auto shared_mem =
-        Core::System::GetInstance().CurrentProcess()->GetHandleTable().Get<Kernel::SharedMemory>(
+    const auto transfer_mem =
+        Core::System::GetInstance().CurrentProcess()->GetHandleTable().Get<Kernel::TransferMemory>(
             handle);
 
-    if (shared_mem == nullptr) {
+    if (transfer_mem == nullptr) {
         LOG_ERROR(Service_AM, "shared_mem is a nullpr for handle={:08X}", handle);
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultCode(-1));
         return;
     }
 
-    const u8* mem_begin = shared_mem->GetPointer();
-    const u8* mem_end = mem_begin + shared_mem->GetSize();
+    const u8* const mem_begin = transfer_mem->GetPointer();
+    const u8* const mem_end = mem_begin + transfer_mem->GetSize();
     std::vector<u8> memory{mem_begin, mem_end};
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
