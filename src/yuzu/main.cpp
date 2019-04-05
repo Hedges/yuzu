@@ -37,14 +37,20 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include <glad/glad.h>
 
 #define QT_NO_OPENGL
+#include <QClipboard>
+#include <QDesktopServices>
 #include <QDesktopWidget>
 #include <QDialogButtonBox>
 #include <QFile>
 #include <QFileDialog>
+#include <QInputDialog>
 #include <QMessageBox>
+#include <QProgressBar>
+#include <QProgressDialog>
+#include <QShortcut>
+#include <QStatusBar>
 #include <QtConcurrent/QtConcurrent>
-#include <QtGui>
-#include <QtWidgets>
+
 #include <fmt/format.h>
 #include "common/common_paths.h"
 #include "common/detached_tasks.h"
@@ -55,11 +61,9 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "common/microprofile.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
-#include "common/string_util.h"
 #include "common/telemetry.h"
 #include "core/core.h"
 #include "core/crypto/key_manager.h"
-#include "core/file_sys/bis_factory.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
@@ -71,7 +75,6 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "core/frontend/applets/software_keyboard.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/service/filesystem/filesystem.h"
-#include "core/hle/service/filesystem/fsp_ldr.h"
 #include "core/hle/service/nfp/nfp.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/loader/loader.h"
@@ -1087,31 +1090,28 @@ void GMainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target
 void GMainWindow::OnTransferableShaderCacheOpenFile(u64 program_id) {
     ASSERT(program_id != 0);
 
-    constexpr char open_target[] = "Transferable Shader Cache";
     const QString tranferable_shader_cache_folder_path =
         QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::ShaderDir)) + "opengl" +
         DIR_SEP + "transferable";
 
     const QString transferable_shader_cache_file_path =
         tranferable_shader_cache_folder_path + DIR_SEP +
-        QString::fromStdString(fmt::format("{:016X}", program_id)) + ".bin";
+        QString::fromStdString(fmt::format("{:016X}.bin", program_id));
 
-    if (!QFile(transferable_shader_cache_file_path).exists()) {
-        QMessageBox::warning(this,
-                             tr("Error Opening %1 File").arg(QString::fromStdString(open_target)),
-                             tr("File does not exist!"));
+    if (!QFile::exists(transferable_shader_cache_file_path)) {
+        QMessageBox::warning(this, tr("Error Opening Transferable Shader Cache"),
+                             tr("A shader cache for this title does not exist."));
         return;
     }
-    LOG_INFO(Frontend, "Opening {} path for program_id={:016x}", open_target, program_id);
 
     // Windows supports opening a folder with selecting a specified file in explorer. On every other
     // OS we just open the transferable shader cache folder without preselecting the transferable
     // shader cache file for the selected game.
 #if defined(Q_OS_WIN)
-    const QString explorer = "explorer";
+    const QString explorer = QStringLiteral("explorer");
     QStringList param;
     if (!QFileInfo(transferable_shader_cache_file_path).isDir()) {
-        param << QLatin1String("/select,");
+        param << QStringLiteral("/select,");
     }
     param << QDir::toNativeSeparators(transferable_shader_cache_file_path);
     QProcess::startDetached(explorer, param);
