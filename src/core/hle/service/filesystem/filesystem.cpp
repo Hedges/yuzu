@@ -197,13 +197,16 @@ ResultCode VfsDirectoryServiceWrapper::RenameDirectory(const std::string& src_pa
 
 ResultVal<FileSys::VirtualFile> VfsDirectoryServiceWrapper::OpenFile(const std::string& path_,
                                                                      FileSys::Mode mode) const {
-    std::string path(FileUtil::SanitizePath(path_));
-    auto npath = path;
-    while (npath.size() > 0 && (npath[0] == '/' || npath[0] == '\\'))
-        npath = npath.substr(1);
+    const std::string path(FileUtil::SanitizePath(path_));
+    std::string_view npath = path;
+    while (!npath.empty() && (npath[0] == '/' || npath[0] == '\\')) {
+        npath.remove_prefix(1);
+    }
+
     auto file = backing->GetFileRelative(npath);
-    if (file == nullptr)
+    if (file == nullptr) {
         return FileSys::ERROR_PATH_NOT_FOUND;
+    }
 
     if (mode == FileSys::Mode::Append) {
         return MakeResult<FileSys::VirtualFile>(
@@ -319,15 +322,15 @@ ResultVal<FileSys::VirtualFile> OpenRomFS(u64 title_id, FileSys::StorageId stora
 }
 
 ResultVal<FileSys::VirtualDir> OpenSaveData(FileSys::SaveDataSpaceId space,
-                                            FileSys::SaveDataDescriptor save_struct) {
+                                            const FileSys::SaveDataDescriptor& descriptor) {
     LOG_TRACE(Service_FS, "Opening Save Data for space_id={:01X}, save_struct={}",
-              static_cast<u8>(space), save_struct.DebugInfo());
+              static_cast<u8>(space), descriptor.DebugInfo());
 
     if (save_data_factory == nullptr) {
         return FileSys::ERROR_ENTITY_NOT_FOUND;
     }
 
-    return save_data_factory->Open(space, save_struct);
+    return save_data_factory->Open(space, descriptor);
 }
 
 ResultVal<FileSys::VirtualDir> OpenSaveDataSpace(FileSys::SaveDataSpaceId space) {
