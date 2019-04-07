@@ -28,16 +28,6 @@ constexpr u64 PAGE_MASK = PAGE_SIZE - 1;
 
 /// Virtual user-space memory regions
 enum : VAddr {
-    /// Read-only page containing kernel and system configuration values.
-    CONFIG_MEMORY_VADDR = 0x1FF80000,
-    CONFIG_MEMORY_SIZE = 0x00001000,
-    CONFIG_MEMORY_VADDR_END = CONFIG_MEMORY_VADDR + CONFIG_MEMORY_SIZE,
-
-    /// Usually read-only page containing mostly values read from hardware.
-    SHARED_PAGE_VADDR = 0x1FF81000,
-    SHARED_PAGE_SIZE = 0x00001000,
-    SHARED_PAGE_VADDR_END = SHARED_PAGE_VADDR + SHARED_PAGE_SIZE,
-
     /// TLS (Thread-Local Storage) related.
     TLS_ENTRY_SIZE = 0x200,
 
@@ -50,9 +40,8 @@ enum : VAddr {
     KERNEL_REGION_END = KERNEL_REGION_VADDR + KERNEL_REGION_SIZE,
 };
 
-/// Currently active page table
+/// Changes the currently active page table.
 void SetCurrentPageTable(Common::PageTable* page_table);
-Common::PageTable* GetCurrentPageTable();
 
 /// Determines if the given VAddr is valid for the specified process.
 bool IsValidVirtualAddress(const Kernel::Process& process, VAddr vaddr);
