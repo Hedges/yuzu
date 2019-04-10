@@ -23,7 +23,6 @@ class EmuThread;
 class GameList;
 class GImageInfo;
 class GraphicsBreakPointsWidget;
-class GraphicsSurfaceWidget;
 class GRenderWindow;
 class LoadingScreen;
 class MicroProfileDialog;
@@ -37,7 +36,8 @@ struct SoftwareKeyboardParameters;
 } // namespace Core::Frontend
 
 namespace FileSys {
-class RegisteredCacheUnion;
+class ContentProvider;
+class ManualContentProvider;
 class VfsFilesystem;
 } // namespace FileSys
 
@@ -120,7 +120,6 @@ private:
     void InitializeWidgets();
     void InitializeDebugWidgets();
     void InitializeRecentFileMenuActions();
-    void InitializeHotkeys();
 
     void SetDefaultUIGeometry();
     void RestoreUIState();
@@ -196,6 +195,7 @@ private slots:
     void OnAbout();
     void OnToggleFilterBar();
     void OnDisplayTitleBars(bool);
+    void InitializeHotkeys();
     void ToggleFullscreen();
     void ShowFullscreen();
     void HideFullscreen();
@@ -205,7 +205,7 @@ private slots:
     void OnReinitializeKeys(ReinitializeKeyBehavior behavior);
 
 private:
-    std::optional<u64> SelectRomFSDumpTarget(const FileSys::RegisteredCacheUnion&, u64 program_id);
+    std::optional<u64> SelectRomFSDumpTarget(const FileSys::ContentProvider&, u64 program_id);
     void UpdateStatusBar();
 
     Ui::MainWindow ui;
@@ -233,12 +233,12 @@ private:
 
     // FS
     std::shared_ptr<FileSys::VfsFilesystem> vfs;
+    std::unique_ptr<FileSys::ManualContentProvider> provider;
 
     // Debugger panes
     ProfilerWidget* profilerWidget;
     MicroProfileDialog* microProfileDialog;
     GraphicsBreakPointsWidget* graphicsBreakpointsWidget;
-    GraphicsSurfaceWidget* graphicsSurfaceWidget;
     WaitTreeWidget* waitTreeWidget;
 
     QAction* actions_recent_files[max_recent_files_item];

@@ -1238,13 +1238,16 @@ union Instruction {
 
     union {
         BitField<20, 16, u64> imm20_16;
+        BitField<35, 1, u64> high_b_rr; // used on RR
         BitField<36, 1, u64> product_shift_left;
         BitField<37, 1, u64> merge_37;
         BitField<48, 1, u64> sign_a;
         BitField<49, 1, u64> sign_b;
+        BitField<50, 2, XmadMode> mode_cbf; // used by CR, RC
         BitField<50, 3, XmadMode> mode;
         BitField<52, 1, u64> high_b;
         BitField<53, 1, u64> high_a;
+        BitField<55, 1, u64> product_shift_left_second; // used on CR
         BitField<56, 1, u64> merge_56;
     } xmad;
 
@@ -1662,7 +1665,7 @@ private:
             INST("0011011-11110---", Id::BFI_IMM_R, Type::Bfi, "BFI_IMM_R"),
             INST("0100110001000---", Id::LOP_C, Type::ArithmeticInteger, "LOP_C"),
             INST("0101110001000---", Id::LOP_R, Type::ArithmeticInteger, "LOP_R"),
-            INST("0011100001000---", Id::LOP_IMM, Type::ArithmeticInteger, "LOP_IMM"),
+            INST("0011100-01000---", Id::LOP_IMM, Type::ArithmeticInteger, "LOP_IMM"),
             INST("000001----------", Id::LOP32I, Type::ArithmeticIntegerImmediate, "LOP32I"),
             INST("0000001---------", Id::LOP3_C, Type::ArithmeticInteger, "LOP3_C"),
             INST("0101101111100---", Id::LOP3_R, Type::ArithmeticInteger, "LOP3_R"),

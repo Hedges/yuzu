@@ -90,7 +90,6 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "yuzu/configuration/configure_dialog.h"
 #include "yuzu/debugger/console.h"
 #include "yuzu/debugger/graphics/graphics_breakpoints.h"
-#include "yuzu/debugger/graphics/graphics_surface.h"
 #include "yuzu/debugger/profiler.h"
 #include "yuzu/debugger/wait_tree.h"
 #include "yuzu/discord.h"
@@ -171,7 +170,8 @@ static void InitializeLogging() {
 
 GMainWindow::GMainWindow()
     : config(new Config()), emu_thread(nullptr),
-      vfs(std::make_shared<FileSys::RealVfsFilesystem>()) {
+      vfs(std::make_shared<FileSys::RealVfsFilesystem>()),
+      provider(std::make_unique<FileSys::ManualContentProvider>()) {
     InitializeLogging();
 
     debug_context = Tegra::DebugContext::Construct();
@@ -203,11 +203,15 @@ GMainWindow::GMainWindow()
                        .arg(Common::g_build_fullname, Common::g_scm_branch, Common::g_scm_desc));
     show();
 
+    Core::System::GetInstance().SetContentProvider(
+        std::make_unique<FileSys::ContentProviderUnion>());
+    Core::System::GetInstance().RegisterContentProvider(
+        FileSys::ContentProviderUnionSlot::FrontendManual, provider.get());
+    Service::FileSystem::CreateFactories(*vfs);
+
     // Gen keys if necessary
     OnReinitializeKeys(ReinitializeKeyBehavior::NoWarning);
 
-    // Necessary to load titles from nand in gamelist.
-    Service::FileSystem::CreateFactories(*vfs);
     game_list->LoadCompatibilityList();
     game_list->PopulateAsync(UISettings::values.gamedir, UISettings::values.gamedir_deepscan);
 
@@ -419,7 +423,7 @@ void GMainWindow::InitializeWidgets() {
     render_window = new GRenderWindow(this, emu_thread.get());
     render_window->hide();
 
-    game_list = new GameList(vfs, this);
+    game_list = new GameList(vfs, provider.get(), this);
     ui.horizontalLayout->addWidget(game_list);
 
     loading_screen = new LoadingScreen(this);
@@ -478,11 +482,6 @@ void GMainWindow::InitializeDebugWidgets() {
     graphicsBreakpointsWidget->hide();
     debug_menu->addAction(graphicsBreakpointsWidget->toggleViewAction());
 
-    graphicsSurfaceWidget = new GraphicsSurfaceWidget(debug_context, this);
-    addDockWidget(Qt::RightDockWidgetArea, graphicsSurfaceWidget);
-    graphicsSurfaceWidget->hide();
-    debug_menu->addAction(graphicsSurfaceWidget->toggleViewAction());
-
     waitTreeWidget = new WaitTreeWidget(this);
     addDockWidget(Qt::LeftDockWidgetArea, waitTreeWidget);
     waitTreeWidget->hide();
@@ -514,33 +513,34 @@ void GMainWindow::InitializeRecentFileMenuActions() {
 }
 
 void GMainWindow::InitializeHotkeys() {
-    hotkey_registry.RegisterHotkey("Main Window", "Load File", QKeySequence::Open);
-    hotkey_registry.RegisterHotkey("Main Window", "Start Emulation");
-    hotkey_registry.RegisterHotkey("Main Window", "Continue/Pause", QKeySequence(Qt::Key_F4));
-    hotkey_registry.RegisterHotkey("Main Window", "Restart", QKeySequence(Qt::Key_F5));
-    hotkey_registry.RegisterHotkey("Main Window", "Fullscreen", QKeySequence::FullScreen);
-    hotkey_registry.RegisterHotkey("Main Window", "Exit Fullscreen", QKeySequence(Qt::Key_Escape),
-                                   Qt::ApplicationShortcut);
-    hotkey_registry.RegisterHotkey("Main Window", "Toggle Speed Limit", QKeySequence("CTRL+Z"),
-                                   Qt::ApplicationShortcut);
-    hotkey_registry.RegisterHotkey("Main Window", "Increase Speed Limit", QKeySequence("+"),
-                                   Qt::ApplicationShortcut);
-    hotkey_registry.RegisterHotkey("Main Window", "Decrease Speed Limit", QKeySequence("-"),
-                                   Qt::ApplicationShortcut);
-    hotkey_registry.RegisterHotkey("Main Window", "Load Amiibo", QKeySequence(Qt::Key_F2),
-                                   Qt::ApplicationShortcut);
-    hotkey_registry.RegisterHotkey("Main Window", "Capture Screenshot",
-                                   QKeySequence(QKeySequence::Print));
-    hotkey_registry.RegisterHotkey("Main Window", "Change Docked Mode", QKeySequence(Qt::Key_F10));
-
     hotkey_registry.LoadHotkeys();
+
+    ui.action_Load_File->setShortcut(hotkey_registry.GetKeySequence("Main Window", "Load File"));
+    ui.action_Load_File->setShortcutContext(
+        hotkey_registry.GetShortcutContext("Main Window", "Load File"));
+
+    ui.action_Exit->setShortcut(hotkey_registry.GetKeySequence("Main Window", "Exit yuzu"));
+    ui.action_Exit->setShortcutContext(
+        hotkey_registry.GetShortcutContext("Main Window", "Exit yuzu"));
+
+    ui.action_Stop->setShortcut(hotkey_registry.GetKeySequence("Main Window", "Stop Emulation"));
+    ui.action_Stop->setShortcutContext(
+        hotkey_registry.GetShortcutContext("Main Window", "Stop Emulation"));
+
+    ui.action_Show_Filter_Bar->setShortcut(
+        hotkey_registry.GetKeySequence("Main Window", "Toggle Filter Bar"));
+    ui.action_Show_Filter_Bar->setShortcutContext(
+        hotkey_registry.GetShortcutContext("Main Window", "Toggle Filter Bar"));
+
+    ui.action_Show_Status_Bar->setShortcut(
+        hotkey_registry.GetKeySequence("Main Window", "Toggle Status Bar"));
+    ui.action_Show_Status_Bar->setShortcutContext(
+        hotkey_registry.GetShortcutContext("Main Window", "Toggle Status Bar"));
 
     connect(hotkey_registry.GetHotkey("Main Window", "Load File", this), &QShortcut::activated,
             this, &GMainWindow::OnMenuLoadFile);
-    connect(hotkey_registry.GetHotkey("Main Window", "Start Emulation", this),
-            &QShortcut::activated, this, &GMainWindow::OnStartGame);
-    connect(hotkey_registry.GetHotkey("Main Window", "Continue/Pause", this), &QShortcut::activated,
-            this, [&] {
+    connect(hotkey_registry.GetHotkey("Main Window", "Continue/Pause Emulation", this),
+            &QShortcut::activated, this, [&] {
                 if (emulation_running) {
                     if (emu_thread->IsRunning()) {
                         OnPauseGame();
@@ -549,8 +549,8 @@ void GMainWindow::InitializeHotkeys() {
                     }
                 }
             });
-    connect(hotkey_registry.GetHotkey("Main Window", "Restart", this), &QShortcut::activated, this,
-            [this] {
+    connect(hotkey_registry.GetHotkey("Main Window", "Restart Emulation", this),
+            &QShortcut::activated, this, [this] {
                 if (!Core::System::GetInstance().IsPoweredOn())
                     return;
                 BootGame(QString(game_path));
@@ -697,7 +697,6 @@ void GMainWindow::ConnectMenuEvents() {
             &GMainWindow::ToggleWindowMode);
     connect(ui.action_Display_Dock_Widget_Headers, &QAction::triggered, this,
             &GMainWindow::OnDisplayTitleBars);
-    ui.action_Show_Filter_Bar->setShortcut(tr("CTRL+F"));
     connect(ui.action_Show_Filter_Bar, &QAction::triggered, this, &GMainWindow::OnToggleFilterBar);
     connect(ui.action_Show_Status_Bar, &QAction::triggered, statusBar(), &QStatusBar::setVisible);
 
@@ -1179,7 +1178,7 @@ void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pa
         return;
     }
 
-    const auto installed = Service::FileSystem::GetUnionContents();
+    const auto& installed = Core::System::GetInstance().GetContentProvider();
     const auto romfs_title_id = SelectRomFSDumpTarget(installed, program_id);
 
     if (!romfs_title_id) {
@@ -1662,6 +1661,7 @@ void GMainWindow::OnConfigure() {
     auto result = configureDialog.exec();
     if (result == QDialog::Accepted) {
         configureDialog.applyConfiguration();
+        InitializeHotkeys();
         if (UISettings::values.theme != old_theme)
             UpdateUITheme();
         if (UISettings::values.enable_discord_presence != old_discord_presence)
@@ -1924,14 +1924,14 @@ void GMainWindow::OnReinitializeKeys(ReinitializeKeyBehavior behavior) {
     }
 }
 
-std::optional<u64> GMainWindow::SelectRomFSDumpTarget(
-    const FileSys::RegisteredCacheUnion& installed, u64 program_id) {
+std::optional<u64> GMainWindow::SelectRomFSDumpTarget(const FileSys::ContentProvider& installed,
+                                                      u64 program_id) {
     const auto dlc_entries =
         installed.ListEntriesFilter(FileSys::TitleType::AOC, FileSys::ContentRecordType::Data);
-    std::vector<FileSys::RegisteredCacheEntry> dlc_match;
+    std::vector<FileSys::ContentProviderEntry> dlc_match;
     dlc_match.reserve(dlc_entries.size());
     std::copy_if(dlc_entries.begin(), dlc_entries.end(), std::back_inserter(dlc_match),
-                 [&program_id, &installed](const FileSys::RegisteredCacheEntry& entry) {
+                 [&program_id, &installed](const FileSys::ContentProviderEntry& entry) {
                      return (entry.title_id & DLC_BASE_TITLE_ID_MASK) == program_id &&
                             installed.GetEntry(entry)->GetStatus() == Loader::ResultStatus::Success;
                  });
