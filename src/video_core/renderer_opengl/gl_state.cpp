@@ -205,7 +205,7 @@ void OpenGLState::ApplyClipDistances() const {
 
 void OpenGLState::ApplyPointSize() const {
     if (UpdateValue(cur_state.point.size, point.size)) {
-        glPointSize(point.size);
+        glPointSize(std::max(point.size, 1.0f));
     }
 }
 
