@@ -394,6 +394,7 @@ void Config::ReadValues() {
         ReadSetting("use_accurate_gpu_emulation", false).toBool();
     Settings::values.use_asynchronous_gpu_emulation =
         ReadSetting("use_asynchronous_gpu_emulation", false).toBool();
+    Settings::values.force_30fps_mode = ReadSetting("force_30fps_mode", false).toBool();
 
     Settings::values.bg_red = ReadSetting("bg_red", 0.0).toFloat();
     Settings::values.bg_green = ReadSetting("bg_green", 0.0).toFloat();
@@ -523,8 +524,8 @@ void Config::ReadValues() {
     qt_config->beginGroup("Paths");
     UISettings::values.roms_path = ReadSetting("romsPath").toString();
     UISettings::values.symbols_path = ReadSetting("symbolsPath").toString();
-    UISettings::values.gamedir = ReadSetting("gameListRootDir", ".").toString();
-    UISettings::values.gamedir_deepscan = ReadSetting("gameListDeepScan", false).toBool();
+    UISettings::values.game_directory_path = ReadSetting("gameListRootDir", ".").toString();
+    UISettings::values.game_directory_deepscan = ReadSetting("gameListDeepScan", false).toBool();
     UISettings::values.recent_files = ReadSetting("recentFiles").toStringList();
     qt_config->endGroup();
 
@@ -664,6 +665,7 @@ void Config::SaveValues() {
     WriteSetting("use_accurate_gpu_emulation", Settings::values.use_accurate_gpu_emulation, false);
     WriteSetting("use_asynchronous_gpu_emulation", Settings::values.use_asynchronous_gpu_emulation,
                  false);
+    WriteSetting("force_30fps_mode", Settings::values.force_30fps_mode, false);
 
     // Cast to double because Qt's written float values are not human-readable
     WriteSetting("bg_red", (double)Settings::values.bg_red, 0.0);
@@ -768,8 +770,8 @@ void Config::SaveValues() {
     WriteSetting("romsPath", UISettings::values.roms_path);
     WriteSetting("symbolsPath", UISettings::values.symbols_path);
     WriteSetting("screenshotPath", UISettings::values.screenshot_path);
-    WriteSetting("gameListRootDir", UISettings::values.gamedir, ".");
-    WriteSetting("gameListDeepScan", UISettings::values.gamedir_deepscan, false);
+    WriteSetting("gameListRootDir", UISettings::values.game_directory_path, ".");
+    WriteSetting("gameListDeepScan", UISettings::values.game_directory_deepscan, false);
     WriteSetting("recentFiles", UISettings::values.recent_files);
     qt_config->endGroup();
 
