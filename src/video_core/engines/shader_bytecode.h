@@ -387,6 +387,20 @@ enum class IpaSampleMode : u64 {
     Offset = 2,
 };
 
+enum class LmemLoadCacheManagement : u64 {
+    Default = 0,
+    LU = 1,
+    CI = 2,
+    CV = 3,
+};
+
+enum class LmemStoreCacheManagement : u64 {
+    Default = 0,
+    CG = 1,
+    CS = 2,
+    WT = 3,
+};
+
 struct IpaMode {
     IpaInterpMode interpolation_mode;
     IpaSampleMode sampling_mode;
@@ -782,7 +796,7 @@ union Instruction {
     } ld_l;
 
     union {
-        BitField<44, 2, u64> unknown;
+        BitField<44, 2, LmemStoreCacheManagement> cache_management;
     } st_l;
 
     union {
@@ -790,6 +804,12 @@ union Instruction {
         BitField<46, 2, u64> cache_mode;
         BitField<20, 24, s64> immediate_offset;
     } ldg;
+
+    union {
+        BitField<48, 3, UniformType> type;
+        BitField<46, 2, u64> cache_mode;
+        BitField<20, 24, s64> immediate_offset;
+    } stg;
 
     union {
         BitField<0, 3, u64> pred0;
@@ -965,6 +985,38 @@ union Instruction {
             return false;
         }
     } tex;
+
+    union {
+        BitField<28, 1, u64> array;
+        BitField<29, 2, TextureType> texture_type;
+        BitField<31, 4, u64> component_mask;
+        BitField<49, 1, u64> nodep_flag;
+        BitField<50, 1, u64> dc_flag;
+        BitField<36, 1, u64> aoffi_flag;
+        BitField<37, 3, TextureProcessMode> process_mode;
+
+        bool IsComponentEnabled(std::size_t component) const {
+            return ((1ULL << component) & component_mask) != 0;
+        }
+
+        TextureProcessMode GetTextureProcessMode() const {
+            return process_mode;
+        }
+
+        bool UsesMiscMode(TextureMiscMode mode) const {
+            switch (mode) {
+            case TextureMiscMode::DC:
+                return dc_flag != 0;
+            case TextureMiscMode::NODEP:
+                return nodep_flag != 0;
+            case TextureMiscMode::AOFFI:
+                return aoffi_flag != 0;
+            default:
+                break;
+            }
+            return false;
+        }
+    } tex_b;
 
     union {
         BitField<22, 6, TextureQueryType> query_type;
@@ -1312,7 +1364,9 @@ public:
         LDG, // Load from global memory
         STG, // Store in global memory
         TEX,
+        TEX_B,  // Texture Load Bindless
         TXQ,    // Texture Query
+        TXQ_B,  // Texture Query Bindless
         TEXS,   // Texture Fetch with scalar/non-vec4 source/destinations
         TLDS,   // Texture Load with scalar/non-vec4 source/destinations
         TLD4,   // Texture Load 4
@@ -1580,7 +1634,9 @@ private:
             INST("1110111011010---", Id::LDG, Type::Memory, "LDG"),
             INST("1110111011011---", Id::STG, Type::Memory, "STG"),
             INST("110000----111---", Id::TEX, Type::Texture, "TEX"),
+            INST("1101111010111---", Id::TEX_B, Type::Texture, "TEX_B"),
             INST("1101111101001---", Id::TXQ, Type::Texture, "TXQ"),
+            INST("1101111101010---", Id::TXQ_B, Type::Texture, "TXQ_B"),
             INST("1101-00---------", Id::TEXS, Type::Texture, "TEXS"),
             INST("1101101---------", Id::TLDS, Type::Texture, "TLDS"),
             INST("110010----111---", Id::TLD4, Type::Texture, "TLD4"),

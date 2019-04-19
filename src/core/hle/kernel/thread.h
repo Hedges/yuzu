@@ -102,6 +102,11 @@ public:
     std::string GetName() const override {
         return name;
     }
+
+    void SetName(std::string new_name) {
+        name = std::move(new_name);
+    }
+
     std::string GetTypeName() const override {
         return "Thread";
     }
@@ -135,12 +140,6 @@ public:
      * @param priority The new priority
      */
     void SetPriority(u32 priority);
-
-    /**
-     * Temporarily boosts the thread's priority until the next time it is scheduled
-     * @param priority The new priority
-     */
-    void BoostPriority(u32 priority);
 
     /// Adds a thread to the list of threads that are waiting for a lock held by this thread.
     void AddMutexWaiter(SharedPtr<Thread> thread);
@@ -345,10 +344,6 @@ public:
         arb_wait_address = address;
     }
 
-    void SetGuestHandle(Handle handle) {
-        guest_handle = handle;
-    }
-
     bool HasWakeupCallback() const {
         return wakeup_callback != nullptr;
     }
@@ -441,9 +436,6 @@ private:
 
     /// If waiting for an AddressArbiter, this is the address being waited on.
     VAddr arb_wait_address{0};
-
-    /// Handle used by guest emulated application to access this thread
-    Handle guest_handle = 0;
 
     /// Handle used as userdata to reference this object when inserting into the CoreTiming queue.
     Handle callback_handle = 0;

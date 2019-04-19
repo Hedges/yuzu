@@ -196,9 +196,23 @@ enum class ExitMethod {
 
 class Sampler {
 public:
+    // Use this constructor for bounded Samplers
     explicit Sampler(std::size_t offset, std::size_t index, Tegra::Shader::TextureType type,
                      bool is_array, bool is_shadow)
-        : offset{offset}, index{index}, type{type}, is_array{is_array}, is_shadow{is_shadow} {}
+        : offset{offset}, index{index}, type{type}, is_array{is_array}, is_shadow{is_shadow},
+          is_bindless{false} {}
+
+    // Use this constructor for bindless Samplers
+    explicit Sampler(u32 cbuf_index, u32 cbuf_offset, std::size_t index,
+                     Tegra::Shader::TextureType type, bool is_array, bool is_shadow)
+        : offset{(static_cast<u64>(cbuf_index) << 32) | cbuf_offset}, index{index}, type{type},
+          is_array{is_array}, is_shadow{is_shadow}, is_bindless{true} {}
+
+    // Use this only for serialization/deserialization
+    explicit Sampler(std::size_t offset, std::size_t index, Tegra::Shader::TextureType type,
+                     bool is_array, bool is_shadow, bool is_bindless)
+        : offset{offset}, index{index}, type{type}, is_array{is_array}, is_shadow{is_shadow},
+          is_bindless{is_bindless} {}
 
     std::size_t GetOffset() const {
         return offset;
@@ -220,6 +234,14 @@ public:
         return is_shadow;
     }
 
+    bool IsBindless() const {
+        return is_bindless;
+    }
+
+    std::pair<u32, u32> GetBindlessCBuf() const {
+        return {static_cast<u32>(offset >> 32), static_cast<u32>(offset)};
+    }
+
     bool operator<(const Sampler& rhs) const {
         return std::tie(offset, index, type, is_array, is_shadow) <
                std::tie(rhs.offset, rhs.index, rhs.type, rhs.is_array, rhs.is_shadow);
@@ -231,8 +253,9 @@ private:
     std::size_t offset{};
     std::size_t index{}; ///< Value used to index into the generated GLSL sampler array.
     Tegra::Shader::TextureType type{}; ///< The type used to sample this texture (Texture2D, etc)
-    bool is_array{};  ///< Whether the texture is being sampled as an array texture or not.
-    bool is_shadow{}; ///< Whether the texture is being sampled as a depth texture or not.
+    bool is_array{};    ///< Whether the texture is being sampled as an array texture or not.
+    bool is_shadow{};   ///< Whether the texture is being sampled as a depth texture or not.
+    bool is_bindless{}; ///< Whether this sampler belongs to a bindless texture or not.
 };
 
 class ConstBuffer {
@@ -274,6 +297,11 @@ struct GlobalMemoryBase {
     bool operator<(const GlobalMemoryBase& rhs) const {
         return std::tie(cbuf_index, cbuf_offset) < std::tie(rhs.cbuf_index, rhs.cbuf_offset);
     }
+};
+
+struct GlobalMemoryUsage {
+    bool is_read{};
+    bool is_written{};
 };
 
 struct MetaArithmetic {
@@ -578,8 +606,8 @@ public:
         return used_clip_distances;
     }
 
-    const std::set<GlobalMemoryBase>& GetGlobalMemoryBases() const {
-        return used_global_memory_bases;
+    const std::map<GlobalMemoryBase, GlobalMemoryUsage>& GetGlobalMemory() const {
+        return used_global_memory;
     }
 
     std::size_t GetLength() const {
@@ -730,6 +758,11 @@ private:
     const Sampler& GetSampler(const Tegra::Shader::Sampler& sampler,
                               Tegra::Shader::TextureType type, bool is_array, bool is_shadow);
 
+    // Accesses a texture sampler for a bindless texture.
+    const Sampler& GetBindlessSampler(const Tegra::Shader::Register& reg,
+                                      Tegra::Shader::TextureType type, bool is_array,
+                                      bool is_shadow);
+
     /// Extracts a sequence of bits from a node
     Node BitfieldExtract(Node value, u32 offset, u32 bits);
 
@@ -743,7 +776,8 @@ private:
 
     Node4 GetTexCode(Tegra::Shader::Instruction instr, Tegra::Shader::TextureType texture_type,
                      Tegra::Shader::TextureProcessMode process_mode, bool depth_compare,
-                     bool is_array, bool is_aoffi);
+                     bool is_array, bool is_aoffi,
+                     std::optional<Tegra::Shader::Register> bindless_reg);
 
     Node4 GetTexsCode(Tegra::Shader::Instruction instr, Tegra::Shader::TextureType texture_type,
                       Tegra::Shader::TextureProcessMode process_mode, bool depth_compare,
@@ -763,7 +797,8 @@ private:
 
     Node4 GetTextureCode(Tegra::Shader::Instruction instr, Tegra::Shader::TextureType texture_type,
                          Tegra::Shader::TextureProcessMode process_mode, std::vector<Node> coords,
-                         Node array, Node depth_compare, u32 bias_offset, std::vector<Node> aoffi);
+                         Node array, Node depth_compare, u32 bias_offset, std::vector<Node> aoffi,
+                         std::optional<Tegra::Shader::Register> bindless_reg);
 
     Node GetVideoOperand(Node op, bool is_chunk, bool is_signed, Tegra::Shader::VideoType type,
                          u64 byte_height);
@@ -780,6 +815,11 @@ private:
     std::optional<u32> TrackImmediate(Node tracked, const NodeBlock& code, s64 cursor);
 
     std::pair<Node, s64> TrackRegister(const GprNode* tracked, const NodeBlock& code, s64 cursor);
+
+    std::tuple<Node, Node, GlobalMemoryBase> TrackAndGetGlobalMemory(NodeBlock& bb,
+                                                                     Node addr_register,
+                                                                     u32 immediate_offset,
+                                                                     bool is_write);
 
     template <typename... T>
     Node Operation(OperationCode code, const T*... operands) {
@@ -834,7 +874,7 @@ private:
     std::map<u32, ConstBuffer> used_cbufs;
     std::set<Sampler> used_samplers;
     std::array<bool, Tegra::Engines::Maxwell3D::Regs::NumClipDistances> used_clip_distances{};
-    std::set<GlobalMemoryBase> used_global_memory_bases;
+    std::map<GlobalMemoryBase, GlobalMemoryUsage> used_global_memory;
 
     Tegra::Shader::Header header;
 };
