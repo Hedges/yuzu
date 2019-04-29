@@ -698,7 +698,7 @@ static void OutputDebugString([[maybe_unused]] Core::System& system, VAddr addre
     std::string str(len, '\0');
     Memory::ReadBlock(address, str.data(), str.size());
 #ifdef _WIN32
-    ::OutputDebugString((str + "\r\n").c_str());
+    ::OutputDebugStringA((str + "\r\n").c_str());
 #endif
     LOG_DEBUG(Debug_Emulated, "{}", str);
 }
