@@ -27,6 +27,7 @@ if (MSVC)
     # /Zo                 - Enhanced debug info for optimized builds
     # /permissive-        - Enables stricter C++ standards conformance checks
     # /EHsc               - C++-only exception handling semantics
+    # /volatile:iso       - Use strict standards-compliant volatile semantics.
     # /Zc:externConstexpr - Allow extern constexpr variables to have external linkage, like the standard mandates
     # /Zc:inline          - Let codegen omit inline functions in object files
     # /Zc:throwingNew     - Let codegen assume `operator new` (without std::nothrow) will never return null
@@ -38,6 +39,7 @@ if (MSVC)
         /permissive-
         /EHsc
         /std:c++latest
+        /volatile:iso
         /Zc:externConstexpr
         /Zc:inline
         /Zc:throwingNew
@@ -49,7 +51,10 @@ if (MSVC)
     set(CMAKE_EXE_LINKER_FLAGS_DEBUG   "/DEBUG /MANIFEST:NO" CACHE STRING "" FORCE)
     set(CMAKE_EXE_LINKER_FLAGS_RELEASE "/DEBUG /MANIFEST:NO /INCREMENTAL:NO /OPT:REF,ICF" CACHE STRING "" FORCE)
 else()
-    add_compile_options("-Wno-attributes")
+    add_compile_options(
+        -Wall
+        -Wno-attributes
+    )
 
     if (APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL Clang)
         add_compile_options("-stdlib=libc++")
