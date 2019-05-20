@@ -261,8 +261,8 @@ DrawParameters RasterizerOpenGL::SetupDraw() {
             // MakeQuadArray always generates u32 indexes
             params.index_format = GL_UNSIGNED_INT;
             params.count = (regs.vertex_buffer.count / 4) * 6;
-            params.index_buffer_offset =
-                primitive_assembler.MakeQuadArray(regs.vertex_buffer.first, params.count);
+            params.index_buffer_offset = primitive_assembler.MakeQuadArray(
+                regs.vertex_buffer.first, regs.vertex_buffer.count);
         }
         return params;
     }
@@ -1135,7 +1135,9 @@ void RasterizerOpenGL::SyncTransformFeedback() {
 
 void RasterizerOpenGL::SyncPointState() {
     const auto& regs = system.GPU().Maxwell3D().regs;
-    state.point.size = regs.point_size;
+    // Limit the point size to 1 since nouveau sometimes sets a point size of 0 (and that's invalid
+    // in OpenGL).
+    state.point.size = std::max(1.0f, regs.point_size);
 }
 
 void RasterizerOpenGL::SyncPolygonOffset() {

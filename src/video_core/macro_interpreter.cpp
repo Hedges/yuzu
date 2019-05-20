@@ -118,10 +118,12 @@ bool MacroInterpreter::Step(u32 offset, bool is_delay_slot) {
                           static_cast<u32>(opcode.operation.Value()));
     }
 
+    // An instruction with the Exit flag will not actually
+    // cause an exit if it's executed inside a delay slot.
+    // TODO(Blinkhawk): Reversed to always exit. The behavior explained above requires further
+    // testing on the MME code.
     if (opcode.is_exit) {
         // Exit has a delay slot, execute the next instruction
-        // Note: Executing an exit during a branch delay slot will cause the instruction at the
-        // branch target to be executed before exiting.
         Step(offset, true);
         return false;
     }
