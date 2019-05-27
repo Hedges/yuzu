@@ -663,7 +663,7 @@ private:
     /// Creates a conditional node
     Node Conditional(Node condition, std::vector<Node>&& code);
     /// Creates a commentary
-    Node Comment(const std::string& text);
+    Node Comment(std::string text);
     /// Creates an u32 immediate
     Node Immediate(u32 value);
     /// Creates a s32 immediate
@@ -818,10 +818,8 @@ private:
     std::pair<Node, s64> TrackRegister(const GprNode* tracked, const NodeBlock& code,
                                        s64 cursor) const;
 
-    std::tuple<Node, Node, GlobalMemoryBase> TrackAndGetGlobalMemory(NodeBlock& bb,
-                                                                     Node addr_register,
-                                                                     u32 immediate_offset,
-                                                                     bool is_write);
+    std::tuple<Node, Node, GlobalMemoryBase> TrackAndGetGlobalMemory(
+        NodeBlock& bb, Tegra::Shader::Instruction instr, bool is_write);
 
     template <typename... T>
     Node Operation(OperationCode code, const T*... operands) {

@@ -9,7 +9,6 @@
 #include <string>
 #include <QVariant>
 #include "core/settings.h"
-#include "yuzu/ui_settings.h"
 
 class QSettings;
 
@@ -37,18 +36,50 @@ private:
     void ReadTouchscreenValues();
     void ApplyDefaultProfileIfInputInvalid();
 
+    // Read functions bases off the respective config section names.
+    void ReadAudioValues();
+    void ReadControlValues();
+    void ReadCoreValues();
+    void ReadDataStorageValues();
+    void ReadDebuggingValues();
+    void ReadDisabledAddOnValues();
+    void ReadMiscellaneousValues();
+    void ReadPathValues();
+    void ReadRendererValues();
+    void ReadShortcutValues();
+    void ReadSystemValues();
+    void ReadUIValues();
+    void ReadUIGamelistValues();
+    void ReadUILayoutValues();
+    void ReadWebServiceValues();
+
     void SaveValues();
     void SavePlayerValues();
     void SaveDebugValues();
     void SaveMouseValues();
     void SaveTouchscreenValues();
 
+    // Save functions based off the respective config section names.
+    void SaveAudioValues();
+    void SaveControlValues();
+    void SaveCoreValues();
+    void SaveDataStorageValues();
+    void SaveDebuggingValues();
+    void SaveDisabledAddOnValues();
+    void SaveMiscellaneousValues();
+    void SavePathValues();
+    void SaveRendererValues();
+    void SaveShortcutValues();
+    void SaveSystemValues();
+    void SaveUIValues();
+    void SaveUIGamelistValues();
+    void SaveUILayoutValues();
+    void SaveWebServiceValues();
+
     QVariant ReadSetting(const QString& name) const;
     QVariant ReadSetting(const QString& name, const QVariant& default_value) const;
     void WriteSetting(const QString& name, const QVariant& value);
     void WriteSetting(const QString& name, const QVariant& value, const QVariant& default_value);
-
-    static const std::array<UISettings::Shortcut, 15> default_hotkeys;
 
     std::unique_ptr<QSettings> qt_config;
     std::string qt_config_loc;

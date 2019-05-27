@@ -91,25 +91,25 @@ void EmuThread::run() {
 
 class GGLContext : public Core::Frontend::GraphicsContext {
 public:
-    explicit GGLContext(QOpenGLContext* shared_context)
-        : context{std::make_unique<QOpenGLContext>(shared_context)} {
-        surface.setFormat(shared_context->format());
-        surface.create();
+    explicit GGLContext(QOpenGLContext* shared_context) : shared_context{shared_context} {
+        context.setFormat(shared_context->format());
+        context.setShareContext(shared_context);
+        context.create();
     }
 
     void MakeCurrent() override {
-        context->makeCurrent(&surface);
+        context.makeCurrent(shared_context->surface());
     }
 
     void DoneCurrent() override {
-        context->doneCurrent();
+        context.doneCurrent();
     }
 
     void SwapBuffers() override {}
 
 private:
-    std::unique_ptr<QOpenGLContext> context;
-    QOffscreenSurface surface;
+    QOpenGLContext* shared_context;
+    QOpenGLContext context;
 };
 
 // This class overrides paintEvent and resizeEvent to prevent the GUI thread from stealing GL
@@ -188,7 +188,9 @@ private:
 GRenderWindow::GRenderWindow(QWidget* parent, EmuThread* emu_thread)
     : QWidget(parent), emu_thread(emu_thread) {
     setWindowTitle(QStringLiteral("yuzu %1 | %2-%3")
-                       .arg(Common::g_build_name, Common::g_scm_branch, Common::g_scm_desc));
+                       .arg(QString::fromUtf8(Common::g_build_name),
+                            QString::fromUtf8(Common::g_scm_branch),
+                            QString::fromUtf8(Common::g_scm_desc)));
     setAttribute(Qt::WA_AcceptTouchEvents);
 
     InputCommon::Init();
@@ -217,7 +219,7 @@ void GRenderWindow::SwapBuffers() {
     // However:
     // - The Qt debug runtime prints a bogus warning on the console if `makeCurrent` wasn't called
     // since the last time `swapBuffers` was executed;
-    // - On macOS, if `makeCurrent` isn't called explicitely, resizing the buffer breaks.
+    // - On macOS, if `makeCurrent` isn't called explicitly, resizing the buffer breaks.
     context->makeCurrent(child);
 
     context->swapBuffers(child);
@@ -356,7 +358,7 @@ void GRenderWindow::OnClientAreaResized(unsigned width, unsigned height) {
 }
 
 std::unique_ptr<Core::Frontend::GraphicsContext> GRenderWindow::CreateSharedContext() const {
-    return std::make_unique<GGLContext>(shared_context.get());
+    return std::make_unique<GGLContext>(context.get());
 }
 
 void GRenderWindow::InitRenderTarget() {
