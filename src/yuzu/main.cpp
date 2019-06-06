@@ -238,15 +238,13 @@ void GMainWindow::ProfileSelectorSelectProfile() {
     dialog.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
                           Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
     dialog.setWindowModality(Qt::WindowModal);
-    dialog.exec();
-
-    if (!dialog.GetStatus()) {
+    if (dialog.exec() == QDialog::Rejected) {
         emit ProfileSelectorFinishedSelection(std::nullopt);
         return;
     }
 
     Service::Account::ProfileManager manager;
-    const auto uuid = manager.GetUser(dialog.GetIndex());
+    const auto uuid = manager.GetUser(static_cast<std::size_t>(dialog.GetIndex()));
     if (!uuid.has_value()) {
         emit ProfileSelectorFinishedSelection(std::nullopt);
         return;
@@ -261,9 +259,8 @@ void GMainWindow::SoftwareKeyboardGetText(
     dialog.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
                           Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
     dialog.setWindowModality(Qt::WindowModal);
-    dialog.exec();
 
-    if (!dialog.GetStatus()) {
+    if (dialog.exec() == QDialog::Rejected) {
         emit SoftwareKeyboardFinishedText(std::nullopt);
         return;
     }
@@ -850,11 +847,6 @@ bool GMainWindow::LoadROM(const QString& filename) {
             QMessageBox::critical(this, tr("Error while loading ROM!"),
                                   tr("The ROM format is not supported."));
             break;
-        case Core::System::ResultStatus::ErrorSystemMode:
-            LOG_CRITICAL(Frontend, "Failed to load ROM!");
-            QMessageBox::critical(this, tr("Error while loading ROM!"),
-                                  tr("Could not determine the system mode."));
-            break;
         case Core::System::ResultStatus::ErrorVideoCore:
             QMessageBox::critical(
                 this, tr("An error occurred initializing the video core."),
@@ -901,11 +893,12 @@ void GMainWindow::SelectAndSetCurrentUser() {
     dialog.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
                           Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
     dialog.setWindowModality(Qt::WindowModal);
-    dialog.exec();
 
-    if (dialog.GetStatus()) {
-        Settings::values.current_user = static_cast<s32>(dialog.GetIndex());
+    if (dialog.exec() == QDialog::Rejected) {
+        return;
     }
+
+    Settings::values.current_user = dialog.GetIndex();
 }
 
 void GMainWindow::BootGame(const QString& filename) {
@@ -1055,14 +1048,13 @@ void GMainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target
         const std::string nand_dir = FileUtil::GetUserPath(FileUtil::UserPath::NANDDir);
         ASSERT(program_id != 0);
 
-        const auto select_profile = [this]() -> s32 {
+        const auto select_profile = [this] {
             QtProfileSelectionDialog dialog(this);
             dialog.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
                                   Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
             dialog.setWindowModality(Qt::WindowModal);
-            dialog.exec();
 
-            if (!dialog.GetStatus()) {
+            if (dialog.exec() == QDialog::Rejected) {
                 return -1;
             }
 
@@ -1070,11 +1062,12 @@ void GMainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target
         };
 
         const auto index = select_profile();
-        if (index == -1)
+        if (index == -1) {
             return;
+        }
 
         Service::Account::ProfileManager manager;
-        const auto user_id = manager.GetUser(index);
+        const auto user_id = manager.GetUser(static_cast<std::size_t>(index));
         ASSERT(user_id);
         path = nand_dir + FileSys::SaveDataFactory::GetFullPath(FileSys::SaveDataSpaceId::NandUser,
                                                                 FileSys::SaveDataType::SaveData,
@@ -1296,10 +1289,10 @@ void GMainWindow::OnGameListOpenPerGameProperties(const std::string& file) {
     }
 
     ConfigurePerGameGeneral dialog(this, title_id);
-    dialog.loadFromFile(v_file);
+    dialog.LoadFromFile(v_file);
     auto result = dialog.exec();
     if (result == QDialog::Accepted) {
-        dialog.applyConfiguration();
+        dialog.ApplyConfiguration();
 
         const auto reload = UISettings::values.is_game_list_reload_pending.exchange(false);
         if (reload) {
@@ -1690,26 +1683,31 @@ void GMainWindow::ToggleWindowMode() {
 }
 
 void GMainWindow::OnConfigure() {
-    ConfigureDialog configureDialog(this, hotkey_registry);
-    auto old_theme = UISettings::values.theme;
+    const auto old_theme = UISettings::values.theme;
     const bool old_discord_presence = UISettings::values.enable_discord_presence;
-    auto result = configureDialog.exec();
-    if (result == QDialog::Accepted) {
-        configureDialog.applyConfiguration();
-        InitializeHotkeys();
-        if (UISettings::values.theme != old_theme)
-            UpdateUITheme();
-        if (UISettings::values.enable_discord_presence != old_discord_presence)
-            SetDiscordEnabled(UISettings::values.enable_discord_presence);
 
-        const auto reload = UISettings::values.is_game_list_reload_pending.exchange(false);
-        if (reload) {
-            game_list->PopulateAsync(UISettings::values.game_directory_path,
-                                     UISettings::values.game_directory_deepscan);
-        }
-
-        config->Save();
+    ConfigureDialog configure_dialog(this, hotkey_registry);
+    const auto result = configure_dialog.exec();
+    if (result != QDialog::Accepted) {
+        return;
     }
+
+    configure_dialog.ApplyConfiguration();
+    InitializeHotkeys();
+    if (UISettings::values.theme != old_theme) {
+        UpdateUITheme();
+    }
+    if (UISettings::values.enable_discord_presence != old_discord_presence) {
+        SetDiscordEnabled(UISettings::values.enable_discord_presence);
+    }
+
+    const auto reload = UISettings::values.is_game_list_reload_pending.exchange(false);
+    if (reload) {
+        game_list->PopulateAsync(UISettings::values.game_directory_path,
+                                 UISettings::values.game_directory_deepscan);
+    }
+
+    config->Save();
 }
 
 void GMainWindow::OnLoadAmiibo() {

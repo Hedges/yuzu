@@ -51,29 +51,29 @@ Resolution FromResolutionFactor(float factor) {
 
 ConfigureGraphics::ConfigureGraphics(QWidget* parent)
     : QWidget(parent), ui(new Ui::ConfigureGraphics) {
-
     ui->setupUi(this);
-    this->setConfiguration();
 
-    ui->frame_limit->setEnabled(Settings::values.use_frame_limit);
-    connect(ui->toggle_frame_limit, &QCheckBox::stateChanged, ui->frame_limit,
-            &QSpinBox::setEnabled);
+    SetConfiguration();
+
+    connect(ui->toggle_frame_limit, &QCheckBox::toggled, ui->frame_limit, &QSpinBox::setEnabled);
     connect(ui->bg_button, &QPushButton::clicked, this, [this] {
         const QColor new_bg_color = QColorDialog::getColor(bg_color);
-        if (!new_bg_color.isValid())
+        if (!new_bg_color.isValid()) {
             return;
+        }
         UpdateBackgroundColorButton(new_bg_color);
     });
 }
 
 ConfigureGraphics::~ConfigureGraphics() = default;
 
-void ConfigureGraphics::setConfiguration() {
+void ConfigureGraphics::SetConfiguration() {
     const bool runtime_lock = !Core::System::GetInstance().IsPoweredOn();
 
     ui->resolution_factor_combobox->setCurrentIndex(
         static_cast<int>(FromResolutionFactor(Settings::values.resolution_factor)));
     ui->toggle_frame_limit->setChecked(Settings::values.use_frame_limit);
+    ui->frame_limit->setEnabled(ui->toggle_frame_limit->isChecked());
     ui->frame_limit->setValue(Settings::values.frame_limit);
     ui->use_compatibility_profile->setEnabled(runtime_lock);
     ui->use_compatibility_profile->setChecked(Settings::values.use_compatibility_profile);
@@ -88,7 +88,7 @@ void ConfigureGraphics::setConfiguration() {
                                                  Settings::values.bg_blue));
 }
 
-void ConfigureGraphics::applyConfiguration() {
+void ConfigureGraphics::ApplyConfiguration() {
     Settings::values.resolution_factor =
         ToResolutionFactor(static_cast<Resolution>(ui->resolution_factor_combobox->currentIndex()));
     Settings::values.use_frame_limit = ui->toggle_frame_limit->isChecked();
