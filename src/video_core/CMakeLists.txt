@@ -42,8 +42,6 @@ add_library(video_core STATIC
     renderer_opengl/gl_device.h
     renderer_opengl/gl_global_cache.cpp
     renderer_opengl/gl_global_cache.h
-    renderer_opengl/gl_primitive_assembler.cpp
-    renderer_opengl/gl_primitive_assembler.h
     renderer_opengl/gl_rasterizer.cpp
     renderer_opengl/gl_rasterizer.h
     renderer_opengl/gl_rasterizer_cache.cpp
@@ -102,6 +100,9 @@ add_library(video_core STATIC
     shader/decode/xmad.cpp
     shader/decode/other.cpp
     shader/decode.cpp
+    shader/node_helper.cpp
+    shader/node_helper.h
+    shader/node.h
     shader/shader_ir.cpp
     shader/shader_ir.h
     shader/track.cpp
