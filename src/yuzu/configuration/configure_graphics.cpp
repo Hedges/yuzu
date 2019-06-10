@@ -75,8 +75,6 @@ void ConfigureGraphics::SetConfiguration() {
     ui->toggle_frame_limit->setChecked(Settings::values.use_frame_limit);
     ui->frame_limit->setEnabled(ui->toggle_frame_limit->isChecked());
     ui->frame_limit->setValue(Settings::values.frame_limit);
-    ui->use_compatibility_profile->setEnabled(runtime_lock);
-    ui->use_compatibility_profile->setChecked(Settings::values.use_compatibility_profile);
     ui->use_disk_shader_cache->setEnabled(runtime_lock);
     ui->use_disk_shader_cache->setChecked(Settings::values.use_disk_shader_cache);
     ui->use_accurate_gpu_emulation->setChecked(Settings::values.use_accurate_gpu_emulation);
@@ -93,7 +91,6 @@ void ConfigureGraphics::ApplyConfiguration() {
         ToResolutionFactor(static_cast<Resolution>(ui->resolution_factor_combobox->currentIndex()));
     Settings::values.use_frame_limit = ui->toggle_frame_limit->isChecked();
     Settings::values.frame_limit = ui->frame_limit->value();
-    Settings::values.use_compatibility_profile = ui->use_compatibility_profile->isChecked();
     Settings::values.use_disk_shader_cache = ui->use_disk_shader_cache->isChecked();
     Settings::values.use_accurate_gpu_emulation = ui->use_accurate_gpu_emulation->isChecked();
     Settings::values.use_asynchronous_gpu_emulation =
@@ -102,6 +99,18 @@ void ConfigureGraphics::ApplyConfiguration() {
     Settings::values.bg_red = static_cast<float>(bg_color.redF());
     Settings::values.bg_green = static_cast<float>(bg_color.greenF());
     Settings::values.bg_blue = static_cast<float>(bg_color.blueF());
+}
+
+void ConfigureGraphics::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::LanguageChange) {
+        RetranslateUI();
+    }
+
+    QWidget::changeEvent(event);
+}
+
+void ConfigureGraphics::RetranslateUI() {
+    ui->retranslateUi(this);
 }
 
 void ConfigureGraphics::UpdateBackgroundColorButton(QColor color) {
