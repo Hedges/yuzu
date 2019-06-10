@@ -48,7 +48,7 @@ void SetupMainThread(Process& owner_process, KernelCore& kernel, u32 priority) {
 }
 } // Anonymous namespace
 
-SharedPtr<Process> Process::Create(Core::System& system, std::string&& name) {
+SharedPtr<Process> Process::Create(Core::System& system, std::string name) {
     auto& kernel = system.Kernel();
 
     SharedPtr<Process> process(new Process(system));
@@ -72,8 +72,24 @@ SharedPtr<ResourceLimit> Process::GetResourceLimit() const {
     return resource_limit;
 }
 
+u64 Process::GetTotalPhysicalMemoryAvailable() const {
+    return vm_manager.GetTotalPhysicalMemoryAvailable();
+}
+
+u64 Process::GetTotalPhysicalMemoryAvailableWithoutMmHeap() const {
+    // TODO: Subtract the personal heap size from this when the
+    //       personal heap is implemented.
+    return GetTotalPhysicalMemoryAvailable();
+}
+
 u64 Process::GetTotalPhysicalMemoryUsed() const {
     return vm_manager.GetCurrentHeapSize() + main_thread_stack_size + code_memory_size;
+}
+
+u64 Process::GetTotalPhysicalMemoryUsedWithoutMmHeap() const {
+    // TODO: Subtract the personal heap size from this when the
+    //       personal heap is implemented.
+    return GetTotalPhysicalMemoryUsed();
 }
 
 void Process::RegisterThread(const Thread* thread) {
