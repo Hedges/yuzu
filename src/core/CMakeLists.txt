@@ -45,6 +45,8 @@ add_library(core STATIC
     file_sys/fsmitm_romfsbuild.h
     file_sys/ips_layer.cpp
     file_sys/ips_layer.h
+    file_sys/kernel_executable.cpp
+    file_sys/kernel_executable.h
     file_sys/mode.h
     file_sys/nca_metadata.cpp
     file_sys/nca_metadata.h
@@ -440,6 +442,8 @@ add_library(core STATIC
     loader/deconstructed_rom_directory.h
     loader/elf.cpp
     loader/elf.h
+    loader/kip.cpp
+    loader/kip.h
     loader/loader.cpp
     loader/loader.h
     loader/nax.cpp
@@ -459,6 +463,8 @@ add_library(core STATIC
     memory_setup.h
     perf_stats.cpp
     perf_stats.h
+    reporter.cpp
+    reporter.h
     settings.cpp
     settings.h
     telemetry_session.cpp
@@ -468,7 +474,7 @@ add_library(core STATIC
 create_target_directory_groups(core)
 
 target_link_libraries(core PUBLIC common PRIVATE audio_core video_core)
-target_link_libraries(core PUBLIC Boost::boost PRIVATE fmt mbedtls opus unicorn open_source_archives)
+target_link_libraries(core PUBLIC Boost::boost PRIVATE fmt json-headers mbedtls opus unicorn open_source_archives)
 if (ENABLE_WEB_SERVICE)
     target_compile_definitions(core PRIVATE -DENABLE_WEB_SERVICE)
     target_link_libraries(core PRIVATE web_service)

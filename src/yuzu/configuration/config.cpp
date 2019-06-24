@@ -473,6 +473,8 @@ void Config::ReadDebuggingValues() {
         ReadSetting(QStringLiteral("program_args"), QStringLiteral("")).toString().toStdString();
     Settings::values.dump_exefs = ReadSetting(QStringLiteral("dump_exefs"), false).toBool();
     Settings::values.dump_nso = ReadSetting(QStringLiteral("dump_nso"), false).toBool();
+    Settings::values.reporting_services =
+        ReadSetting(QStringLiteral("reporting_services"), false).toBool();
 
     qt_config->endGroup();
 }
@@ -692,7 +694,6 @@ void Config::ReadValues() {
     ReadSystemValues();
     ReadMiscellaneousValues();
     ReadDebuggingValues();
-    ReadDebugValues();
     ReadWebServiceValues();
     ReadDisabledAddOnValues();
     ReadUIValues();
