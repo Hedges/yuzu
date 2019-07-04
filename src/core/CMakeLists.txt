@@ -175,6 +175,7 @@ add_library(core STATIC
     hle/service/acc/acc_u0.h
     hle/service/acc/acc_u1.cpp
     hle/service/acc/acc_u1.h
+    hle/service/acc/errors.h
     hle/service/acc/profile_manager.cpp
     hle/service/acc/profile_manager.h
     hle/service/am/am.cpp
@@ -270,6 +271,7 @@ add_library(core STATIC
     hle/service/filesystem/fsp_srv.h
     hle/service/fgm/fgm.cpp
     hle/service/fgm/fgm.h
+    hle/service/friend/errors.h
     hle/service/friend/friend.cpp
     hle/service/friend/friend.h
     hle/service/friend/interface.cpp
@@ -429,6 +431,8 @@ add_library(core STATIC
     hle/service/time/interface.h
     hle/service/time/time.cpp
     hle/service/time/time.h
+    hle/service/time/time_sharedmemory.cpp
+    hle/service/time/time_sharedmemory.h
     hle/service/usb/usb.cpp
     hle/service/usb/usb.h
     hle/service/vi/display/vi_display.cpp
