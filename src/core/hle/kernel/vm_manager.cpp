@@ -8,6 +8,7 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/memory_hook.h"
+#include "core/arm/arm_interface.h"
 #include "core/core.h"
 #include "core/file_sys/program_metadata.h"
 #include "core/hle/kernel/errors.h"
@@ -114,6 +115,15 @@ ResultVal<VMManager::VMAHandle> VMManager::MapMemoryBlock(VAddr target,
     VirtualMemoryArea& final_vma = vma_handle->second;
     ASSERT(final_vma.size == size);
 
+    system.ArmInterface(0).MapBackingMemory(target, size, block->data() + offset,
+                                            VMAPermission::ReadWriteExecute);
+    system.ArmInterface(1).MapBackingMemory(target, size, block->data() + offset,
+                                            VMAPermission::ReadWriteExecute);
+    system.ArmInterface(2).MapBackingMemory(target, size, block->data() + offset,
+                                            VMAPermission::ReadWriteExecute);
+    system.ArmInterface(3).MapBackingMemory(target, size, block->data() + offset,
+                                            VMAPermission::ReadWriteExecute);
+
     final_vma.type = VMAType::AllocatedMemoryBlock;
     final_vma.permissions = perm;
     final_vma.state = state;
@@ -132,6 +142,11 @@ ResultVal<VMManager::VMAHandle> VMManager::MapBackingMemory(VAddr target, u8* me
     CASCADE_RESULT(VMAIter vma_handle, CarveVMA(target, size));
     VirtualMemoryArea& final_vma = vma_handle->second;
     ASSERT(final_vma.size == size);
+
+    system.ArmInterface(0).MapBackingMemory(target, size, memory, VMAPermission::ReadWriteExecute);
+    system.ArmInterface(1).MapBackingMemory(target, size, memory, VMAPermission::ReadWriteExecute);
+    system.ArmInterface(2).MapBackingMemory(target, size, memory, VMAPermission::ReadWriteExecute);
+    system.ArmInterface(3).MapBackingMemory(target, size, memory, VMAPermission::ReadWriteExecute);
 
     final_vma.type = VMAType::BackingMemory;
     final_vma.permissions = VMAPermission::ReadWrite;
@@ -220,6 +235,11 @@ ResultCode VMManager::UnmapRange(VAddr target, u64 size) {
     }
 
     ASSERT(FindVMA(target)->second.size >= size);
+
+    system.ArmInterface(0).UnmapMemory(target, size);
+    system.ArmInterface(1).UnmapMemory(target, size);
+    system.ArmInterface(2).UnmapMemory(target, size);
+    system.ArmInterface(3).UnmapMemory(target, size);
 
     return RESULT_SUCCESS;
 }
