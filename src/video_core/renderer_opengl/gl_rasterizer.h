@@ -58,6 +58,7 @@ public:
 
     void DrawArrays() override;
     void Clear() override;
+    void DispatchCompute(GPUVAddr code_addr) override;
     void FlushAll() override;
     void FlushRegion(CacheAddr addr, u64 size) override;
     void InvalidateRegion(CacheAddr addr, u64 size) override;
@@ -108,17 +109,30 @@ private:
         OpenGLState& current_state, bool using_color_fb = true, bool using_depth_fb = true,
         bool preserve_contents = true, std::optional<std::size_t> single_color_target = {});
 
+    void ConfigureClearFramebuffer(OpenGLState& current_state, bool using_color_fb,
+                                   bool using_depth_fb, bool using_stencil_fb);
+
     /// Configures the current constbuffers to use for the draw command.
     void SetupDrawConstBuffers(Tegra::Engines::Maxwell3D::Regs::ShaderStage stage,
                                const Shader& shader);
+
+    /// Configures the current constbuffers to use for the kernel invocation.
+    void SetupComputeConstBuffers(const Shader& kernel);
 
     /// Configures a constant buffer.
     void SetupConstBuffer(const Tegra::Engines::ConstBufferInfo& buffer,
                           const GLShader::ConstBufferEntry& entry);
 
     /// Configures the current global memory entries to use for the draw command.
-    void SetupGlobalRegions(Tegra::Engines::Maxwell3D::Regs::ShaderStage stage,
-                            const Shader& shader);
+    void SetupDrawGlobalMemory(Tegra::Engines::Maxwell3D::Regs::ShaderStage stage,
+                               const Shader& shader);
+
+    /// Configures the current global memory entries to use for the kernel invocation.
+    void SetupComputeGlobalMemory(const Shader& kernel);
+
+    /// Configures a constant buffer.
+    void SetupGlobalMemory(const GLShader::GlobalMemoryEntry& entry, GPUVAddr gpu_addr,
+                           std::size_t size);
 
     /// Configures the current textures to use for the draw command. Returns shaders texture buffer
     /// usage.
@@ -216,6 +230,7 @@ private:
     GLuint SetupVertexFormat();
 
     void SetupVertexBuffer(GLuint vao);
+    void SetupVertexInstances(GLuint vao);
 
     GLintptr SetupIndexBuffer();
 
@@ -225,6 +240,8 @@ private:
 
     enum class AccelDraw { Disabled, Arrays, Indexed };
     AccelDraw accelerate_draw = AccelDraw::Disabled;
+
+    OGLFramebuffer clear_framebuffer;
 
     using CachedPageMap = boost::icl::interval_map<u64, int>;
     CachedPageMap cached_pages;

@@ -90,11 +90,33 @@ public:
 
         enum class QuerySelect : u32 {
             Zero = 0,
+            TimeElapsed = 2,
+            TransformFeedbackPrimitivesGenerated = 11,
+            PrimitivesGenerated = 18,
+            SamplesPassed = 21,
+            TransformFeedbackUnknown = 26,
+        };
+
+        struct QueryCompare {
+            u32 initial_sequence;
+            u32 initial_mode;
+            u32 unknown1;
+            u32 unknown2;
+            u32 current_sequence;
+            u32 current_mode;
         };
 
         enum class QuerySyncCondition : u32 {
             NotEqual = 0,
             GreaterThan = 1,
+        };
+
+        enum class ConditionMode : u32 {
+            Never = 0,
+            Always = 1,
+            ResNonZero = 2,
+            Equal = 3,
+            NotEqual = 4,
         };
 
         enum class ShaderProgram : u32 {
@@ -815,7 +837,18 @@ public:
                     BitField<4, 1, u32> alpha_to_one;
                 } multisample_control;
 
-                INSERT_PADDING_WORDS(0x7);
+                INSERT_PADDING_WORDS(0x4);
+
+                struct {
+                    u32 address_high;
+                    u32 address_low;
+                    ConditionMode mode;
+
+                    GPUVAddr Address() const {
+                        return static_cast<GPUVAddr>((static_cast<GPUVAddr>(address_high) << 32) |
+                                                     address_low);
+                    }
+                } condition;
 
                 struct {
                     u32 tsc_address_high;
@@ -1124,23 +1157,77 @@ public:
 
     State state{};
 
-    struct DirtyFlags {
-        std::bitset<8> color_buffer{0xFF};
-        std::bitset<32> vertex_array{0xFFFFFFFF};
+    struct DirtyRegs {
+        static constexpr std::size_t NUM_REGS = 256;
+        union {
+            struct {
+                bool null_dirty;
 
-        bool vertex_attrib_format = true;
-        bool zeta_buffer = true;
-        bool shaders = true;
+                // Vertex Attributes
+                bool vertex_attrib_format;
+
+                // Vertex Arrays
+                std::array<bool, 32> vertex_array;
+
+                bool vertex_array_buffers;
+
+                // Vertex Instances
+                std::array<bool, 32> vertex_instance;
+
+                bool vertex_instances;
+
+                // Render Targets
+                std::array<bool, 8> render_target;
+                bool depth_buffer;
+
+                bool render_settings;
+
+                // Shaders
+                bool shaders;
+
+                // Rasterizer State
+                bool viewport;
+                bool clip_coefficient;
+                bool cull_mode;
+                bool primitive_restart;
+                bool depth_test;
+                bool stencil_test;
+                bool blend_state;
+                bool scissor_test;
+                bool transform_feedback;
+                bool color_mask;
+                bool polygon_offset;
+
+                // Complementary
+                bool viewport_transform;
+                bool screen_y_control;
+
+                bool memory_general;
+            };
+            std::array<bool, NUM_REGS> regs;
+        };
+
+        void ResetVertexArrays() {
+            vertex_array.fill(true);
+            vertex_array_buffers = true;
+        }
+
+        void ResetRenderTargets() {
+            depth_buffer = true;
+            render_target.fill(true);
+            render_settings = true;
+        }
 
         void OnMemoryWrite() {
-            zeta_buffer = true;
             shaders = true;
-            color_buffer.set();
-            vertex_array.set();
+            memory_general = true;
+            ResetRenderTargets();
+            ResetVertexArrays();
         }
-    };
 
-    DirtyFlags dirty_flags;
+    } dirty{};
+
+    std::array<u8, Regs::NUM_REGS> dirty_pointers{};
 
     /// Reads a register value located at the input method address
     u32 GetRegisterValue(u32 method) const;
@@ -1169,6 +1256,10 @@ public:
         return macro_memory;
     }
 
+    bool ShouldExecute() const {
+        return execute_on;
+    }
+
 private:
     void InitializeRegisterDefaults();
 
@@ -1192,13 +1283,26 @@ private:
     /// Interpreter for the macro codes uploaded to the GPU.
     MacroInterpreter macro_interpreter;
 
+    static constexpr u32 null_cb_data = 0xFFFFFFFF;
+    struct {
+        std::array<std::array<u32, 0x4000>, 16> buffer;
+        u32 current{null_cb_data};
+        u32 id{null_cb_data};
+        u32 start_pos{};
+        u32 counter{};
+    } cb_data_state;
+
     Upload::State upload_state;
+
+    bool execute_on{true};
 
     /// Retrieves information about a specific TIC entry from the TIC buffer.
     Texture::TICEntry GetTICEntry(u32 tic_index) const;
 
     /// Retrieves information about a specific TSC entry from the TSC buffer.
     Texture::TSCEntry GetTSCEntry(u32 tsc_index) const;
+
+    void InitDirtySettings();
 
     /**
      * Call a macro on this engine.
@@ -1219,11 +1323,16 @@ private:
     /// Handles a write to the QUERY_GET register.
     void ProcessQueryGet();
 
+    // Handles Conditional Rendering
+    void ProcessQueryCondition();
+
     /// Handles writes to syncing register.
     void ProcessSyncPoint();
 
     /// Handles a write to the CB_DATA[i] register.
+    void StartCBData(u32 method);
     void ProcessCBData(u32 value);
+    void FinishCBData();
 
     /// Handles a write to the CB_BIND register.
     void ProcessCBBind(Regs::ShaderStage stage);
@@ -1290,6 +1399,7 @@ ASSERT_REG_POSITION(clip_distance_enabled, 0x544);
 ASSERT_REG_POSITION(point_size, 0x546);
 ASSERT_REG_POSITION(zeta_enable, 0x54E);
 ASSERT_REG_POSITION(multisample_control, 0x54F);
+ASSERT_REG_POSITION(condition, 0x554);
 ASSERT_REG_POSITION(tsc, 0x557);
 ASSERT_REG_POSITION(polygon_offset_factor, 0x55b);
 ASSERT_REG_POSITION(tic, 0x55D);

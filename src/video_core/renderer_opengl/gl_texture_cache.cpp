@@ -137,7 +137,6 @@ constexpr std::array<FormatTuple, VideoCore::Surface::MaxPixelFormat> tex_format
 const FormatTuple& GetFormatTuple(PixelFormat pixel_format, ComponentType component_type) {
     ASSERT(static_cast<std::size_t>(pixel_format) < tex_format_tuples.size());
     const auto& format{tex_format_tuples[static_cast<std::size_t>(pixel_format)]};
-    ASSERT(component_type == format.component_type);
     return format;
 }
 
@@ -485,11 +484,15 @@ void TextureCacheOpenGL::ImageBlit(View& src_view, View& dst_view,
     const auto& dst_params{dst_view->GetSurfaceParams()};
 
     OpenGLState prev_state{OpenGLState::GetCurState()};
-    SCOPE_EXIT({ prev_state.Apply(); });
+    SCOPE_EXIT({
+        prev_state.AllDirty();
+        prev_state.Apply();
+    });
 
     OpenGLState state;
     state.draw.read_framebuffer = src_framebuffer.handle;
     state.draw.draw_framebuffer = dst_framebuffer.handle;
+    state.AllDirty();
     state.Apply();
 
     u32 buffers{};

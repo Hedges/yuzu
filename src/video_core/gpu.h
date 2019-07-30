@@ -5,8 +5,12 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <list>
 #include <memory>
+#include <mutex>
 #include "common/common_types.h"
+#include "core/hle/service/nvdrv/nvdata.h"
 #include "core/hle/service/nvflinger/buffer_queue.h"
 #include "video_core/dma_pusher.h"
 
@@ -127,7 +131,7 @@ class MemoryManager;
 
 class GPU {
 public:
-    explicit GPU(Core::System& system, VideoCore::RendererBase& renderer);
+    explicit GPU(Core::System& system, VideoCore::RendererBase& renderer, bool is_async);
 
     virtual ~GPU();
 
@@ -155,6 +159,12 @@ public:
     /// Returns a const reference to the Maxwell3D GPU engine.
     const Engines::Maxwell3D& Maxwell3D() const;
 
+    /// Returns a reference to the KeplerCompute GPU engine.
+    Engines::KeplerCompute& KeplerCompute();
+
+    /// Returns a reference to the KeplerCompute GPU engine.
+    const Engines::KeplerCompute& KeplerCompute() const;
+
     /// Returns a reference to the GPU memory manager.
     Tegra::MemoryManager& MemoryManager();
 
@@ -163,6 +173,22 @@ public:
 
     /// Returns a reference to the GPU DMA pusher.
     Tegra::DmaPusher& DmaPusher();
+
+    void IncrementSyncPoint(u32 syncpoint_id);
+
+    u32 GetSyncpointValue(u32 syncpoint_id) const;
+
+    void RegisterSyncptInterrupt(u32 syncpoint_id, u32 value);
+
+    bool CancelSyncptInterrupt(u32 syncpoint_id, u32 value);
+
+    std::unique_lock<std::mutex> LockSync() {
+        return std::unique_lock{sync_mutex};
+    }
+
+    bool IsAsync() const {
+        return is_async;
+    }
 
     /// Returns a const reference to the GPU DMA pusher.
     const Tegra::DmaPusher& DmaPusher() const;
@@ -194,7 +220,12 @@ public:
 
                 u32 semaphore_acquire;
                 u32 semaphore_release;
-                INSERT_PADDING_WORDS(0xE4);
+                u32 fence_value;
+                union {
+                    BitField<4, 4, u32> operation;
+                    BitField<8, 8, u32> id;
+                } fence_action;
+                INSERT_PADDING_WORDS(0xE2);
 
                 // Puller state
                 u32 acquire_mode;
@@ -228,6 +259,9 @@ public:
     /// Notify rasterizer that any caches of the specified region should be flushed and invalidated
     virtual void FlushAndInvalidateRegion(CacheAddr addr, u64 size) = 0;
 
+protected:
+    virtual void TriggerCpuInterrupt(u32 syncpoint_id, u32 value) const = 0;
+
 private:
     void ProcessBindMethod(const MethodCall& method_call);
     void ProcessSemaphoreTriggerMethod();
@@ -246,6 +280,7 @@ private:
 protected:
     std::unique_ptr<Tegra::DmaPusher> dma_pusher;
     VideoCore::RendererBase& renderer;
+    Core::System& system;
 
 private:
     std::unique_ptr<Tegra::MemoryManager> memory_manager;
@@ -262,6 +297,14 @@ private:
     std::unique_ptr<Engines::MaxwellDMA> maxwell_dma;
     /// Inline memory engine
     std::unique_ptr<Engines::KeplerMemory> kepler_memory;
+
+    std::array<std::atomic<u32>, Service::Nvidia::MaxSyncPoints> syncpoints{};
+
+    std::array<std::list<u32>, Service::Nvidia::MaxSyncPoints> syncpt_interrupts;
+
+    std::mutex sync_mutex;
+
+    const bool is_async;
 };
 
 #define ASSERT_REG_POSITION(field_name, position)                                                  \
@@ -274,6 +317,8 @@ ASSERT_REG_POSITION(semaphore_trigger, 0x7);
 ASSERT_REG_POSITION(reference_count, 0x14);
 ASSERT_REG_POSITION(semaphore_acquire, 0x1A);
 ASSERT_REG_POSITION(semaphore_release, 0x1B);
+ASSERT_REG_POSITION(fence_value, 0x1C);
+ASSERT_REG_POSITION(fence_action, 0x1D);
 
 ASSERT_REG_POSITION(acquire_mode, 0x100);
 ASSERT_REG_POSITION(acquire_source, 0x101);

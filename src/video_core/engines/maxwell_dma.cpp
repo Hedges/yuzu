@@ -38,7 +38,7 @@ void MaxwellDMA::CallMethod(const GPU::MethodCall& method_call) {
 }
 
 void MaxwellDMA::HandleCopy() {
-    LOG_WARNING(HW_GPU, "Requested a DMA copy");
+    LOG_TRACE(HW_GPU, "Requested a DMA copy");
 
     const GPUVAddr source = regs.src_address.Address();
     const GPUVAddr dest = regs.dst_address.Address();
@@ -58,7 +58,7 @@ void MaxwellDMA::HandleCopy() {
     }
 
     // All copies here update the main memory, so mark all rasterizer states as invalid.
-    system.GPU().Maxwell3D().dirty_flags.OnMemoryWrite();
+    system.GPU().Maxwell3D().dirty.OnMemoryWrite();
 
     if (regs.exec.is_dst_linear && regs.exec.is_src_linear) {
         // When the enable_2d bit is disabled, the copy is performed as if we were copying a 1D
