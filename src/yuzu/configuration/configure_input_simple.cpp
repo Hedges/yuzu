@@ -9,7 +9,7 @@
 #include "yuzu/configuration/configure_input.h"
 #include "yuzu/configuration/configure_input_player.h"
 #include "yuzu/configuration/configure_input_simple.h"
-#include "yuzu/ui_settings.h"
+#include "yuzu/uisettings.h"
 
 namespace {
 
@@ -101,7 +101,7 @@ ConfigureInputSimple::ConfigureInputSimple(QWidget* parent)
 
     connect(ui->profile_combobox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigureInputSimple::OnSelectProfile);
-    connect(ui->profile_configure, &QPushButton::pressed, this, &ConfigureInputSimple::OnConfigure);
+    connect(ui->profile_configure, &QPushButton::clicked, this, &ConfigureInputSimple::OnConfigure);
 
     LoadConfiguration();
 }
