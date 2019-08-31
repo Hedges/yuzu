@@ -301,7 +301,6 @@ void RendererOpenGL::ConfigureFramebufferTexture(TextureInfo& texture,
 
 void RendererOpenGL::DrawScreenTriangles(const ScreenInfo& screen_info, float x, float y, float w,
                                          float h) {
-
     const auto& texcoords = screen_info.display_texcoords;
     auto left = texcoords.left;
     auto right = texcoords.right;
