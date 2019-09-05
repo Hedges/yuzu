@@ -886,6 +886,7 @@ union Instruction {
     union {
         BitField<0, 3, u64> pred0;
         BitField<3, 3, u64> pred3;
+        BitField<6, 1, u64> neg_b;
         BitField<7, 1, u64> abs_a;
         BitField<39, 3, u64> pred39;
         BitField<42, 1, u64> neg_pred;
@@ -1019,7 +1020,6 @@ union Instruction {
     } iset;
 
     union {
-        BitField<41, 2, u64> selector; // i2i and i2f only
         BitField<45, 1, u64> negate_a;
         BitField<49, 1, u64> abs_a;
         BitField<10, 2, Register::Size> src_size;
@@ -1045,6 +1045,13 @@ union Instruction {
             }
         } f2f;
 
+        union {
+            BitField<41, 2, u64> selector;
+        } int_src;
+
+        union {
+            BitField<41, 1, u64> selector;
+        } float_src;
     } conversion;
 
     union {
