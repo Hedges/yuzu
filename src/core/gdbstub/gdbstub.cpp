@@ -190,11 +190,19 @@ std::vector<Module> modules;
 
 void RegisterModule(std::string name, VAddr beg, VAddr end, bool add_elf_ext) {
     Module module;
+    if (beg == end) {
+        return;
+    }
     if (add_elf_ext) {
         Common::SplitPath(name, nullptr, &module.name, nullptr);
         module.name += ".elf";
     } else {
         module.name = std::move(name);
+    }
+    for (const auto& old : modules) {
+        if (module.name == old.name) {
+            return;
+        }
     }
     module.beg = beg;
     module.end = end;
@@ -676,7 +684,7 @@ static void HandleQuery() {
         buffer += "<library-list>";
         for (const auto& module : modules) {
             buffer +=
-                fmt::format(R"*("<library name = "{}"><segment address = "0x{:x}"/></library>)*",
+                fmt::format(R"*(<library name = "{}"><segment address = "0x{:x}"/></library>)*",
                             module.name, module.beg);
         }
         buffer += "</library-list>";
@@ -974,7 +982,7 @@ static void ReadMemory() {
     }
 
     const auto& vm_manager = Core::CurrentProcess()->VMManager();
-    if(addr < vm_manager.GetAddressSpaceBaseAddress() ||
+    if (addr < vm_manager.GetAddressSpaceBaseAddress() ||
        addr >= vm_manager.GetAddressSpaceEndAddress())
     {
         return SendReply("E00");
