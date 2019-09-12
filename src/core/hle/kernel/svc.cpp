@@ -21,6 +21,7 @@
 #include "core/core.h"
 #include "core/core_cpu.h"
 #include "core/core_timing.h"
+#include "core/gdbstub/gdbstub.h"
 #include "core/hle/kernel/address_arbiter.h"
 #include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/client_session.h"
@@ -681,24 +682,32 @@ static void Break(Core::System& system, u32 reason, u64 info1, u64 info2) {
         static_cast<u32>(break_reason.break_type.Value()), break_reason.signal_debugger, info1,
         info2, has_dumped_buffer ? std::make_optional(debug_buffer) : std::nullopt);
 
-    if (!break_reason.signal_debugger) {
-        LOG_CRITICAL(
-            Debug_Emulated,
-            "Emulated program broke execution! reason=0x{:016X}, info1=0x{:016X}, info2=0x{:016X}",
-            reason, info1, info2);
-
-        handle_debug_buffer(info1, info2);
-
+    if (GDBStub::IsConnected()) {
         auto* const current_thread = system.CurrentScheduler().GetCurrentThread();
         const auto thread_processor_id = current_thread->GetProcessorID();
         system.ArmInterface(static_cast<std::size_t>(thread_processor_id)).LogBacktrace();
-        ASSERT(false);
+        GDBStub::Break();
+        GDBStub::SendTrap(current_thread, 5);
+    } else {
+        if (!break_reason.signal_debugger) {
+            LOG_CRITICAL(Debug_Emulated,
+                         "Emulated program broke execution! reason=0x{:016X}, info1=0x{:016X}, "
+                         "info2=0x{:016X}",
+                         reason, info1, info2);
 
-        system.Kernel().CurrentProcess()->PrepareForTermination();
+            handle_debug_buffer(info1, info2);
 
-        // Kill the current thread
-        current_thread->Stop();
-        system.PrepareReschedule();
+            auto* const current_thread = system.CurrentScheduler().GetCurrentThread();
+            const auto thread_processor_id = current_thread->GetProcessorID();
+            system.ArmInterface(static_cast<std::size_t>(thread_processor_id)).LogBacktrace();
+            ASSERT(false);
+
+            system.Kernel().CurrentProcess()->PrepareForTermination();
+
+            // Kill the current thread
+            current_thread->Stop();
+            system.PrepareReschedule();
+        }
     }
 }
 
