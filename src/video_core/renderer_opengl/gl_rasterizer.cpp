@@ -472,7 +472,7 @@ std::pair<bool, bool> RasterizerOpenGL::ConfigureFramebuffers(
         texture_cache.SetEmptyDepthBuffer();
     }
 
-    UNIMPLEMENTED_IF(regs.rt_separate_frag_data == 0);
+    //UNIMPLEMENTED_IF(regs.rt_separate_frag_data == 0);
 
     // Bind the framebuffer surfaces
     current_state.framebuffer_srgb.enabled = regs.framebuffer_srgb != 0;
