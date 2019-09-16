@@ -370,8 +370,8 @@ private:
         u32 binding = const_buffers_base_binding;
         for (const auto& entry : ir.GetConstantBuffers()) {
             const auto [index, size] = entry;
-            const Id type =
-                device.IsExtScalarBlockLayoutSupported() ? t_cbuf_scalar_ubo : t_cbuf_std140_ubo;
+            const Id type = device.IsKhrUniformBufferStandardLayoutSupported() ? t_cbuf_scalar_ubo
+                                                                               : t_cbuf_std140_ubo;
             const Id id = OpVariable(type, spv::StorageClass::Uniform);
             AddGlobalVariable(Name(id, fmt::format("cbuf_{}", index)));
 
@@ -565,7 +565,7 @@ private:
             const Id buffer_id = constant_buffers.at(cbuf->GetIndex());
 
             Id pointer{};
-            if (device.IsExtScalarBlockLayoutSupported()) {
+            if (device.IsKhrUniformBufferStandardLayoutSupported()) {
                 const Id buffer_offset = Emit(OpShiftRightLogical(
                     t_uint, BitcastTo<Type::Uint>(Visit(offset)), Constant(t_uint, 2u)));
                 pointer = Emit(
@@ -940,6 +940,41 @@ private:
     }
 
     Id ImageStore(Operation operation) {
+        UNIMPLEMENTED();
+        return {};
+    }
+
+    Id AtomicImageAdd(Operation operation) {
+        UNIMPLEMENTED();
+        return {};
+    }
+
+    Id AtomicImageMin(Operation operation) {
+        UNIMPLEMENTED();
+        return {};
+    }
+
+    Id AtomicImageMax(Operation operation) {
+        UNIMPLEMENTED();
+        return {};
+    }
+
+    Id AtomicImageAnd(Operation operation) {
+        UNIMPLEMENTED();
+        return {};
+    }
+
+    Id AtomicImageOr(Operation operation) {
+        UNIMPLEMENTED();
+        return {};
+    }
+
+    Id AtomicImageXor(Operation operation) {
+        UNIMPLEMENTED();
+        return {};
+    }
+
+    Id AtomicImageExchange(Operation operation) {
         UNIMPLEMENTED();
         return {};
     }
@@ -1366,6 +1401,13 @@ private:
         &SPIRVDecompiler::TexelFetch,
 
         &SPIRVDecompiler::ImageStore,
+        &SPIRVDecompiler::AtomicImageAdd,
+        &SPIRVDecompiler::AtomicImageMin,
+        &SPIRVDecompiler::AtomicImageMax,
+        &SPIRVDecompiler::AtomicImageAnd,
+        &SPIRVDecompiler::AtomicImageOr,
+        &SPIRVDecompiler::AtomicImageXor,
+        &SPIRVDecompiler::AtomicImageExchange,
 
         &SPIRVDecompiler::Branch,
         &SPIRVDecompiler::BranchIndirect,
