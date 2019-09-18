@@ -186,11 +186,11 @@ void ARM_Unicorn::ExecuteInstructions(int num_instructions) {
 
         Kernel::Thread* thread = Kernel::GetCurrentThread();
         SaveContext(thread->GetContext());
-        if (last_bkpt_hit || GDBStub::IsMemoryBreak() || GDBStub::GetCpuStepFlag()) {
+        if (last_bkpt_hit) {
             last_bkpt_hit = false;
             GDBStub::Break();
-            GDBStub::SendTrap(thread, 5);
         }
+        GDBStub::SendTrap(thread, 5);
     }
 }
 

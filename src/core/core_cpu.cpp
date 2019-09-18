@@ -83,7 +83,8 @@ void Cpu::RunLoop(bool tight_loop) {
 
     // If we don't have a currently active thread then don't execute instructions,
     // instead advance to the next event and try to yield to the next thread
-    if (Kernel::GetCurrentThread() == nullptr) {
+    auto sched_thread = Kernel::GetCurrentThread();
+    if (sched_thread == nullptr) {
         LOG_TRACE(Core, "Core-{} idling", core_index);
 
         if (IsMainCore()) {
@@ -93,7 +94,20 @@ void Cpu::RunLoop(bool tight_loop) {
         }
 
         PrepareReschedule();
+    } else if (GDBStub::GetCpuHaltFlag()) {
+        // A program break was issued to GDB which, by default, (in full-stop mode)
+        // halts the CPU completely. No thread may run until further notice.
+        // It's similar to pausing the emulated system, but it keeps GDBStub active.
+        //
+        // HACK: Don't advance idle-cycles here. If we do, games seem likely to deadlock.
+        return;
     } else {
+        if (GDBStub::GetThreadStepFlag(sched_thread)) {
+            // GDBStub::Halt();
+            GDBStub::Break();
+            tight_loop = false;
+        }
+
         if (IsMainCore()) {
             core_timing.Advance();
         }

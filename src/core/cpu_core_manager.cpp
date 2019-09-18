@@ -108,19 +108,7 @@ void CpuCoreManager::RunLoop(bool tight_loop) {
     // Update thread_to_cpu in case Core 0 is run from a different host thread
     thread_to_cpu[std::this_thread::get_id()] = cores[0].get();
 
-    if (GDBStub::IsServerEnabled()) {
-        GDBStub::HandlePacket();
-
-        // If the loop is halted and we want to step, use a tiny (1) number of instructions to
-        // execute. Otherwise, get out of the loop function.
-        if (GDBStub::GetCpuHaltFlag()) {
-            if (GDBStub::GetCpuStepFlag()) {
-                tight_loop = false;
-            } else {
-                return;
-            }
-        }
-    }
+    GDBStub::HandlePacket();
 
     for (active_core = 0; active_core < NUM_CPU_CORES; ++active_core) {
         cores[active_core]->RunLoop(tight_loop);
@@ -128,10 +116,6 @@ void CpuCoreManager::RunLoop(bool tight_loop) {
             // Cores 1-3 are run on other threads in this mode
             break;
         }
-    }
-
-    if (GDBStub::IsServerEnabled()) {
-        GDBStub::SetCpuStepFlag(false);
     }
 }
 
