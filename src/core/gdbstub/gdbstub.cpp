@@ -190,9 +190,6 @@ std::vector<Module> modules;
 
 void RegisterModule(std::string name, VAddr beg, VAddr end, bool add_elf_ext) {
     Module module;
-    if (beg == end) {
-        return;
-    }
     if (add_elf_ext) {
         Common::SplitPath(name, nullptr, &module.name, nullptr);
         module.name += ".elf";

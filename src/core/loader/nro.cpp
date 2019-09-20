@@ -191,7 +191,7 @@ static bool LoadNroImpl(Kernel::Process& process, const std::vector<u8>& data,
     process.LoadModule(std::move(codeset), load_base);
 
     // Register module with GDBStub
-    GDBStub::RegisterModule(name, load_base, load_base);
+    GDBStub::RegisterModule(name, load_base, load_base + program_image.size());
 
     return true;
 }
