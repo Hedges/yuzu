@@ -111,7 +111,8 @@ FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
 }
 struct System::Impl {
     explicit Impl(System& system)
-        : kernel{system}, cpu_core_manager{system}, applet_manager{system}, reporter{system} {}
+        : kernel{system}, fs_controller{system}, cpu_core_manager{system},
+          applet_manager{system}, reporter{system} {}
 
     Cpu& CurrentCpuCore() {
         return cpu_core_manager.GetCurrentCore();
@@ -339,6 +340,7 @@ struct System::Impl {
 
     std::unique_ptr<Memory::CheatEngine> cheat_engine;
     std::unique_ptr<Tools::Freezer> memory_freezer;
+    std::array<u8, 0x20> build_id{};
 
     /// Frontend applets
     Service::AM::Applets::AppletManager applet_manager;
@@ -638,6 +640,14 @@ void System::SetExitLock(bool locked) {
 
 bool System::GetExitLock() const {
     return impl->exit_lock;
+}
+
+void System::SetCurrentProcessBuildID(const CurrentBuildProcessID& id) {
+    impl->build_id = id;
+}
+
+const System::CurrentBuildProcessID& System::GetCurrentProcessBuildID() const {
+    return impl->build_id;
 }
 
 System::ResultStatus System::Init(Frontend::EmuWindow& emu_window) {
