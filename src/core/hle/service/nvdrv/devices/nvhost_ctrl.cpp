@@ -39,9 +39,9 @@ u32 nvhost_ctrl::ioctl(Ioctl command, const std::vector<u8>& input, const std::v
     case IoctlCommand::IocCtrlEventSignalCommand:
         return IocCtrlEventSignal(input, output);
     default:
-    // UNIMPLEMENTED_MSG("Unimplemented ioctl");
-    return 0;
-}
+        //UNIMPLEMENTED_MSG("Unimplemented ioctl");
+        return 0;
+    }
 }
 
 u32 nvhost_ctrl::NvOsGetConfigU32(const std::vector<u8>& input, std::vector<u8>& output) {
