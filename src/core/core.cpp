@@ -112,8 +112,8 @@ FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
 }
 struct System::Impl {
     explicit Impl(System& system)
-        : kernel{system}, fs_controller{system}, cpu_core_manager{system},
-          applet_manager{system}, reporter{system} {}
+        : kernel{system}, fs_controller{system}, cpu_core_manager{system}, reporter{system},
+          applet_manager{system} {}
 
     Cpu& CurrentCpuCore() {
         return cpu_core_manager.GetCurrentCore();
@@ -240,16 +240,18 @@ struct System::Impl {
     }
 
     void Shutdown() {
-        // Log last frame performance stats
-        const auto perf_results = GetAndResetPerfStats();
-        telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_EmulationSpeed",
-                                    perf_results.emulation_speed * 100.0);
-        telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_Framerate",
-                                    perf_results.game_fps);
-        telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_Frametime",
-                                    perf_results.frametime * 1000.0);
-        telemetry_session->AddField(Telemetry::FieldType::Performance, "Mean_Frametime_MS",
-                                    perf_stats->GetMeanFrametime());
+        // Log last frame performance stats if game was loded
+        if (perf_stats) {
+           const auto perf_results = GetAndResetPerfStats();
+           telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_EmulationSpeed",
+                                       perf_results.emulation_speed * 100.0);
+           telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_Framerate",
+                                       perf_results.game_fps);
+           telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_Frametime",
+                                       perf_results.frametime * 1000.0);
+           telemetry_session->AddField(Telemetry::FieldType::Performance, "Mean_Frametime_MS",
+                                       perf_stats->GetMeanFrametime());
+        }
 
         lm_manager.Flush();
 
