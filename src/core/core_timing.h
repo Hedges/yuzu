@@ -7,7 +7,6 @@
 #include <chrono>
 #include <functional>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -105,19 +104,7 @@ public:
 
     std::chrono::microseconds GetGlobalTimeUs() const;
 
-    void ResetRun();
-
-    s64 GetDowncount() const;
-
-    void SwitchContext(u64 new_context) {
-        current_context = new_context;
-    }
-
-    bool CanCurrentContextRun() const {
-        return time_slice[current_context] > 0;
-    }
-
-    std::optional<u64> NextAvailableCore(const s64 needed_ticks) const;
+    int GetDowncount() const;
 
 private:
     struct Event;
@@ -125,16 +112,10 @@ private:
     /// Clear all pending events. This should ONLY be done on exit.
     void ClearPendingEvents();
 
-    static constexpr u64 num_cpu_cores = 4;
-
     s64 global_timer = 0;
     s64 idled_cycles = 0;
-    s64 slice_length = 0;
-    u64 accumulated_ticks = 0;
-    std::array<s64, num_cpu_cores> downcounts{};
-    // Slice of time assigned to each core per run.
-    std::array<s64, num_cpu_cores> time_slice{};
-    u64 current_context = 0;
+    int slice_length = 0;
+    int downcount = 0;
 
     // Are we in a function that has been called from Advance()
     // If events are scheduled from a function that gets called from Advance(),

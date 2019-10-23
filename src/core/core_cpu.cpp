@@ -86,8 +86,13 @@ void Cpu::RunLoop(bool tight_loop) {
     auto sched_thread = Kernel::GetCurrentThread();
     if (sched_thread == nullptr) {
         LOG_TRACE(Core, "Core-{} idling", core_index);
-        core_timing.Idle();
-        core_timing.Advance();
+
+        if (IsMainCore()) {
+            // TODO(Subv): Only let CoreTiming idle if all 4 cores are idling.
+            core_timing.Idle();
+            core_timing.Advance();
+        }
+
         PrepareReschedule();
     } else if (GDBStub::GetCpuHaltFlag()) {
         // A program break was issued to GDB which, by default, (in full-stop mode)
@@ -112,7 +117,6 @@ void Cpu::RunLoop(bool tight_loop) {
         } else {
             arm_interface->Step();
         }
-        core_timing.Advance();
     }
 
     Reschedule();
