@@ -101,7 +101,8 @@ void Maxwell3D::InitializeRegisterDefaults() {
 #define DIRTY_REGS_POS(field_name) (offsetof(Maxwell3D::DirtyRegs, field_name))
 
 void Maxwell3D::InitDirtySettings() {
-    const auto set_block = [this](const u32 start, const u32 range, const u8 position) {
+    const auto set_block = [this](const std::size_t start, const std::size_t range,
+                                  const u8 position) {
         const auto start_itr = dirty_pointers.begin() + start;
         const auto end_itr = start_itr + range;
         std::fill(start_itr, end_itr, position);
@@ -478,7 +479,7 @@ void Maxwell3D::CallMethodFromMME(const GPU::MethodCall& method_call) {
 }
 
 void Maxwell3D::FlushMMEInlineDraw() {
-    LOG_DEBUG(HW_GPU, "called, topology={}, count={}", static_cast<u32>(regs.draw.topology.Value()),
+    LOG_TRACE(HW_GPU, "called, topology={}, count={}", static_cast<u32>(regs.draw.topology.Value()),
               regs.vertex_buffer.count);
     ASSERT_MSG(!(regs.index_array.count && regs.vertex_buffer.count), "Both indexed and direct?");
     ASSERT(mme_draw.instance_count == mme_draw.gl_end_count);
