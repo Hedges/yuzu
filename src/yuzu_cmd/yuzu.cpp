@@ -28,19 +28,24 @@
 #include "core/loader/loader.h"
 #include "core/settings.h"
 #include "core/telemetry_session.h"
+#include "video_core/renderer_base.h"
 #include "yuzu_cmd/config.h"
 #include "yuzu_cmd/emu_window/emu_window_sdl2.h"
+#include "yuzu_cmd/emu_window/emu_window_sdl2_gl.h"
 
-#include <getopt.h>
-#ifndef _MSC_VER
-#include <unistd.h>
-#endif
+#include "core/file_sys/registered_cache.h"
 
 #ifdef _WIN32
 // windows.h needs to be included before shellapi.h
 #include <windows.h>
 
 #include <shellapi.h>
+#endif
+
+#undef _UNICODE
+#include <getopt.h>
+#ifndef _MSC_VER
+#include <unistd.h>
 #endif
 
 #ifdef _WIN32
@@ -113,9 +118,9 @@ int main(int argc, char** argv) {
     };
 
     while (optind < argc) {
-        char arg = getopt_long(argc, argv, "g:fhvp::", long_options, &option_index);
+        int arg = getopt_long(argc, argv, "g:fhvp::", long_options, &option_index);
         if (arg != -1) {
-            switch (arg) {
+            switch (static_cast<char>(arg)) {
             case 'g':
                 errno = 0;
                 gdb_port = strtoul(optarg, &endarg, 0);
@@ -169,7 +174,7 @@ int main(int argc, char** argv) {
     Settings::values.use_gdbstub = use_gdbstub;
     Settings::Apply();
 
-    std::unique_ptr<EmuWindow_SDL2> emu_window{std::make_unique<EmuWindow_SDL2>(fullscreen)};
+    std::unique_ptr<EmuWindow_SDL2> emu_window{std::make_unique<EmuWindow_SDL2_GL>(fullscreen)};
 
     if (!Settings::values.use_multi_core) {
         // Single core mode must acquire OpenGL context for entire emulation session
@@ -177,25 +182,21 @@ int main(int argc, char** argv) {
     }
 
     Core::System& system{Core::System::GetInstance()};
+    system.SetContentProvider(std::make_unique<FileSys::ContentProviderUnion>());
     system.SetFilesystem(std::make_shared<FileSys::RealVfsFilesystem>());
-    Service::FileSystem::CreateFactories(*system.GetFilesystem());
-
-    SCOPE_EXIT({ system.Shutdown(); });
+    system.GetFileSystemController().CreateFactories(*system.GetFilesystem());
 
     const Core::System::ResultStatus load_result{system.Load(*emu_window, filepath)};
 
     switch (load_result) {
     case Core::System::ResultStatus::ErrorGetLoader:
-        LOG_CRITICAL(Frontend, "Failed to obtain loader for %s!", filepath.c_str());
+        LOG_CRITICAL(Frontend, "Failed to obtain loader for {}!", filepath);
         return -1;
     case Core::System::ResultStatus::ErrorLoader:
         LOG_CRITICAL(Frontend, "Failed to load ROM!");
         return -1;
     case Core::System::ResultStatus::ErrorNotInitialized:
         LOG_CRITICAL(Frontend, "CPUCore not initialized");
-        return -1;
-    case Core::System::ResultStatus::ErrorSystemMode:
-        LOG_CRITICAL(Frontend, "Failed to determine system mode!");
         return -1;
     case Core::System::ResultStatus::ErrorVideoCore:
         LOG_CRITICAL(Frontend, "Failed to initialize VideoCore!");
@@ -215,11 +216,16 @@ int main(int argc, char** argv) {
         }
     }
 
-    Core::Telemetry().AddField(Telemetry::FieldType::App, "Frontend", "SDL");
+    system.TelemetrySession().AddField(Telemetry::FieldType::App, "Frontend", "SDL");
+
+    emu_window->MakeCurrent();
+    system.Renderer().Rasterizer().LoadDiskResources();
 
     while (emu_window->IsOpen()) {
         system.RunLoop();
     }
+
+    system.Shutdown();
 
     detached_tasks.WaitForAllTasks();
     return 0;

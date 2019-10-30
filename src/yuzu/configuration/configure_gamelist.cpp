@@ -9,23 +9,23 @@
 #include "core/settings.h"
 #include "ui_configure_gamelist.h"
 #include "yuzu/configuration/configure_gamelist.h"
-#include "yuzu/ui_settings.h"
+#include "yuzu/uisettings.h"
 
 namespace {
-constexpr std::array<std::pair<u32, const char*>, 5> default_icon_sizes{{
+constexpr std::array default_icon_sizes{
     std::make_pair(0, QT_TR_NOOP("None")),
     std::make_pair(32, QT_TR_NOOP("Small (32x32)")),
     std::make_pair(64, QT_TR_NOOP("Standard (64x64)")),
     std::make_pair(128, QT_TR_NOOP("Large (128x128)")),
     std::make_pair(256, QT_TR_NOOP("Full Size (256x256)")),
-}};
+};
 
-constexpr std::array<const char*, 4> row_text_names{{
+constexpr std::array row_text_names{
     QT_TR_NOOP("Filename"),
     QT_TR_NOOP("Filetype"),
     QT_TR_NOOP("Title ID"),
     QT_TR_NOOP("Title Name"),
-}};
+};
 } // Anonymous namespace
 
 ConfigureGameList::ConfigureGameList(QWidget* parent)
@@ -35,7 +35,7 @@ ConfigureGameList::ConfigureGameList(QWidget* parent)
     InitializeIconSizeComboBox();
     InitializeRowComboBoxes();
 
-    this->setConfiguration();
+    SetConfiguration();
 
     // Force game list reload if any of the relevant settings are changed.
     connect(ui->show_unknown, &QCheckBox::stateChanged, this,
@@ -50,7 +50,7 @@ ConfigureGameList::ConfigureGameList(QWidget* parent)
 
 ConfigureGameList::~ConfigureGameList() = default;
 
-void ConfigureGameList::applyConfiguration() {
+void ConfigureGameList::ApplyConfiguration() {
     UISettings::values.show_unknown = ui->show_unknown->isChecked();
     UISettings::values.show_add_ons = ui->show_add_ons->isChecked();
     UISettings::values.icon_size = ui->icon_size_combobox->currentData().toUInt();
@@ -63,7 +63,7 @@ void ConfigureGameList::RequestGameListUpdate() {
     UISettings::values.is_game_list_reload_pending.exchange(true);
 }
 
-void ConfigureGameList::setConfiguration() {
+void ConfigureGameList::SetConfiguration() {
     ui->show_unknown->setChecked(UISettings::values.show_unknown);
     ui->show_add_ons->setChecked(UISettings::values.show_add_ons);
     ui->icon_size_combobox->setCurrentIndex(
@@ -77,7 +77,6 @@ void ConfigureGameList::setConfiguration() {
 void ConfigureGameList::changeEvent(QEvent* event) {
     if (event->type() == QEvent::LanguageChange) {
         RetranslateUI();
-        return;
     }
 
     QWidget::changeEvent(event);
@@ -100,13 +99,15 @@ void ConfigureGameList::RetranslateUI() {
 
 void ConfigureGameList::InitializeIconSizeComboBox() {
     for (const auto& size : default_icon_sizes) {
-        ui->icon_size_combobox->addItem(size.second, size.first);
+        ui->icon_size_combobox->addItem(QString::fromUtf8(size.second), size.first);
     }
 }
 
 void ConfigureGameList::InitializeRowComboBoxes() {
     for (std::size_t i = 0; i < row_text_names.size(); ++i) {
-        ui->row_1_text_combobox->addItem(row_text_names[i], QVariant::fromValue(i));
-        ui->row_2_text_combobox->addItem(row_text_names[i], QVariant::fromValue(i));
+        const QString row_text_name = QString::fromUtf8(row_text_names[i]);
+
+        ui->row_1_text_combobox->addItem(row_text_name, QVariant::fromValue(i));
+        ui->row_2_text_combobox->addItem(row_text_name, QVariant::fromValue(i));
     }
 }

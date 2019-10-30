@@ -2,8 +2,13 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <queue>
 #include "common/logging/log.h"
+#include "common/uuid.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/readable_event.h"
+#include "core/hle/kernel/writable_event.h"
+#include "core/hle/service/friend/errors.h"
 #include "core/hle/service/friend/friend.h"
 #include "core/hle/service/friend/interface.h"
 
@@ -12,11 +17,12 @@ namespace Service::Friend {
 class IFriendService final : public ServiceFramework<IFriendService> {
 public:
     IFriendService() : ServiceFramework("IFriendService") {
+        // clang-format off
         static const FunctionInfo functions[] = {
             {0, nullptr, "GetCompletionEvent"},
             {1, nullptr, "Cancel"},
             {10100, nullptr, "GetFriendListIds"},
-            {10101, nullptr, "GetFriendList"},
+            {10101, &IFriendService::GetFriendList, "GetFriendList"},
             {10102, nullptr, "UpdateFriendInfo"},
             {10110, nullptr, "GetFriendProfileImage"},
             {10200, nullptr, "SendFriendRequestForApplication"},
@@ -24,8 +30,7 @@ public:
             {10400, nullptr, "GetBlockedUserListIds"},
             {10500, nullptr, "GetProfileList"},
             {10600, nullptr, "DeclareOpenOnlinePlaySession"},
-            {10601, &IFriendService::DeclareCloseOnlinePlaySession,
-             "DeclareCloseOnlinePlaySession"},
+            {10601, &IFriendService::DeclareCloseOnlinePlaySession, "DeclareCloseOnlinePlaySession"},
             {10610, &IFriendService::UpdateUserPresence, "UpdateUserPresence"},
             {10700, nullptr, "GetPlayHistoryRegistrationKey"},
             {10701, nullptr, "GetPlayHistoryRegistrationKeyWithNetworkServiceAccountId"},
@@ -88,11 +93,29 @@ public:
             {30830, nullptr, "ClearPlayLog"},
             {49900, nullptr, "DeleteNetworkServiceAccountCache"},
         };
+        // clang-format on
 
         RegisterHandlers(functions);
     }
 
 private:
+    enum class PresenceFilter : u32 {
+        None = 0,
+        Online = 1,
+        OnlinePlay = 2,
+        OnlineOrOnlinePlay = 3,
+    };
+
+    struct SizedFriendFilter {
+        PresenceFilter presence;
+        u8 is_favorite;
+        u8 same_app;
+        u8 same_app_played;
+        u8 arbitary_app_played;
+        u64 group_id;
+    };
+    static_assert(sizeof(SizedFriendFilter) == 0x10, "SizedFriendFilter is an invalid size");
+
     void DeclareCloseOnlinePlaySession(Kernel::HLERequestContext& ctx) {
         // Stub used by Splatoon 2
         LOG_WARNING(Service_ACC, "(STUBBED) called");
@@ -106,6 +129,117 @@ private:
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
     }
+
+    void GetFriendList(Kernel::HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto friend_offset = rp.Pop<u32>();
+        const auto uuid = rp.PopRaw<Common::UUID>();
+        [[maybe_unused]] const auto filter = rp.PopRaw<SizedFriendFilter>();
+        const auto pid = rp.Pop<u64>();
+        LOG_WARNING(Service_ACC, "(STUBBED) called, offset={}, uuid={}, pid={}", friend_offset,
+                    uuid.Format(), pid);
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(RESULT_SUCCESS);
+
+        rb.Push<u32>(0); // Friend count
+        // TODO(ogniK): Return a buffer of u64s which are the "NetworkServiceAccountId"
+    }
+};
+
+class INotificationService final : public ServiceFramework<INotificationService> {
+public:
+    INotificationService(Common::UUID uuid, Core::System& system)
+        : ServiceFramework("INotificationService"), uuid(uuid) {
+        // clang-format off
+        static const FunctionInfo functions[] = {
+            {0, &INotificationService::GetEvent, "GetEvent"},
+            {1, &INotificationService::Clear, "Clear"},
+            {2, &INotificationService::Pop, "Pop"}
+        };
+        // clang-format on
+
+        RegisterHandlers(functions);
+
+        notification_event = Kernel::WritableEvent::CreateEventPair(
+            system.Kernel(), Kernel::ResetType::Manual, "INotificationService:NotifyEvent");
+    }
+
+private:
+    void GetEvent(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+
+        IPC::ResponseBuilder rb{ctx, 2, 1};
+        rb.Push(RESULT_SUCCESS);
+        rb.PushCopyObjects(notification_event.readable);
+    }
+
+    void Clear(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+        while (!notifications.empty()) {
+            notifications.pop();
+        }
+        std::memset(&states, 0, sizeof(States));
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
+
+    void Pop(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+
+        if (notifications.empty()) {
+            LOG_ERROR(Service_ACC, "No notifications in queue!");
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ERR_NO_NOTIFICATIONS);
+            return;
+        }
+
+        const auto notification = notifications.front();
+        notifications.pop();
+
+        switch (notification.notification_type) {
+        case NotificationTypes::HasUpdatedFriendsList:
+            states.has_updated_friends = false;
+            break;
+        case NotificationTypes::HasReceivedFriendRequest:
+            states.has_received_friend_request = false;
+            break;
+        default:
+            // HOS seems not have an error case for an unknown notification
+            LOG_WARNING(Service_ACC, "Unknown notification {:08X}",
+                        static_cast<u32>(notification.notification_type));
+            break;
+        }
+
+        IPC::ResponseBuilder rb{ctx, 6};
+        rb.Push(RESULT_SUCCESS);
+        rb.PushRaw<SizedNotificationInfo>(notification);
+    }
+
+    enum class NotificationTypes : u32 {
+        HasUpdatedFriendsList = 0x65,
+        HasReceivedFriendRequest = 0x1
+    };
+
+    struct SizedNotificationInfo {
+        NotificationTypes notification_type;
+        INSERT_PADDING_WORDS(
+            1); // TODO(ogniK): This doesn't seem to be used within any IPC returns as of now
+        u64_le account_id;
+    };
+    static_assert(sizeof(SizedNotificationInfo) == 0x10,
+                  "SizedNotificationInfo is an incorrect size");
+
+    struct States {
+        bool has_updated_friends;
+        bool has_received_friend_request;
+    };
+
+    Common::UUID uuid;
+    Kernel::EventPair notification_event;
+    std::queue<SizedNotificationInfo> notifications;
+    States states{};
 };
 
 void Module::Interface::CreateFriendService(Kernel::HLERequestContext& ctx) {
@@ -115,18 +249,29 @@ void Module::Interface::CreateFriendService(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service_ACC, "called");
 }
 
-Module::Interface::Interface(std::shared_ptr<Module> module, const char* name)
-    : ServiceFramework(name), module(std::move(module)) {}
+void Module::Interface::CreateNotificationService(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    auto uuid = rp.PopRaw<Common::UUID>();
+
+    LOG_DEBUG(Service_ACC, "called, uuid={}", uuid.Format());
+
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(RESULT_SUCCESS);
+    rb.PushIpcInterface<INotificationService>(uuid, system);
+}
+
+Module::Interface::Interface(std::shared_ptr<Module> module, Core::System& system, const char* name)
+    : ServiceFramework(name), module(std::move(module)), system(system) {}
 
 Module::Interface::~Interface() = default;
 
-void InstallInterfaces(SM::ServiceManager& service_manager) {
+void InstallInterfaces(SM::ServiceManager& service_manager, Core::System& system) {
     auto module = std::make_shared<Module>();
-    std::make_shared<Friend>(module, "friend:a")->InstallAsService(service_manager);
-    std::make_shared<Friend>(module, "friend:m")->InstallAsService(service_manager);
-    std::make_shared<Friend>(module, "friend:s")->InstallAsService(service_manager);
-    std::make_shared<Friend>(module, "friend:u")->InstallAsService(service_manager);
-    std::make_shared<Friend>(module, "friend:v")->InstallAsService(service_manager);
+    std::make_shared<Friend>(module, system, "friend:a")->InstallAsService(service_manager);
+    std::make_shared<Friend>(module, system, "friend:m")->InstallAsService(service_manager);
+    std::make_shared<Friend>(module, system, "friend:s")->InstallAsService(service_manager);
+    std::make_shared<Friend>(module, system, "friend:u")->InstallAsService(service_manager);
+    std::make_shared<Friend>(module, system, "friend:v")->InstallAsService(service_manager);
 }
 
 } // namespace Service::Friend

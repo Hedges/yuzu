@@ -13,10 +13,12 @@ namespace Service::Nvidia::Devices {
 
 class nvhost_vic final : public nvdevice {
 public:
-    nvhost_vic();
+    explicit nvhost_vic(Core::System& system);
     ~nvhost_vic() override;
 
-    u32 ioctl(Ioctl command, const std::vector<u8>& input, std::vector<u8>& output) override;
+    u32 ioctl(Ioctl command, const std::vector<u8>& input, const std::vector<u8>& input2,
+              std::vector<u8>& output, std::vector<u8>& output2, IoctlCtrl& ctrl,
+              IoctlVersion version) override;
 
 private:
     enum class IoctlCommand : u32_le {

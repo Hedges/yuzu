@@ -9,7 +9,6 @@
 
 #include "common/bit_field.h"
 #include "common/common_types.h"
-#include "video_core/memory_manager.h"
 
 namespace Tegra {
 
@@ -75,6 +74,8 @@ private:
 
     GPU& gpu;
 
+    std::vector<CommandHeader> command_headers; ///< Buffer for list of commands fetched at once
+
     std::queue<CommandList> dma_pushbuffer; ///< Queue of command lists to be processed
     std::size_t dma_pushbuffer_subindex{};  ///< Index within a command list within the pushbuffer
 
@@ -83,17 +84,14 @@ private:
         u32 subchannel;        ///< Current subchannel
         u32 method_count;      ///< Current method count
         u32 length_pending;    ///< Large NI command length pending
-        bool non_incrementing; ///< Current command’s NI flag
+        bool non_incrementing; ///< Current command's NI flag
     };
 
     DmaState dma_state{};
     bool dma_increment_once{};
 
-    GPUVAddr dma_put{};   ///< pushbuffer current end address
-    GPUVAddr dma_get{};   ///< pushbuffer current read address
     GPUVAddr dma_mget{};  ///< main pushbuffer last read address
     bool ib_enable{true}; ///< IB mode enabled
-    bool non_main{};      ///< non-main pushbuffer active
 };
 
 } // namespace Tegra

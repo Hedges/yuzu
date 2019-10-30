@@ -9,16 +9,22 @@
 #include "core/hle/service/service.h"
 
 namespace Service {
+namespace FileSystem {
+class FileSystemController;
+}
+
 namespace NVFlinger {
 class NVFlinger;
 }
 
 namespace AM {
 
+class AppletMessageQueue;
+
 class AppletAE final : public ServiceFramework<AppletAE> {
 public:
     explicit AppletAE(std::shared_ptr<NVFlinger::NVFlinger> nvflinger,
-                      std::shared_ptr<AppletMessageQueue> msg_queue);
+                      std::shared_ptr<AppletMessageQueue> msg_queue, Core::System& system);
     ~AppletAE() override;
 
     const std::shared_ptr<AppletMessageQueue>& GetMessageQueue() const;
@@ -30,6 +36,7 @@ private:
 
     std::shared_ptr<NVFlinger::NVFlinger> nvflinger;
     std::shared_ptr<AppletMessageQueue> msg_queue;
+    Core::System& system;
 };
 
 } // namespace AM

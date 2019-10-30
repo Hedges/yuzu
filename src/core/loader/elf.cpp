@@ -9,6 +9,7 @@
 #include "common/common_types.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
+#include "core/hle/kernel/code_set.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/vm_manager.h"
 #include "core/loader/elf.h"
@@ -294,7 +295,7 @@ Kernel::CodeSet ElfReader::LoadInto(VAddr vaddr) {
         }
     }
 
-    std::vector<u8> program_image(total_image_size);
+    Kernel::PhysicalMemory program_image(total_image_size);
     std::size_t current_image_position = 0;
 
     Kernel::CodeSet codeset;
@@ -340,7 +341,7 @@ Kernel::CodeSet ElfReader::LoadInto(VAddr vaddr) {
     }
 
     codeset.entrypoint = base_addr + header->e_entry;
-    codeset.memory = std::make_shared<std::vector<u8>>(std::move(program_image));
+    codeset.memory = std::move(program_image);
 
     LOG_DEBUG(Loader, "Done loading.");
 
@@ -381,13 +382,15 @@ FileType AppLoader_ELF::IdentifyType(const FileSys::VirtualFile& file) {
     return FileType::Error;
 }
 
-ResultStatus AppLoader_ELF::Load(Kernel::Process& process) {
-    if (is_loaded)
-        return ResultStatus::ErrorAlreadyLoaded;
+AppLoader_ELF::LoadResult AppLoader_ELF::Load(Kernel::Process& process) {
+    if (is_loaded) {
+        return {ResultStatus::ErrorAlreadyLoaded, {}};
+    }
 
     std::vector<u8> buffer = file->ReadAllBytes();
-    if (buffer.size() != file->GetSize())
-        return ResultStatus::ErrorIncorrectELFFileSize;
+    if (buffer.size() != file->GetSize()) {
+        return {ResultStatus::ErrorIncorrectELFFileSize, {}};
+    }
 
     const VAddr base_address = process.VMManager().GetCodeRegionBaseAddress();
     ElfReader elf_reader(&buffer[0]);
@@ -395,10 +398,9 @@ ResultStatus AppLoader_ELF::Load(Kernel::Process& process) {
     const VAddr entry_point = codeset.entrypoint;
 
     process.LoadModule(std::move(codeset), entry_point);
-    process.Run(entry_point, 48, Memory::DEFAULT_STACK_SIZE);
 
     is_loaded = true;
-    return ResultStatus::Success;
+    return {ResultStatus::Success, LoadParameters{48, Memory::DEFAULT_STACK_SIZE}};
 }
 
 } // namespace Loader

@@ -5,17 +5,30 @@
 #pragma once
 
 #include <array>
+#include <bitset>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
+
 #include "common/assert.h"
 #include "common/bit_field.h"
 #include "common/common_funcs.h"
 #include "common/common_types.h"
 #include "common/math_util.h"
+#include "video_core/engines/const_buffer_engine_interface.h"
+#include "video_core/engines/const_buffer_info.h"
+#include "video_core/engines/engine_upload.h"
 #include "video_core/gpu.h"
 #include "video_core/macro_interpreter.h"
-#include "video_core/memory_manager.h"
 #include "video_core/textures/texture.h"
+
+namespace Core {
+class System;
+}
+
+namespace Tegra {
+class MemoryManager;
+}
 
 namespace VideoCore {
 class RasterizerInterface;
@@ -23,12 +36,19 @@ class RasterizerInterface;
 
 namespace Tegra::Engines {
 
+/**
+ * This Engine is known as GF100_3D. Documentation can be found in:
+ * https://github.com/envytools/envytools/blob/master/rnndb/graph/gf100_3d.xml
+ * https://cgit.freedesktop.org/mesa/mesa/tree/src/gallium/drivers/nouveau/nvc0/nvc0_3d.xml.h
+ */
+
 #define MAXWELL3D_REG_INDEX(field_name)                                                            \
     (offsetof(Tegra::Engines::Maxwell3D::Regs, field_name) / sizeof(u32))
 
-class Maxwell3D final {
+class Maxwell3D final : public ConstBufferEngineInterface {
 public:
-    explicit Maxwell3D(VideoCore::RasterizerInterface& rasterizer, MemoryManager& memory_manager);
+    explicit Maxwell3D(Core::System& system, VideoCore::RasterizerInterface& rasterizer,
+                       MemoryManager& memory_manager);
     ~Maxwell3D() = default;
 
     /// Register structure of the Maxwell3D engine.
@@ -41,12 +61,15 @@ public:
         static constexpr std::size_t NumCBData = 16;
         static constexpr std::size_t NumVertexArrays = 32;
         static constexpr std::size_t NumVertexAttributes = 32;
+        static constexpr std::size_t NumVaryings = 31;
         static constexpr std::size_t NumTextureSamplers = 32;
+        static constexpr std::size_t NumImages = 8; // TODO(Rodrigo): Investigate this number
         static constexpr std::size_t NumClipDistances = 8;
         static constexpr std::size_t MaxShaderProgram = 6;
         static constexpr std::size_t MaxShaderStage = 5;
         // Maximum number of const buffers per shader stage.
         static constexpr std::size_t MaxConstBuffers = 18;
+        static constexpr std::size_t MaxConstBufferSize = 0x10000;
 
         enum class QueryMode : u32 {
             Write = 0,
@@ -69,11 +92,33 @@ public:
 
         enum class QuerySelect : u32 {
             Zero = 0,
+            TimeElapsed = 2,
+            TransformFeedbackPrimitivesGenerated = 11,
+            PrimitivesGenerated = 18,
+            SamplesPassed = 21,
+            TransformFeedbackUnknown = 26,
+        };
+
+        struct QueryCompare {
+            u32 initial_sequence;
+            u32 initial_mode;
+            u32 unknown1;
+            u32 unknown2;
+            u32 current_sequence;
+            u32 current_mode;
         };
 
         enum class QuerySyncCondition : u32 {
             NotEqual = 0,
             GreaterThan = 1,
+        };
+
+        enum class ConditionMode : u32 {
+            Never = 0,
+            Always = 1,
+            ResNonZero = 2,
+            Equal = 3,
+            NotEqual = 4,
         };
 
         enum class ShaderProgram : u32 {
@@ -164,6 +209,7 @@ public:
                     return 3;
                 default:
                     UNREACHABLE();
+                    return 1;
                 }
             }
 
@@ -232,9 +278,10 @@ public:
                     return "10_10_10_2";
                 case Size::Size_11_11_10:
                     return "11_11_10";
+                default:
+                    UNREACHABLE();
+                    return {};
                 }
-                UNREACHABLE();
-                return {};
             }
 
             std::string TypeString() const {
@@ -497,7 +544,7 @@ public:
             f32 translate_z;
             INSERT_PADDING_WORDS(2);
 
-            MathUtil::Rectangle<s32> GetRect() const {
+            Common::Rectangle<s32> GetRect() const {
                 return {
                     GetX(),               // left
                     GetY() + GetHeight(), // top
@@ -568,7 +615,28 @@ public:
                     u32 bind;
                 } macros;
 
-                INSERT_PADDING_WORDS(0x188);
+                INSERT_PADDING_WORDS(0x17);
+
+                Upload::Registers upload;
+                struct {
+                    union {
+                        BitField<0, 1, u32> linear;
+                    };
+                } exec_upload;
+
+                u32 data_upload;
+
+                INSERT_PADDING_WORDS(0x44);
+
+                struct {
+                    union {
+                        BitField<0, 16, u32> sync_point;
+                        BitField<16, 1, u32> unknown;
+                        BitField<20, 1, u32> increment;
+                    };
+                } sync_info;
+
+                INSERT_PADDING_WORDS(0x11E);
 
                 u32 tfb_enabled;
 
@@ -620,7 +688,9 @@ public:
 
                 u32 rt_separate_frag_data;
 
-                INSERT_PADDING_WORDS(0xC);
+                f32 depth_bounds[2];
+
+                INSERT_PADDING_WORDS(0xA);
 
                 struct {
                     u32 address_high;
@@ -744,8 +814,9 @@ public:
                 INSERT_PADDING_WORDS(0x21);
 
                 u32 vb_element_base;
+                u32 vb_base_instance;
 
-                INSERT_PADDING_WORDS(0x36);
+                INSERT_PADDING_WORDS(0x35);
 
                 union {
                     BitField<0, 1, u32> c0;
@@ -771,7 +842,18 @@ public:
                     BitField<4, 1, u32> alpha_to_one;
                 } multisample_control;
 
-                INSERT_PADDING_WORDS(0x7);
+                INSERT_PADDING_WORDS(0x4);
+
+                struct {
+                    u32 address_high;
+                    u32 address_low;
+                    ConditionMode mode;
+
+                    GPUVAddr Address() const {
+                        return static_cast<GPUVAddr>((static_cast<GPUVAddr>(address_high) << 32) |
+                                                     address_low);
+                    }
+                } condition;
 
                 struct {
                     u32 tsc_address_high;
@@ -871,6 +953,7 @@ public:
                             return 4;
                         }
                         UNREACHABLE();
+                        return 1;
                     }
 
                     GPUVAddr StartAddress() const {
@@ -1010,7 +1093,9 @@ public:
                     INSERT_PADDING_WORDS(14);
                 } shader_config[MaxShaderProgram];
 
-                INSERT_PADDING_WORDS(0x80);
+                INSERT_PADDING_WORDS(0x60);
+
+                u32 firmware[0x20];
 
                 struct {
                     u32 cb_size;
@@ -1066,15 +1151,9 @@ public:
     } regs{};
 
     static_assert(sizeof(Regs) == Regs::NUM_REGS * sizeof(u32), "Maxwell3D Regs has wrong size");
+    static_assert(std::is_trivially_copyable_v<Regs>, "Maxwell3D Regs must be trivially copyable");
 
     struct State {
-        struct ConstBufferInfo {
-            GPUVAddr address;
-            u32 index;
-            u32 size;
-            bool enabled;
-        };
-
         struct ShaderStageInfo {
             std::array<ConstBufferInfo, Regs::MaxConstBuffers> const_buffers;
         };
@@ -1084,18 +1163,81 @@ public:
     };
 
     State state{};
-    MemoryManager& memory_manager;
 
-    struct DirtyFlags {
-        bool vertex_attrib_format = true;
-        u32 vertex_array = 0xFFFFFFFF;
+    struct DirtyRegs {
+        static constexpr std::size_t NUM_REGS = 256;
+        static_assert(NUM_REGS - 1 <= std::numeric_limits<u8>::max());
+
+        union {
+            struct {
+                bool null_dirty;
+
+                // Vertex Attributes
+                bool vertex_attrib_format;
+
+                // Vertex Arrays
+                std::array<bool, 32> vertex_array;
+
+                bool vertex_array_buffers;
+
+                // Vertex Instances
+                std::array<bool, 32> vertex_instance;
+
+                bool vertex_instances;
+
+                // Render Targets
+                std::array<bool, 8> render_target;
+                bool depth_buffer;
+
+                bool render_settings;
+
+                // Shaders
+                bool shaders;
+
+                // Rasterizer State
+                bool viewport;
+                bool clip_coefficient;
+                bool cull_mode;
+                bool primitive_restart;
+                bool depth_test;
+                bool stencil_test;
+                bool blend_state;
+                bool scissor_test;
+                bool transform_feedback;
+                bool color_mask;
+                bool polygon_offset;
+                bool depth_bounds_values;
+
+                // Complementary
+                bool viewport_transform;
+                bool screen_y_control;
+
+                bool memory_general;
+            };
+            std::array<bool, NUM_REGS> regs;
+        };
+
+        void ResetVertexArrays() {
+            vertex_array.fill(true);
+            vertex_array_buffers = true;
+        }
+
+        void ResetRenderTargets() {
+            depth_buffer = true;
+            render_target.fill(true);
+            render_settings = true;
+        }
 
         void OnMemoryWrite() {
-            vertex_array = 0xFFFFFFFF;
+            shaders = true;
+            memory_general = true;
+            ResetRenderTargets();
+            ResetVertexArrays();
         }
-    };
 
-    DirtyFlags dirty_flags;
+    } dirty{};
+
+    std::array<u8, Regs::NUM_REGS> dirty_pointers{};
 
     /// Reads a register value located at the input method address
     u32 GetRegisterValue(u32 method) const;
@@ -1103,11 +1245,27 @@ public:
     /// Write the value to the register identified by method.
     void CallMethod(const GPU::MethodCall& method_call);
 
-    /// Returns a list of enabled textures for the specified shader stage.
-    std::vector<Texture::FullTextureInfo> GetStageTextures(Regs::ShaderStage stage) const;
+    /// Write the value to the register identified by method.
+    void CallMethodFromMME(const GPU::MethodCall& method_call);
+
+    void FlushMMEInlineDraw();
+
+    /// Given a texture handle, returns the TSC and TIC entries.
+    Texture::FullTextureInfo GetTextureInfo(Texture::TextureHandle tex_handle) const;
 
     /// Returns the texture information for a specific texture in a specific shader stage.
     Texture::FullTextureInfo GetStageTexture(Regs::ShaderStage stage, std::size_t offset) const;
+
+    u32 AccessConstBuffer32(ShaderType stage, u64 const_buffer, u64 offset) const override;
+
+    SamplerDescriptor AccessBoundSampler(ShaderType stage, u64 offset) const override;
+
+    SamplerDescriptor AccessBindlessSampler(ShaderType stage, u64 const_buffer,
+                                            u64 offset) const override;
+
+    u32 GetBoundBuffer() const override {
+        return regs.tex_cb_index;
+    }
 
     /// Memory for macro code - it's undetermined how big this is, however 1MB is much larger than
     /// we've seen used.
@@ -1118,13 +1276,38 @@ public:
         return macro_memory;
     }
 
+    bool ShouldExecute() const {
+        return execute_on;
+    }
+
+    enum class MMEDrawMode : u32 {
+        Undefined,
+        Array,
+        Indexed,
+    };
+
+    struct MMEDrawState {
+        MMEDrawMode current_mode{MMEDrawMode::Undefined};
+        u32 current_count{};
+        u32 instance_count{};
+        bool instance_mode{};
+        bool gl_begin_consume{};
+        u32 gl_end_count{};
+    } mme_draw;
+
 private:
     void InitializeRegisterDefaults();
 
+    Core::System& system;
+
     VideoCore::RasterizerInterface& rasterizer;
 
+    MemoryManager& memory_manager;
+
     /// Start offsets of each macro in macro_memory
-    std::unordered_map<u32, u32> macro_offsets;
+    std::array<u32, 0x80> macro_positions = {};
+
+    std::array<bool, Regs::NUM_REGS> mme_inline{};
 
     /// Memory for macro code
     MacroMemory macro_memory;
@@ -1137,18 +1320,34 @@ private:
     /// Interpreter for the macro codes uploaded to the GPU.
     MacroInterpreter macro_interpreter;
 
+    static constexpr u32 null_cb_data = 0xFFFFFFFF;
+    struct {
+        std::array<std::array<u32, 0x4000>, 16> buffer;
+        u32 current{null_cb_data};
+        u32 id{null_cb_data};
+        u32 start_pos{};
+        u32 counter{};
+    } cb_data_state;
+
+    Upload::State upload_state;
+
+    bool execute_on{true};
+
     /// Retrieves information about a specific TIC entry from the TIC buffer.
     Texture::TICEntry GetTICEntry(u32 tic_index) const;
 
     /// Retrieves information about a specific TSC entry from the TSC buffer.
     Texture::TSCEntry GetTSCEntry(u32 tsc_index) const;
 
+    void InitDirtySettings();
+
     /**
      * Call a macro on this engine.
      * @param method Method to call
+     * @param num_parameters Number of arguments
      * @param parameters Arguments to the method call
      */
-    void CallMacroMethod(u32 method, std::vector<u32> parameters);
+    void CallMacroMethod(u32 method, std::size_t num_parameters, const u32* parameters);
 
     /// Handles writes to the macro uploading register.
     void ProcessMacroUpload(u32 data);
@@ -1156,20 +1355,34 @@ private:
     /// Handles writes to the macro bind register.
     void ProcessMacroBind(u32 data);
 
+    /// Handles firmware blob 4
+    void ProcessFirmwareCall4();
+
     /// Handles a write to the CLEAR_BUFFERS register.
     void ProcessClearBuffers();
 
     /// Handles a write to the QUERY_GET register.
     void ProcessQueryGet();
 
+    // Handles Conditional Rendering
+    void ProcessQueryCondition();
+
+    /// Handles writes to syncing register.
+    void ProcessSyncPoint();
+
     /// Handles a write to the CB_DATA[i] register.
+    void StartCBData(u32 method);
     void ProcessCBData(u32 value);
+    void FinishCBData();
 
     /// Handles a write to the CB_BIND register.
     void ProcessCBBind(Regs::ShaderStage stage);
 
     /// Handles a write to the VERTEX_END_GL register, triggering a draw.
     void DrawArrays();
+
+    // Handles a instance drawcall from MME
+    void StepInstance(MMEDrawMode expected_mode, u32 count);
 };
 
 #define ASSERT_REG_POSITION(field_name, position)                                                  \
@@ -1177,6 +1390,10 @@ private:
                   "Field " #field_name " has invalid position")
 
 ASSERT_REG_POSITION(macros, 0x45);
+ASSERT_REG_POSITION(upload, 0x60);
+ASSERT_REG_POSITION(exec_upload, 0x6C);
+ASSERT_REG_POSITION(data_upload, 0x6D);
+ASSERT_REG_POSITION(sync_info, 0xB2);
 ASSERT_REG_POSITION(tfb_enabled, 0x1D1);
 ASSERT_REG_POSITION(rt, 0x200);
 ASSERT_REG_POSITION(viewport_transform, 0x280);
@@ -1194,6 +1411,7 @@ ASSERT_REG_POSITION(stencil_back_mask, 0x3D6);
 ASSERT_REG_POSITION(stencil_back_func_mask, 0x3D7);
 ASSERT_REG_POSITION(color_mask_common, 0x3E4);
 ASSERT_REG_POSITION(rt_separate_frag_data, 0x3EB);
+ASSERT_REG_POSITION(depth_bounds, 0x3EC);
 ASSERT_REG_POSITION(zeta, 0x3F8);
 ASSERT_REG_POSITION(clear_flags, 0x43E);
 ASSERT_REG_POSITION(vertex_attrib_format, 0x458);
@@ -1222,10 +1440,12 @@ ASSERT_REG_POSITION(stencil_front_mask, 0x4E7);
 ASSERT_REG_POSITION(frag_color_clamp, 0x4EA);
 ASSERT_REG_POSITION(screen_y_control, 0x4EB);
 ASSERT_REG_POSITION(vb_element_base, 0x50D);
+ASSERT_REG_POSITION(vb_base_instance, 0x50E);
 ASSERT_REG_POSITION(clip_distance_enabled, 0x544);
 ASSERT_REG_POSITION(point_size, 0x546);
 ASSERT_REG_POSITION(zeta_enable, 0x54E);
 ASSERT_REG_POSITION(multisample_control, 0x54F);
+ASSERT_REG_POSITION(condition, 0x554);
 ASSERT_REG_POSITION(tsc, 0x557);
 ASSERT_REG_POSITION(polygon_offset_factor, 0x55b);
 ASSERT_REG_POSITION(tic, 0x55D);
@@ -1255,6 +1475,7 @@ ASSERT_REG_POSITION(vertex_array[0], 0x700);
 ASSERT_REG_POSITION(independent_blend, 0x780);
 ASSERT_REG_POSITION(vertex_array_limit[0], 0x7C0);
 ASSERT_REG_POSITION(shader_config[0], 0x800);
+ASSERT_REG_POSITION(firmware, 0x8C0);
 ASSERT_REG_POSITION(const_buffer, 0x8E0);
 ASSERT_REG_POSITION(cb_bind[0], 0x904);
 ASSERT_REG_POSITION(tex_cb_index, 0x982);

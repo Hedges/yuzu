@@ -7,6 +7,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QString>
+#include <QTimer>
 #include "common/common_types.h"
 #include "common/microprofile.h"
 #include "yuzu/debugger/profiler.h"
@@ -46,7 +47,7 @@ private:
 #endif
 
 MicroProfileDialog::MicroProfileDialog(QWidget* parent) : QWidget(parent, Qt::Dialog) {
-    setObjectName("MicroProfile");
+    setObjectName(QStringLiteral("MicroProfile"));
     setWindowTitle(tr("MicroProfile"));
     resize(1000, 600);
     // Remove the "?" button from the titlebar and enable the maximize button
@@ -190,7 +191,7 @@ void MicroProfileDrawText(int x, int y, u32 hex_color, const char* text, u32 tex
     for (u32 i = 0; i < text_length; ++i) {
         // Position the text baseline 1 pixel above the bottom of the text cell, this gives nice
         // vertical alignment of text for a wide range of tested fonts.
-        mp_painter->drawText(x, y + MICROPROFILE_TEXT_HEIGHT - 2, QChar(text[i]));
+        mp_painter->drawText(x, y + MICROPROFILE_TEXT_HEIGHT - 2, QString{QLatin1Char{text[i]}});
         x += MICROPROFILE_TEXT_WIDTH + 1;
     }
 }

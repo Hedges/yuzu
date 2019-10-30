@@ -12,15 +12,16 @@ namespace Service::HID {
 constexpr std::size_t SHARED_MEMORY_OFFSET = 0x3800;
 constexpr u8 KEYS_PER_BYTE = 8;
 
-Controller_Keyboard::Controller_Keyboard() = default;
+Controller_Keyboard::Controller_Keyboard(Core::System& system) : ControllerBase(system) {}
 Controller_Keyboard::~Controller_Keyboard() = default;
 
 void Controller_Keyboard::OnInit() {}
 
 void Controller_Keyboard::OnRelease() {}
 
-void Controller_Keyboard::OnUpdate(u8* data, std::size_t size) {
-    shared_memory.header.timestamp = CoreTiming::GetTicks();
+void Controller_Keyboard::OnUpdate(const Core::Timing::CoreTiming& core_timing, u8* data,
+                                   std::size_t size) {
+    shared_memory.header.timestamp = core_timing.GetTicks();
     shared_memory.header.total_entry_count = 17;
 
     if (!IsControllerActivated()) {

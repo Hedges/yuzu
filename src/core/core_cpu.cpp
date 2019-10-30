@@ -11,6 +11,7 @@
 #endif
 #include "core/arm/exclusive_monitor.h"
 #include "core/arm/unicorn/arm_unicorn.h"
+#include "core/core.h"
 #include "core/core_cpu.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/scheduler.h"
@@ -21,7 +22,7 @@
 namespace Core {
 
 void CpuBarrier::NotifyEnd() {
-    std::unique_lock<std::mutex> lock(mutex);
+    std::unique_lock lock{mutex};
     end = true;
     condition.notify_all();
 }
@@ -33,7 +34,7 @@ bool CpuBarrier::Rendezvous() {
     }
 
     if (!end) {
-        std::unique_lock<std::mutex> lock(mutex);
+        std::unique_lock lock{mutex};
 
         --cores_waiting;
         if (!cores_waiting) {
@@ -49,34 +50,29 @@ bool CpuBarrier::Rendezvous() {
     return false;
 }
 
-Cpu::Cpu(ExclusiveMonitor& exclusive_monitor, CpuBarrier& cpu_barrier, std::size_t core_index)
-    : cpu_barrier{cpu_barrier}, core_index{core_index} {
-    if (Settings::values.use_cpu_jit) {
+Cpu::Cpu(System& system, ExclusiveMonitor& exclusive_monitor, CpuBarrier& cpu_barrier,
+         std::size_t core_index)
+    : cpu_barrier{cpu_barrier}, global_scheduler{system.GlobalScheduler()},
+      core_timing{system.CoreTiming()}, core_index{core_index} {
 #ifdef ARCHITECTURE_x86_64
-        arm_interface = std::make_unique<ARM_Dynarmic>(exclusive_monitor, core_index);
+    arm_interface = std::make_unique<ARM_Dynarmic>(system, exclusive_monitor, core_index);
 #else
-        arm_interface = std::make_unique<ARM_Unicorn>();
-        LOG_WARNING(Core, "CPU JIT requested, but Dynarmic not available");
+    arm_interface = std::make_unique<ARM_Unicorn>(system);
+    LOG_WARNING(Core, "CPU JIT requested, but Dynarmic not available");
 #endif
-    } else {
-        arm_interface = std::make_unique<ARM_Unicorn>();
-    }
 
-    scheduler = std::make_unique<Kernel::Scheduler>(*arm_interface);
+    scheduler = std::make_unique<Kernel::Scheduler>(system, *arm_interface, core_index);
 }
 
 Cpu::~Cpu() = default;
 
 std::unique_ptr<ExclusiveMonitor> Cpu::MakeExclusiveMonitor(std::size_t num_cores) {
-    if (Settings::values.use_cpu_jit) {
 #ifdef ARCHITECTURE_x86_64
-        return std::make_unique<DynarmicExclusiveMonitor>(num_cores);
+    return std::make_unique<DynarmicExclusiveMonitor>(num_cores);
 #else
-        return nullptr; // TODO(merry): Passthrough exclusive monitor
+    // TODO(merry): Passthrough exclusive monitor
+    return nullptr;
 #endif
-    } else {
-        return nullptr; // TODO(merry): Passthrough exclusive monitor
-    }
 }
 
 void Cpu::RunLoop(bool tight_loop) {
@@ -86,29 +82,21 @@ void Cpu::RunLoop(bool tight_loop) {
         return;
     }
 
+    Reschedule();
+
     // If we don't have a currently active thread then don't execute instructions,
     // instead advance to the next event and try to yield to the next thread
     if (Kernel::GetCurrentThread() == nullptr) {
         LOG_TRACE(Core, "Core-{} idling", core_index);
-
-        if (IsMainCore()) {
-            // TODO(Subv): Only let CoreTiming idle if all 4 cores are idling.
-            CoreTiming::Idle();
-            CoreTiming::Advance();
-        }
-
-        PrepareReschedule();
+        core_timing.Idle();
     } else {
-        if (IsMainCore()) {
-            CoreTiming::Advance();
-        }
-
         if (tight_loop) {
             arm_interface->Run();
         } else {
             arm_interface->Step();
         }
     }
+    core_timing.Advance();
 
     Reschedule();
 }
@@ -119,18 +107,18 @@ void Cpu::SingleStep() {
 
 void Cpu::PrepareReschedule() {
     arm_interface->PrepareReschedule();
-    reschedule_pending = true;
 }
 
 void Cpu::Reschedule() {
-    if (!reschedule_pending) {
-        return;
-    }
-
-    reschedule_pending = false;
     // Lock the global kernel mutex when we manipulate the HLE state
-    std::lock_guard<std::recursive_mutex> lock(HLE::g_hle_lock);
-    scheduler->Reschedule();
+    std::lock_guard lock(HLE::g_hle_lock);
+
+    global_scheduler.SelectThread(core_index);
+    scheduler->TryDoContextSwitch();
+}
+
+void Cpu::Shutdown() {
+    scheduler->Shutdown();
 }
 
 } // namespace Core

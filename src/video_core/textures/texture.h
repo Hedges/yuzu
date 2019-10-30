@@ -4,11 +4,10 @@
 
 #pragma once
 
+#include <array>
 #include "common/assert.h"
 #include "common/bit_field.h"
-#include "common/common_funcs.h"
 #include "common/common_types.h"
-#include "video_core/memory_manager.h"
 
 namespace Tegra::Texture {
 
@@ -53,9 +52,9 @@ enum class TextureFormat : u32 {
     DXT45 = 0x26,
     DXN1 = 0x27,
     DXN2 = 0x28,
-    Z24S8 = 0x29,
+    S8Z24 = 0x29,
     X8Z24 = 0x2a,
-    S8Z24 = 0x2b,
+    Z24S8 = 0x2b,
     X4V4Z24__COV4R4V = 0x2c,
     X4V4Z24__COV8R8V = 0x2d,
     V8Z24__COV4R12V = 0x2e,
@@ -173,16 +172,20 @@ struct TICEntry {
         BitField<26, 1, u32> use_header_opt_control;
         BitField<27, 1, u32> depth_texture;
         BitField<28, 4, u32> max_mip_level;
+
+        BitField<0, 16, u32> buffer_high_width_minus_one;
     };
     union {
         BitField<0, 16, u32> width_minus_1;
         BitField<22, 1, u32> srgb_conversion;
         BitField<23, 4, TextureType> texture_type;
         BitField<29, 3, u32> border_size;
+
+        BitField<0, 16, u32> buffer_low_width_minus_one;
     };
     union {
         BitField<0, 16, u32> height_minus_1;
-        BitField<16, 15, u32> depth_minus_1;
+        BitField<16, 14, u32> depth_minus_1;
     };
     union {
         BitField<6, 13, u32> mip_lod_bias;
@@ -207,7 +210,10 @@ struct TICEntry {
     }
 
     u32 Width() const {
-        return width_minus_1 + 1;
+        if (header_version != TICHeaderVersion::OneDBuffer) {
+            return width_minus_1 + 1;
+        }
+        return ((buffer_high_width_minus_one << 16) | buffer_low_width_minus_one) + 1;
     }
 
     u32 Height() const {
@@ -220,25 +226,31 @@ struct TICEntry {
 
     u32 BlockWidth() const {
         ASSERT(IsTiled());
-        // The block height is stored in log2 format.
-        return 1 << block_width;
+        return block_width;
     }
 
     u32 BlockHeight() const {
         ASSERT(IsTiled());
-        // The block height is stored in log2 format.
-        return 1 << block_height;
+        return block_height;
     }
 
     u32 BlockDepth() const {
         ASSERT(IsTiled());
-        // The block height is stored in log2 format.
-        return 1 << block_depth;
+        return block_depth;
     }
 
     bool IsTiled() const {
         return header_version == TICHeaderVersion::BlockLinear ||
                header_version == TICHeaderVersion::BlockLinearColorKey;
+    }
+
+    bool IsLineal() const {
+        return header_version == TICHeaderVersion::Pitch ||
+               header_version == TICHeaderVersion::PitchColorKey;
+    }
+
+    bool IsBuffer() const {
+        return header_version == TICHeaderVersion::OneDBuffer;
     }
 
     bool IsSrgbConversionEnabled() const {
@@ -252,7 +264,7 @@ enum class WrapMode : u32 {
     Mirror = 1,
     ClampToEdge = 2,
     Border = 3,
-    ClampOGL = 4,
+    Clamp = 4,
     MirrorOnceClampToEdge = 5,
     MirrorOnceBorder = 6,
     MirrorOnceClampOGL = 7,
@@ -282,42 +294,68 @@ enum class TextureMipmapFilter : u32 {
 
 struct TSCEntry {
     union {
-        BitField<0, 3, WrapMode> wrap_u;
-        BitField<3, 3, WrapMode> wrap_v;
-        BitField<6, 3, WrapMode> wrap_p;
-        BitField<9, 1, u32> depth_compare_enabled;
-        BitField<10, 3, DepthCompareFunc> depth_compare_func;
-        BitField<13, 1, u32> srgb_conversion;
-        BitField<20, 3, u32> max_anisotropy;
+        struct {
+            union {
+                BitField<0, 3, WrapMode> wrap_u;
+                BitField<3, 3, WrapMode> wrap_v;
+                BitField<6, 3, WrapMode> wrap_p;
+                BitField<9, 1, u32> depth_compare_enabled;
+                BitField<10, 3, DepthCompareFunc> depth_compare_func;
+                BitField<13, 1, u32> srgb_conversion;
+                BitField<20, 3, u32> max_anisotropy;
+            };
+            union {
+                BitField<0, 2, TextureFilter> mag_filter;
+                BitField<4, 2, TextureFilter> min_filter;
+                BitField<6, 2, TextureMipmapFilter> mipmap_filter;
+                BitField<9, 1, u32> cubemap_interface_filtering;
+                BitField<12, 13, u32> mip_lod_bias;
+            };
+            union {
+                BitField<0, 12, u32> min_lod_clamp;
+                BitField<12, 12, u32> max_lod_clamp;
+                BitField<24, 8, u32> srgb_border_color_r;
+            };
+            union {
+                BitField<12, 8, u32> srgb_border_color_g;
+                BitField<20, 8, u32> srgb_border_color_b;
+            };
+            std::array<f32, 4> border_color;
+        };
+        std::array<u8, 0x20> raw;
     };
-    union {
-        BitField<0, 2, TextureFilter> mag_filter;
-        BitField<4, 2, TextureFilter> min_filter;
-        BitField<6, 2, TextureMipmapFilter> mip_filter;
-        BitField<9, 1, u32> cubemap_interface_filtering;
-        BitField<12, 13, u32> mip_lod_bias;
-    };
-    union {
-        BitField<0, 12, u32> min_lod_clamp;
-        BitField<12, 12, u32> max_lod_clamp;
-        BitField<24, 8, u32> srgb_border_color_r;
-    };
-    union {
-        BitField<12, 8, u32> srgb_border_color_g;
-        BitField<20, 8, u32> srgb_border_color_b;
-    };
-    float border_color_r;
-    float border_color_g;
-    float border_color_b;
-    float border_color_a;
+
+    float GetMaxAnisotropy() const {
+        return static_cast<float>(1U << max_anisotropy);
+    }
+
+    float GetMinLod() const {
+        return static_cast<float>(min_lod_clamp) / 256.0f;
+    }
+
+    float GetMaxLod() const {
+        return static_cast<float>(max_lod_clamp) / 256.0f;
+    }
+
+    float GetLodBias() const {
+        // Sign extend the 13-bit value.
+        constexpr u32 mask = 1U << (13 - 1);
+        return static_cast<s32>((mip_lod_bias ^ mask) - mask) / 256.0f;
+    }
+
+    std::array<float, 4> GetBorderColor() const {
+        if (srgb_conversion) {
+            return {srgb_border_color_r / 255.0f, srgb_border_color_g / 255.0f,
+                    srgb_border_color_b / 255.0f, border_color[3]};
+        }
+        return border_color;
+    }
 };
 static_assert(sizeof(TSCEntry) == 0x20, "TSCEntry has wrong size");
 
 struct FullTextureInfo {
-    u32 index;
     TICEntry tic;
     TSCEntry tsc;
-    bool enabled;
 };
 
 /// Returns the number of bytes per pixel of the input texture format.

@@ -9,7 +9,7 @@
 #include "core/telemetry_session.h"
 #include "ui_configure_web.h"
 #include "yuzu/configuration/configure_web.h"
-#include "yuzu/ui_settings.h"
+#include "yuzu/uisettings.h"
 
 ConfigureWeb::ConfigureWeb(QWidget* parent)
     : QWidget(parent), ui(std::make_unique<Ui::ConfigureWeb>()) {
@@ -22,41 +22,61 @@ ConfigureWeb::ConfigureWeb(QWidget* parent)
 #ifndef USE_DISCORD_PRESENCE
     ui->discord_group->setVisible(false);
 #endif
-    this->setConfiguration();
+
+    SetConfiguration();
+    RetranslateUI();
 }
 
 ConfigureWeb::~ConfigureWeb() = default;
 
-void ConfigureWeb::setConfiguration() {
-    ui->web_credentials_disclaimer->setWordWrap(true);
-    ui->telemetry_learn_more->setOpenExternalLinks(true);
+void ConfigureWeb::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::LanguageChange) {
+        RetranslateUI();
+    }
+
+    QWidget::changeEvent(event);
+}
+
+void ConfigureWeb::RetranslateUI() {
+    ui->retranslateUi(this);
+
     ui->telemetry_learn_more->setText(
         tr("<a href='https://yuzu-emu.org/help/feature/telemetry/'><span style=\"text-decoration: "
            "underline; color:#039be5;\">Learn more</span></a>"));
 
-    ui->web_signup_link->setOpenExternalLinks(true);
     ui->web_signup_link->setText(
         tr("<a href='https://profile.yuzu-emu.org/'><span style=\"text-decoration: underline; "
            "color:#039be5;\">Sign up</span></a>"));
-    ui->web_token_info_link->setOpenExternalLinks(true);
+
     ui->web_token_info_link->setText(
         tr("<a href='https://yuzu-emu.org/wiki/yuzu-web-service/'><span style=\"text-decoration: "
            "underline; color:#039be5;\">What is my token?</span></a>"));
 
+    ui->label_telemetry_id->setText(
+        tr("Telemetry ID: 0x%1").arg(QString::number(Core::GetTelemetryId(), 16).toUpper()));
+}
+
+void ConfigureWeb::SetConfiguration() {
+    ui->web_credentials_disclaimer->setWordWrap(true);
+
+    ui->telemetry_learn_more->setOpenExternalLinks(true);
+    ui->web_signup_link->setOpenExternalLinks(true);
+    ui->web_token_info_link->setOpenExternalLinks(true);
+
     ui->toggle_telemetry->setChecked(Settings::values.enable_telemetry);
     ui->edit_username->setText(QString::fromStdString(Settings::values.yuzu_username));
     ui->edit_token->setText(QString::fromStdString(Settings::values.yuzu_token));
+
     // Connect after setting the values, to avoid calling OnLoginChanged now
     connect(ui->edit_token, &QLineEdit::textChanged, this, &ConfigureWeb::OnLoginChanged);
     connect(ui->edit_username, &QLineEdit::textChanged, this, &ConfigureWeb::OnLoginChanged);
-    ui->label_telemetry_id->setText(
-        tr("Telemetry ID: 0x%1").arg(QString::number(Core::GetTelemetryId(), 16).toUpper()));
+
     user_verified = true;
 
     ui->toggle_discordrpc->setChecked(UISettings::values.enable_discord_presence);
 }
 
-void ConfigureWeb::applyConfiguration() {
+void ConfigureWeb::ApplyConfiguration() {
     Settings::values.enable_telemetry = ui->toggle_telemetry->isChecked();
     UISettings::values.enable_discord_presence = ui->toggle_discordrpc->isChecked();
     if (user_verified) {
@@ -78,23 +98,26 @@ void ConfigureWeb::RefreshTelemetryID() {
 void ConfigureWeb::OnLoginChanged() {
     if (ui->edit_username->text().isEmpty() && ui->edit_token->text().isEmpty()) {
         user_verified = true;
-        ui->label_username_verified->setPixmap(QIcon::fromTheme("checked").pixmap(16));
-        ui->label_token_verified->setPixmap(QIcon::fromTheme("checked").pixmap(16));
+
+        const QPixmap pixmap = QIcon::fromTheme(QStringLiteral("checked")).pixmap(16);
+        ui->label_username_verified->setPixmap(pixmap);
+        ui->label_token_verified->setPixmap(pixmap);
     } else {
         user_verified = false;
-        ui->label_username_verified->setPixmap(QIcon::fromTheme("failed").pixmap(16));
-        ui->label_token_verified->setPixmap(QIcon::fromTheme("failed").pixmap(16));
+
+        const QPixmap pixmap = QIcon::fromTheme(QStringLiteral("failed")).pixmap(16);
+        ui->label_username_verified->setPixmap(pixmap);
+        ui->label_token_verified->setPixmap(pixmap);
     }
 }
 
 void ConfigureWeb::VerifyLogin() {
     ui->button_verify_login->setDisabled(true);
-    ui->button_verify_login->setText(tr("Verifying"));
-    verify_watcher.setFuture(
-        QtConcurrent::run([this, username = ui->edit_username->text().toStdString(),
-                           token = ui->edit_token->text().toStdString()]() {
-            return Core::VerifyLogin(username, token);
-        }));
+    ui->button_verify_login->setText(tr("Verifying..."));
+    verify_watcher.setFuture(QtConcurrent::run([username = ui->edit_username->text().toStdString(),
+                                                token = ui->edit_token->text().toStdString()] {
+        return Core::VerifyLogin(username, token);
+    }));
 }
 
 void ConfigureWeb::OnLoginVerified() {
@@ -102,18 +125,18 @@ void ConfigureWeb::OnLoginVerified() {
     ui->button_verify_login->setText(tr("Verify"));
     if (verify_watcher.result()) {
         user_verified = true;
-        ui->label_username_verified->setPixmap(QIcon::fromTheme("checked").pixmap(16));
-        ui->label_token_verified->setPixmap(QIcon::fromTheme("checked").pixmap(16));
+
+        const QPixmap pixmap = QIcon::fromTheme(QStringLiteral("checked")).pixmap(16);
+        ui->label_username_verified->setPixmap(pixmap);
+        ui->label_token_verified->setPixmap(pixmap);
     } else {
-        ui->label_username_verified->setPixmap(QIcon::fromTheme("failed").pixmap(16));
-        ui->label_token_verified->setPixmap(QIcon::fromTheme("failed").pixmap(16));
+        const QPixmap pixmap = QIcon::fromTheme(QStringLiteral("failed")).pixmap(16);
+        ui->label_username_verified->setPixmap(pixmap);
+        ui->label_token_verified->setPixmap(pixmap);
+
         QMessageBox::critical(
             this, tr("Verification failed"),
             tr("Verification failed. Check that you have entered your username and token "
                "correctly, and that your internet connection is working."));
     }
-}
-
-void ConfigureWeb::retranslateUi() {
-    ui->retranslateUi(this);
 }

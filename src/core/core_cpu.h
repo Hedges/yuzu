@@ -12,7 +12,16 @@
 #include "common/common_types.h"
 
 namespace Kernel {
+class GlobalScheduler;
 class Scheduler;
+} // namespace Kernel
+
+namespace Core {
+class System;
+}
+
+namespace Core::Timing {
+class CoreTiming;
 }
 
 namespace Core {
@@ -41,7 +50,8 @@ private:
 
 class Cpu {
 public:
-    Cpu(ExclusiveMonitor& exclusive_monitor, CpuBarrier& cpu_barrier, std::size_t core_index);
+    Cpu(System& system, ExclusiveMonitor& exclusive_monitor, CpuBarrier& cpu_barrier,
+        std::size_t core_index);
     ~Cpu();
 
     void RunLoop(bool tight_loop = true);
@@ -74,6 +84,8 @@ public:
         return core_index;
     }
 
+    void Shutdown();
+
     static std::unique_ptr<ExclusiveMonitor> MakeExclusiveMonitor(std::size_t num_cores);
 
 private:
@@ -81,7 +93,9 @@ private:
 
     std::unique_ptr<ARM_Interface> arm_interface;
     CpuBarrier& cpu_barrier;
+    Kernel::GlobalScheduler& global_scheduler;
     std::unique_ptr<Kernel::Scheduler> scheduler;
+    Timing::CoreTiming& core_timing;
 
     std::atomic<bool> reschedule_pending = false;
     std::size_t core_index;

@@ -7,6 +7,7 @@
 #include "common/string_util.h"
 #include "core/core.h"
 #include "core/frontend/applets/software_keyboard.h"
+#include "core/hle/result.h"
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/am/applets/software_keyboard.h"
 
@@ -38,7 +39,9 @@ static Core::Frontend::SoftwareKeyboardParameters ConvertToFrontendParameters(
     return params;
 }
 
-SoftwareKeyboard::SoftwareKeyboard() = default;
+SoftwareKeyboard::SoftwareKeyboard(Core::System& system_,
+                                   const Core::Frontend::SoftwareKeyboardApplet& frontend_)
+    : Applet{system_.Kernel()}, frontend(frontend_) {}
 
 SoftwareKeyboard::~SoftwareKeyboard() = default;
 
@@ -89,8 +92,6 @@ void SoftwareKeyboard::ExecuteInteractive() {
     if (status == INTERACTIVE_STATUS_OK) {
         complete = true;
     } else {
-        const auto& frontend{Core::System::GetInstance().GetSoftwareKeyboard()};
-
         std::array<char16_t, SWKBD_OUTPUT_INTERACTIVE_BUFFER_SIZE / 2 - 2> string;
         std::memcpy(string.data(), data.data() + 4, string.size() * 2);
         frontend.SendTextCheckDialog(
@@ -104,8 +105,6 @@ void SoftwareKeyboard::Execute() {
         broker.PushNormalDataFromApplet(IStorage{final_data});
         return;
     }
-
-    const auto& frontend{Core::System::GetInstance().GetSoftwareKeyboard()};
 
     const auto parameters = ConvertToFrontendParameters(config, initial_text);
 
@@ -146,11 +145,10 @@ void SoftwareKeyboard::WriteText(std::optional<std::u16string> text) {
 
         if (complete) {
             broker.PushNormalDataFromApplet(IStorage{output_main});
+            broker.SignalStateChanged();
         } else {
             broker.PushInteractiveDataFromApplet(IStorage{output_sub});
         }
-
-        broker.SignalStateChanged();
     } else {
         output_main[0] = 1;
         complete = true;

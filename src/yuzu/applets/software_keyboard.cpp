@@ -18,23 +18,30 @@ QtSoftwareKeyboardValidator::QtSoftwareKeyboardValidator(
     : parameters(std::move(parameters)) {}
 
 QValidator::State QtSoftwareKeyboardValidator::validate(QString& input, int& pos) const {
-    if (input.size() > parameters.max_length)
+    if (input.size() > static_cast<s64>(parameters.max_length)) {
         return Invalid;
-    if (parameters.disable_space && input.contains(' '))
+    }
+    if (parameters.disable_space && input.contains(QLatin1Char{' '})) {
         return Invalid;
-    if (parameters.disable_address && input.contains('@'))
+    }
+    if (parameters.disable_address && input.contains(QLatin1Char{'@'})) {
         return Invalid;
-    if (parameters.disable_percent && input.contains('%'))
+    }
+    if (parameters.disable_percent && input.contains(QLatin1Char{'%'})) {
         return Invalid;
-    if (parameters.disable_slash && (input.contains('/') || input.contains('\\')))
+    }
+    if (parameters.disable_slash &&
+        (input.contains(QLatin1Char{'/'}) || input.contains(QLatin1Char{'\\'}))) {
         return Invalid;
+    }
     if (parameters.disable_number &&
         std::any_of(input.begin(), input.end(), [](QChar c) { return c.isDigit(); })) {
         return Invalid;
     }
 
-    if (parameters.disable_download_code &&
-        std::any_of(input.begin(), input.end(), [](QChar c) { return c == 'O' || c == 'I'; })) {
+    if (parameters.disable_download_code && std::any_of(input.begin(), input.end(), [](QChar c) {
+            return c == QLatin1Char{'O'} || c == QLatin1Char{'I'};
+        })) {
         return Invalid;
     }
 
@@ -75,13 +82,13 @@ QtSoftwareKeyboardDialog::QtSoftwareKeyboardDialog(
         length_label->setText(QStringLiteral("%1/%2").arg(text.size()).arg(parameters.max_length));
     });
 
-    buttons = new QDialogButtonBox;
-    buttons->addButton(tr("Cancel"), QDialogButtonBox::RejectRole);
-    buttons->addButton(parameters.submit_text.empty()
-                           ? tr("OK")
-                           : QString::fromStdU16String(parameters.submit_text),
-                       QDialogButtonBox::AcceptRole);
-
+    buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
+    if (parameters.submit_text.empty()) {
+        buttons->addButton(QDialogButtonBox::Ok);
+    } else {
+        buttons->addButton(QString::fromStdU16String(parameters.submit_text),
+                           QDialogButtonBox::AcceptRole);
+    }
     connect(buttons, &QDialogButtonBox::accepted, this, &QtSoftwareKeyboardDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QtSoftwareKeyboardDialog::reject);
     layout->addWidget(header_label);
@@ -97,23 +104,17 @@ QtSoftwareKeyboardDialog::QtSoftwareKeyboardDialog(
 QtSoftwareKeyboardDialog::~QtSoftwareKeyboardDialog() = default;
 
 void QtSoftwareKeyboardDialog::accept() {
-    ok = true;
     text = line_edit->text().toStdU16String();
     QDialog::accept();
 }
 
 void QtSoftwareKeyboardDialog::reject() {
-    ok = false;
     text.clear();
     QDialog::reject();
 }
 
 std::u16string QtSoftwareKeyboardDialog::GetText() const {
     return text;
-}
-
-bool QtSoftwareKeyboardDialog::GetStatus() const {
-    return ok;
 }
 
 QtSoftwareKeyboard::QtSoftwareKeyboard(GMainWindow& main_window) {
@@ -141,12 +142,12 @@ void QtSoftwareKeyboard::SendTextCheckDialog(std::u16string error_message,
 
 void QtSoftwareKeyboard::MainWindowFinishedText(std::optional<std::u16string> text) {
     // Acquire the HLE mutex
-    std::lock_guard<std::recursive_mutex> lock(HLE::g_hle_lock);
-    text_output(text);
+    std::lock_guard lock{HLE::g_hle_lock};
+    text_output(std::move(text));
 }
 
 void QtSoftwareKeyboard::MainWindowFinishedCheckDialog() {
     // Acquire the HLE mutex
-    std::lock_guard<std::recursive_mutex> lock(HLE::g_hle_lock);
+    std::lock_guard lock{HLE::g_hle_lock};
     finished_check();
 }

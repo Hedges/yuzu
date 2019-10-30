@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "core/core.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
@@ -48,31 +49,36 @@ FileType AppLoader_XCI::IdentifyType(const FileSys::VirtualFile& file) {
     return FileType::Error;
 }
 
-ResultStatus AppLoader_XCI::Load(Kernel::Process& process) {
+AppLoader_XCI::LoadResult AppLoader_XCI::Load(Kernel::Process& process) {
     if (is_loaded) {
-        return ResultStatus::ErrorAlreadyLoaded;
+        return {ResultStatus::ErrorAlreadyLoaded, {}};
     }
 
-    if (xci->GetStatus() != ResultStatus::Success)
-        return xci->GetStatus();
+    if (xci->GetStatus() != ResultStatus::Success) {
+        return {xci->GetStatus(), {}};
+    }
 
-    if (xci->GetProgramNCAStatus() != ResultStatus::Success)
-        return xci->GetProgramNCAStatus();
+    if (xci->GetProgramNCAStatus() != ResultStatus::Success) {
+        return {xci->GetProgramNCAStatus(), {}};
+    }
 
-    if (!xci->HasProgramNCA() && !Core::Crypto::KeyManager::KeyFileExists(false))
-        return ResultStatus::ErrorMissingProductionKeyFile;
+    if (!xci->HasProgramNCA() && !Core::Crypto::KeyManager::KeyFileExists(false)) {
+        return {ResultStatus::ErrorMissingProductionKeyFile, {}};
+    }
 
     const auto result = nca_loader->Load(process);
-    if (result != ResultStatus::Success)
+    if (result.first != ResultStatus::Success) {
         return result;
+    }
 
     FileSys::VirtualFile update_raw;
-    if (ReadUpdateRaw(update_raw) == ResultStatus::Success && update_raw != nullptr)
-        Service::FileSystem::SetPackedUpdate(std::move(update_raw));
+    if (ReadUpdateRaw(update_raw) == ResultStatus::Success && update_raw != nullptr) {
+        Core::System::GetInstance().GetFileSystemController().SetPackedUpdate(
+            std::move(update_raw));
+    }
 
     is_loaded = true;
-
-    return ResultStatus::Success;
+    return result;
 }
 
 ResultStatus AppLoader_XCI::ReadRomFS(FileSys::VirtualFile& file) {
@@ -121,10 +127,32 @@ ResultStatus AppLoader_XCI::ReadTitle(std::string& title) {
     return ResultStatus::Success;
 }
 
-ResultStatus AppLoader_XCI::ReadDeveloper(std::string& developer) {
+ResultStatus AppLoader_XCI::ReadControlData(FileSys::NACP& control) {
     if (nacp_file == nullptr)
         return ResultStatus::ErrorNoControl;
-    developer = nacp_file->GetDeveloperName();
+    control = *nacp_file;
     return ResultStatus::Success;
 }
+
+ResultStatus AppLoader_XCI::ReadManualRomFS(FileSys::VirtualFile& file) {
+    const auto nca = xci->GetSecurePartitionNSP()->GetNCA(xci->GetProgramTitleID(),
+                                                          FileSys::ContentRecordType::HtmlDocument);
+    if (xci->GetStatus() != ResultStatus::Success || nca == nullptr)
+        return ResultStatus::ErrorXCIMissingPartition;
+    file = nca->GetRomFS();
+    return file == nullptr ? ResultStatus::ErrorNoRomFS : ResultStatus::Success;
+}
+
+ResultStatus AppLoader_XCI::ReadBanner(std::vector<u8>& buffer) {
+    return nca_loader->ReadBanner(buffer);
+}
+
+ResultStatus AppLoader_XCI::ReadLogo(std::vector<u8>& buffer) {
+    return nca_loader->ReadLogo(buffer);
+}
+
+ResultStatus AppLoader_XCI::ReadNSOModules(Modules& modules) {
+    return nca_loader->ReadNSOModules(modules);
+}
+
 } // namespace Loader

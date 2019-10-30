@@ -34,6 +34,7 @@
 #include <limits>
 #include <type_traits>
 #include "common/common_funcs.h"
+#include "common/swap.h"
 
 /*
  * Abstract bitfield class
@@ -108,15 +109,9 @@
  * symptoms.
  */
 #pragma pack(1)
-template <std::size_t Position, std::size_t Bits, typename T>
+template <std::size_t Position, std::size_t Bits, typename T, typename EndianTag = LETag>
 struct BitField {
 private:
-    // We hide the copy assigment operator here, because the default copy
-    // assignment would copy the full storage value, rather than just the bits
-    // relevant to this particular bit field.
-    // We don't delete it because we want BitField to be trivially copyable.
-    constexpr BitField& operator=(const BitField&) = default;
-
     // UnderlyingType is T for non-enum types and the underlying type of T if
     // T is an enumeration. Note that T is wrapped within an enable_if in the
     // former case to workaround compile errors which arise when using
@@ -126,6 +121,8 @@ private:
 
     // We store the value as the unsigned type to avoid undefined behaviour on value shifting
     using StorageType = std::make_unsigned_t<UnderlyingType>;
+
+    using StorageTypeWithEndian = typename AddEndian<StorageType, EndianTag>::type;
 
 public:
     /// Constants to allow limited introspection of fields if needed
@@ -163,16 +160,20 @@ public:
     BitField(T val) = delete;
     BitField& operator=(T val) = delete;
 
-    // Force default constructor to be created
-    // so that we can use this within unions
-    constexpr BitField() = default;
+    constexpr BitField() noexcept = default;
+
+    constexpr BitField(const BitField&) noexcept = default;
+    constexpr BitField& operator=(const BitField&) noexcept = default;
+
+    constexpr BitField(BitField&&) noexcept = default;
+    constexpr BitField& operator=(BitField&&) noexcept = default;
 
     constexpr FORCE_INLINE operator T() const {
         return Value();
     }
 
     constexpr FORCE_INLINE void Assign(const T& value) {
-        storage = (storage & ~mask) | FormatValue(value);
+        storage = (static_cast<StorageType>(storage) & ~mask) | FormatValue(value);
     }
 
     constexpr T Value() const {
@@ -184,7 +185,7 @@ public:
     }
 
 private:
-    StorageType storage;
+    StorageTypeWithEndian storage;
 
     static_assert(bits + position <= 8 * sizeof(T), "Bitfield out of range");
 
@@ -195,3 +196,6 @@ private:
     static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable in a BitField");
 };
 #pragma pack()
+
+template <std::size_t Position, std::size_t Bits, typename T>
+using BitFieldBE = BitField<Position, Bits, T, BETag>;

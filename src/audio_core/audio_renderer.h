@@ -14,6 +14,10 @@
 #include "common/swap.h"
 #include "core/hle/kernel/object.h"
 
+namespace Core::Timing {
+class CoreTiming;
+}
+
 namespace Kernel {
 class WritableEvent;
 }
@@ -42,16 +46,18 @@ struct AudioRendererParameter {
     u32_le sample_rate;
     u32_le sample_count;
     u32_le mix_buffer_count;
-    u32_le unknown_c;
+    u32_le submix_count;
     u32_le voice_count;
     u32_le sink_count;
     u32_le effect_count;
-    u32_le unknown_1c;
-    u8 unknown_20;
-    INSERT_PADDING_BYTES(3);
+    u32_le performance_frame_count;
+    u8 is_voice_drop_enabled;
+    u8 unknown_21;
+    u8 unknown_22;
+    u8 execution_mode;
     u32_le splitter_count;
-    u32_le unknown_2c;
-    INSERT_PADDING_WORDS(1);
+    u32_le num_splitter_send_channels;
+    u32_le unknown_30;
     u32_le revision;
 };
 static_assert(sizeof(AudioRendererParameter) == 52, "AudioRendererParameter is an invalid size");
@@ -188,28 +194,32 @@ struct UpdateDataHeader {
         mixes_size = 0x0;
         sinks_size = config.sink_count * 0x20;
         performance_manager_size = 0x10;
+        frame_count = 0;
         total_size = sizeof(UpdateDataHeader) + behavior_size + memory_pools_size + voices_size +
                      effects_size + sinks_size + performance_manager_size;
     }
 
-    u32_le revision;
-    u32_le behavior_size;
-    u32_le memory_pools_size;
-    u32_le voices_size;
-    u32_le voice_resource_size;
-    u32_le effects_size;
-    u32_le mixes_size;
-    u32_le sinks_size;
-    u32_le performance_manager_size;
-    INSERT_PADDING_WORDS(6);
-    u32_le total_size;
+    u32_le revision{};
+    u32_le behavior_size{};
+    u32_le memory_pools_size{};
+    u32_le voices_size{};
+    u32_le voice_resource_size{};
+    u32_le effects_size{};
+    u32_le mixes_size{};
+    u32_le sinks_size{};
+    u32_le performance_manager_size{};
+    INSERT_PADDING_WORDS(1);
+    u32_le frame_count{};
+    INSERT_PADDING_WORDS(4);
+    u32_le total_size{};
 };
 static_assert(sizeof(UpdateDataHeader) == 0x40, "UpdateDataHeader has wrong size");
 
 class AudioRenderer {
 public:
-    AudioRenderer(AudioRendererParameter params,
-                  Kernel::SharedPtr<Kernel::WritableEvent> buffer_event);
+    AudioRenderer(Core::Timing::CoreTiming& core_timing, AudioRendererParameter params,
+                  Kernel::SharedPtr<Kernel::WritableEvent> buffer_event,
+                  std::size_t instance_number);
     ~AudioRenderer();
 
     std::vector<u8> UpdateAudioRenderer(const std::vector<u8>& input_params);

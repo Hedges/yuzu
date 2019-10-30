@@ -8,21 +8,24 @@
 #include <unordered_map>
 #include "core/hle/kernel/object.h"
 
-template <typename T>
-class ResultVal;
-
-namespace CoreTiming {
-struct EventType;
+namespace Core {
+class System;
 }
+
+namespace Core::Timing {
+class CoreTiming;
+struct EventType;
+} // namespace Core::Timing
 
 namespace Kernel {
 
+class AddressArbiter;
 class ClientPort;
+class GlobalScheduler;
 class HandleTable;
 class Process;
 class ResourceLimit;
 class Thread;
-class Timer;
 
 /// Represents a single instance of the kernel.
 class KernelCore {
@@ -30,7 +33,14 @@ private:
     using NamedPortTable = std::unordered_map<std::string, SharedPtr<ClientPort>>;
 
 public:
-    KernelCore();
+    /// Constructs an instance of the kernel using the given System
+    /// instance as a context for any necessary system-related state,
+    /// such as threads, CPU core state, etc.
+    ///
+    /// @post After execution of the constructor, the provided System
+    ///       object *must* outlive the kernel instance itself.
+    ///
+    explicit KernelCore(Core::System& system);
     ~KernelCore();
 
     KernelCore(const KernelCore&) = delete;
@@ -51,9 +61,6 @@ public:
     /// Retrieves a shared pointer to a Thread instance within the thread wakeup handle table.
     SharedPtr<Thread> RetrieveThreadFromWakeupCallbackHandleTable(Handle handle) const;
 
-    /// Retrieves a shared pointer to a Timer instance within the timer callback handle table.
-    SharedPtr<Timer> RetrieveTimerFromCallbackHandleTable(Handle handle) const;
-
     /// Adds the given shared pointer to an internal list of active processes.
     void AppendNewProcess(SharedPtr<Process> process);
 
@@ -65,6 +72,15 @@ public:
 
     /// Retrieves a const pointer to the current process.
     const Process* CurrentProcess() const;
+
+    /// Retrieves the list of processes.
+    const std::vector<SharedPtr<Process>>& GetProcessList() const;
+
+    /// Gets the sole instance of the global scheduler
+    Kernel::GlobalScheduler& GlobalScheduler();
+
+    /// Gets the sole instance of the global scheduler
+    const Kernel::GlobalScheduler& GlobalScheduler() const;
 
     /// Adds a port to the named port table
     void AddNamedPort(std::string name, SharedPtr<ClientPort> port);
@@ -82,25 +98,21 @@ private:
     friend class Object;
     friend class Process;
     friend class Thread;
-    friend class Timer;
 
     /// Creates a new object ID, incrementing the internal object ID counter.
     u32 CreateNewObjectID();
 
     /// Creates a new process ID, incrementing the internal process ID counter;
-    u32 CreateNewProcessID();
+    u64 CreateNewKernelProcessID();
+
+    /// Creates a new process ID, incrementing the internal process ID counter;
+    u64 CreateNewUserProcessID();
 
     /// Creates a new thread ID, incrementing the internal thread ID counter.
-    u32 CreateNewThreadID();
-
-    /// Creates a timer callback handle for the given timer.
-    ResultVal<Handle> CreateTimerCallbackHandle(const SharedPtr<Timer>& timer);
+    u64 CreateNewThreadID();
 
     /// Retrieves the event type used for thread wakeup callbacks.
-    CoreTiming::EventType* ThreadWakeupCallbackEventType() const;
-
-    /// Retrieves the event type used for timer callbacks.
-    CoreTiming::EventType* TimerCallbackEventType() const;
+    Core::Timing::EventType* ThreadWakeupCallbackEventType() const;
 
     /// Provides a reference to the thread wakeup callback handle table.
     Kernel::HandleTable& ThreadWakeupCallbackHandleTable();

@@ -20,11 +20,13 @@ public:
     explicit ConfigureGeneral(QWidget* parent = nullptr);
     ~ConfigureGeneral() override;
 
-    void PopulateHotkeyList(const HotkeyRegistry& registry);
-    void applyConfiguration();
+    void ApplyConfiguration();
 
 private:
-    void setConfiguration();
+    void changeEvent(QEvent* event) override;
+    void RetranslateUI();
+
+    void SetConfiguration();
 
     std::unique_ptr<Ui::ConfigureGeneral> ui;
 };

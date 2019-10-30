@@ -37,13 +37,15 @@ public:
         return IdentifyType(file);
     }
 
-    ResultStatus Load(Kernel::Process& process) override;
+    LoadResult Load(Kernel::Process& process) override;
 
     ResultStatus ReadRomFS(FileSys::VirtualFile& dir) override;
     ResultStatus ReadIcon(std::vector<u8>& buffer) override;
     ResultStatus ReadProgramId(u64& out_program_id) override;
     ResultStatus ReadTitle(std::string& title) override;
     bool IsRomFSUpdatable() const override;
+
+    ResultStatus ReadNSOModules(Modules& modules) override;
 
 private:
     FileSys::ProgramMetadata metadata;
@@ -54,6 +56,8 @@ private:
     std::string name;
     u64 title_id{};
     bool override_update;
+
+    Modules modules;
 };
 
 } // namespace Loader

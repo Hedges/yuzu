@@ -6,6 +6,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -14,8 +15,8 @@
 #include "common/swap.h"
 #include "core/hle/ipc.h"
 #include "core/hle/kernel/object.h"
-#include "core/hle/kernel/server_session.h"
-#include "core/hle/kernel/thread.h"
+
+union ResultCode;
 
 namespace Service {
 class ServiceFrameworkBase;
@@ -27,8 +28,12 @@ class Domain;
 class HandleTable;
 class HLERequestContext;
 class Process;
+class ServerSession;
+class Thread;
 class ReadableEvent;
 class WritableEvent;
+
+enum class ThreadWakeupReason;
 
 /**
  * Interface implemented by HLE Session handlers.
@@ -37,7 +42,8 @@ class WritableEvent;
  */
 class SessionRequestHandler : public std::enable_shared_from_this<SessionRequestHandler> {
 public:
-    virtual ~SessionRequestHandler() = default;
+    SessionRequestHandler();
+    virtual ~SessionRequestHandler();
 
     /**
      * Handles a sync request from the emulated application.
@@ -91,7 +97,7 @@ protected:
  */
 class HLERequestContext {
 public:
-    explicit HLERequestContext(SharedPtr<ServerSession> session);
+    explicit HLERequestContext(SharedPtr<ServerSession> session, SharedPtr<Thread> thread);
     ~HLERequestContext();
 
     /// Returns a pointer to the IPC command buffer for this request.
@@ -113,7 +119,6 @@ public:
     /**
      * Puts the specified guest thread to sleep until the returned event is signaled or until the
      * specified timeout expires.
-     * @param thread Thread to be put to sleep.
      * @param reason Reason for pausing the thread, to be used for debugging purposes.
      * @param timeout Timeout in nanoseconds after which the thread will be awoken and the callback
      * invoked with a Timeout reason.
@@ -124,8 +129,8 @@ public:
      * created.
      * @returns Event that when signaled will resume the thread and call the callback function.
      */
-    SharedPtr<WritableEvent> SleepClientThread(SharedPtr<Thread> thread, const std::string& reason,
-                                               u64 timeout, WakeupCallback&& callback,
+    SharedPtr<WritableEvent> SleepClientThread(const std::string& reason, u64 timeout,
+                                               WakeupCallback&& callback,
                                                SharedPtr<WritableEvent> writable_event = nullptr);
 
     /// Populates this context with data from the requesting process/thread.
@@ -163,12 +168,12 @@ public:
         return buffer_c_desciptors;
     }
 
-    const IPC::DomainMessageHeader* GetDomainMessageHeader() const {
-        return domain_message_header.get();
+    const IPC::DomainMessageHeader& GetDomainMessageHeader() const {
+        return domain_message_header.value();
     }
 
     bool HasDomainMessageHeader() const {
-        return domain_message_header != nullptr;
+        return domain_message_header.has_value();
     }
 
     /// Helper function to read a buffer using the appropriate buffer descriptor
@@ -205,14 +210,12 @@ public:
 
     template <typename T>
     SharedPtr<T> GetCopyObject(std::size_t index) {
-        ASSERT(index < copy_objects.size());
-        return DynamicObjectCast<T>(copy_objects[index]);
+        return DynamicObjectCast<T>(copy_objects.at(index));
     }
 
     template <typename T>
     SharedPtr<T> GetMoveObject(std::size_t index) {
-        ASSERT(index < move_objects.size());
-        return DynamicObjectCast<T>(move_objects[index]);
+        return DynamicObjectCast<T>(move_objects.at(index));
     }
 
     void AddMoveObject(SharedPtr<Object> object) {
@@ -229,7 +232,7 @@ public:
 
     template <typename T>
     std::shared_ptr<T> GetDomainRequestHandler(std::size_t index) const {
-        return std::static_pointer_cast<T>(domain_request_handlers[index]);
+        return std::static_pointer_cast<T>(domain_request_handlers.at(index));
     }
 
     void SetDomainRequestHandlers(
@@ -264,15 +267,16 @@ private:
 
     std::array<u32, IPC::COMMAND_BUFFER_LENGTH> cmd_buf;
     SharedPtr<Kernel::ServerSession> server_session;
+    SharedPtr<Thread> thread;
     // TODO(yuriks): Check common usage of this and optimize size accordingly
     boost::container::small_vector<SharedPtr<Object>, 8> move_objects;
     boost::container::small_vector<SharedPtr<Object>, 8> copy_objects;
     boost::container::small_vector<std::shared_ptr<SessionRequestHandler>, 8> domain_objects;
 
-    std::shared_ptr<IPC::CommandHeader> command_header;
-    std::shared_ptr<IPC::HandleDescriptorHeader> handle_descriptor_header;
-    std::shared_ptr<IPC::DataPayloadHeader> data_payload_header;
-    std::shared_ptr<IPC::DomainMessageHeader> domain_message_header;
+    std::optional<IPC::CommandHeader> command_header;
+    std::optional<IPC::HandleDescriptorHeader> handle_descriptor_header;
+    std::optional<IPC::DataPayloadHeader> data_payload_header;
+    std::optional<IPC::DomainMessageHeader> domain_message_header;
     std::vector<IPC::BufferDescriptorX> buffer_x_desciptors;
     std::vector<IPC::BufferDescriptorABW> buffer_a_desciptors;
     std::vector<IPC::BufferDescriptorABW> buffer_b_desciptors;

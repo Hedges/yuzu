@@ -2,7 +2,6 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -13,15 +12,19 @@
 
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "core/core_timing_util.h"
+#include "core/hle/kernel/address_arbiter.h"
 #include "core/hle/kernel/client_port.h"
+#include "core/hle/kernel/errors.h"
 #include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/resource_limit.h"
+#include "core/hle/kernel/scheduler.h"
 #include "core/hle/kernel/thread.h"
-#include "core/hle/kernel/timer.h"
 #include "core/hle/lock.h"
 #include "core/hle/result.h"
+#include "core/memory.h"
 
 namespace Kernel {
 
@@ -30,12 +33,12 @@ namespace Kernel {
  * @param thread_handle The handle of the thread that's been awoken
  * @param cycles_late The number of CPU cycles that have passed since the desired wakeup time
  */
-static void ThreadWakeupCallback(u64 thread_handle, [[maybe_unused]] int cycles_late) {
+static void ThreadWakeupCallback(u64 thread_handle, [[maybe_unused]] s64 cycles_late) {
     const auto proper_handle = static_cast<Handle>(thread_handle);
     const auto& system = Core::System::GetInstance();
 
     // Lock the global kernel mutex when we enter the kernel HLE.
-    std::lock_guard<std::recursive_mutex> lock(HLE::g_hle_lock);
+    std::lock_guard lock{HLE::g_hle_lock};
 
     SharedPtr<Thread> thread =
         system.Kernel().RetrieveThreadFromWakeupCallbackHandleTable(proper_handle);
@@ -46,8 +49,7 @@ static void ThreadWakeupCallback(u64 thread_handle, [[maybe_unused]] int cycles_
 
     bool resume = true;
 
-    if (thread->GetStatus() == ThreadStatus::WaitSynchAny ||
-        thread->GetStatus() == ThreadStatus::WaitSynchAll ||
+    if (thread->GetStatus() == ThreadStatus::WaitSynch ||
         thread->GetStatus() == ThreadStatus::WaitHLEEvent) {
         // Remove the thread from each of its waiting objects' waitlists
         for (const auto& object : thread->GetWaitObjects()) {
@@ -59,11 +61,8 @@ static void ThreadWakeupCallback(u64 thread_handle, [[maybe_unused]] int cycles_
         if (thread->HasWakeupCallback()) {
             resume = thread->InvokeWakeupCallback(ThreadWakeupReason::Timeout, thread, nullptr, 0);
         }
-    }
-
-    if (thread->GetMutexWaitAddress() != 0 || thread->GetCondVarWaitAddress() != 0 ||
-        thread->GetWaitHandle() != 0) {
-        ASSERT(thread->GetStatus() == ThreadStatus::WaitMutex);
+    } else if (thread->GetStatus() == ThreadStatus::WaitMutex ||
+               thread->GetStatus() == ThreadStatus::WaitCondVar) {
         thread->SetMutexWaitAddress(0);
         thread->SetCondVarWaitAddress(0);
         thread->SetWaitHandle(0);
@@ -83,36 +82,29 @@ static void ThreadWakeupCallback(u64 thread_handle, [[maybe_unused]] int cycles_
     }
 
     if (resume) {
+        if (thread->GetStatus() == ThreadStatus::WaitCondVar ||
+            thread->GetStatus() == ThreadStatus::WaitArb) {
+            thread->SetWaitSynchronizationResult(RESULT_TIMEOUT);
+        }
         thread->ResumeFromWait();
     }
 }
 
-/// The timer callback event, called when a timer is fired
-static void TimerCallback(u64 timer_handle, int cycles_late) {
-    const auto proper_handle = static_cast<Handle>(timer_handle);
-    const auto& system = Core::System::GetInstance();
-    SharedPtr<Timer> timer = system.Kernel().RetrieveTimerFromCallbackHandleTable(proper_handle);
-
-    if (timer == nullptr) {
-        LOG_CRITICAL(Kernel, "Callback fired for invalid timer {:016X}", timer_handle);
-        return;
-    }
-
-    timer->Signal(cycles_late);
-}
-
 struct KernelCore::Impl {
+    explicit Impl(Core::System& system) : system{system}, global_scheduler{system} {}
+
     void Initialize(KernelCore& kernel) {
         Shutdown();
 
         InitializeSystemResourceLimit(kernel);
         InitializeThreads();
-        InitializeTimers();
+        InitializePreemption();
     }
 
     void Shutdown() {
         next_object_id = 0;
-        next_process_id = 10;
+        next_kernel_process_id = Process::InitialKIPIDMin;
+        next_user_process_id = Process::ProcessIDMin;
         next_thread_id = 1;
 
         process_list.clear();
@@ -122,16 +114,16 @@ struct KernelCore::Impl {
 
         thread_wakeup_callback_handle_table.Clear();
         thread_wakeup_event_type = nullptr;
+        preemption_event = nullptr;
 
-        timer_callback_handle_table.Clear();
-        timer_callback_event_type = nullptr;
+        global_scheduler.Shutdown();
 
         named_ports.clear();
     }
 
     // Creates the default system resource limit
     void InitializeSystemResourceLimit(KernelCore& kernel) {
-        system_resource_limit = ResourceLimit::Create(kernel, "System");
+        system_resource_limit = ResourceLimit::Create(kernel);
 
         // If setting the default system values fails, then something seriously wrong has occurred.
         ASSERT(system_resource_limit->SetLimitValue(ResourceType::PhysicalMemory, 0x200000000)
@@ -144,33 +136,35 @@ struct KernelCore::Impl {
 
     void InitializeThreads() {
         thread_wakeup_event_type =
-            CoreTiming::RegisterEvent("ThreadWakeupCallback", ThreadWakeupCallback);
+            system.CoreTiming().RegisterEvent("ThreadWakeupCallback", ThreadWakeupCallback);
     }
 
-    void InitializeTimers() {
-        timer_callback_handle_table.Clear();
-        timer_callback_event_type = CoreTiming::RegisterEvent("TimerCallback", TimerCallback);
+    void InitializePreemption() {
+        preemption_event = system.CoreTiming().RegisterEvent(
+            "PreemptionCallback", [this](u64 userdata, s64 cycles_late) {
+                global_scheduler.PreemptThreads();
+                s64 time_interval = Core::Timing::msToCycles(std::chrono::milliseconds(10));
+                system.CoreTiming().ScheduleEvent(time_interval, preemption_event);
+            });
+
+        s64 time_interval = Core::Timing::msToCycles(std::chrono::milliseconds(10));
+        system.CoreTiming().ScheduleEvent(time_interval, preemption_event);
     }
 
     std::atomic<u32> next_object_id{0};
-    // TODO(Subv): Start the process ids from 10 for now, as lower PIDs are
-    // reserved for low-level services
-    std::atomic<u32> next_process_id{10};
-    std::atomic<u32> next_thread_id{1};
+    std::atomic<u64> next_kernel_process_id{Process::InitialKIPIDMin};
+    std::atomic<u64> next_user_process_id{Process::ProcessIDMin};
+    std::atomic<u64> next_thread_id{1};
 
     // Lists all processes that exist in the current session.
     std::vector<SharedPtr<Process>> process_list;
     Process* current_process = nullptr;
+    Kernel::GlobalScheduler global_scheduler;
 
     SharedPtr<ResourceLimit> system_resource_limit;
 
-    /// The event type of the generic timer callback event
-    CoreTiming::EventType* timer_callback_event_type = nullptr;
-    // TODO(yuriks): This can be removed if Timer objects are explicitly pooled in the future,
-    // allowing us to simply use a pool index or similar.
-    Kernel::HandleTable timer_callback_handle_table;
-
-    CoreTiming::EventType* thread_wakeup_event_type = nullptr;
+    Core::Timing::EventType* thread_wakeup_event_type = nullptr;
+    Core::Timing::EventType* preemption_event = nullptr;
     // TODO(yuriks): This can be removed if Thread objects are explicitly pooled in the future,
     // allowing us to simply use a pool index or similar.
     Kernel::HandleTable thread_wakeup_callback_handle_table;
@@ -178,9 +172,12 @@ struct KernelCore::Impl {
     /// Map of named ports managed by the kernel, which can be retrieved using
     /// the ConnectToPort SVC.
     NamedPortTable named_ports;
+
+    // System context
+    Core::System& system;
 };
 
-KernelCore::KernelCore() : impl{std::make_unique<Impl>()} {}
+KernelCore::KernelCore(Core::System& system) : impl{std::make_unique<Impl>(system)} {}
 KernelCore::~KernelCore() {
     Shutdown();
 }
@@ -201,16 +198,18 @@ SharedPtr<Thread> KernelCore::RetrieveThreadFromWakeupCallbackHandleTable(Handle
     return impl->thread_wakeup_callback_handle_table.Get<Thread>(handle);
 }
 
-SharedPtr<Timer> KernelCore::RetrieveTimerFromCallbackHandleTable(Handle handle) const {
-    return impl->timer_callback_handle_table.Get<Timer>(handle);
-}
-
 void KernelCore::AppendNewProcess(SharedPtr<Process> process) {
     impl->process_list.push_back(std::move(process));
 }
 
 void KernelCore::MakeCurrentProcess(Process* process) {
     impl->current_process = process;
+
+    if (process == nullptr) {
+        return;
+    }
+
+    Memory::SetCurrentPageTable(*process);
 }
 
 Process* KernelCore::CurrentProcess() {
@@ -219,6 +218,18 @@ Process* KernelCore::CurrentProcess() {
 
 const Process* KernelCore::CurrentProcess() const {
     return impl->current_process;
+}
+
+const std::vector<SharedPtr<Process>>& KernelCore::GetProcessList() const {
+    return impl->process_list;
+}
+
+Kernel::GlobalScheduler& KernelCore::GlobalScheduler() {
+    return impl->global_scheduler;
+}
+
+const Kernel::GlobalScheduler& KernelCore::GlobalScheduler() const {
+    return impl->global_scheduler;
 }
 
 void KernelCore::AddNamedPort(std::string name, SharedPtr<ClientPort> port) {
@@ -242,24 +253,20 @@ u32 KernelCore::CreateNewObjectID() {
     return impl->next_object_id++;
 }
 
-u32 KernelCore::CreateNewThreadID() {
+u64 KernelCore::CreateNewThreadID() {
     return impl->next_thread_id++;
 }
 
-u32 KernelCore::CreateNewProcessID() {
-    return impl->next_process_id++;
+u64 KernelCore::CreateNewKernelProcessID() {
+    return impl->next_kernel_process_id++;
 }
 
-ResultVal<Handle> KernelCore::CreateTimerCallbackHandle(const SharedPtr<Timer>& timer) {
-    return impl->timer_callback_handle_table.Create(timer);
+u64 KernelCore::CreateNewUserProcessID() {
+    return impl->next_user_process_id++;
 }
 
-CoreTiming::EventType* KernelCore::ThreadWakeupCallbackEventType() const {
+Core::Timing::EventType* KernelCore::ThreadWakeupCallbackEventType() const {
     return impl->thread_wakeup_event_type;
-}
-
-CoreTiming::EventType* KernelCore::TimerCallbackEventType() const {
-    return impl->timer_callback_event_type;
 }
 
 Kernel::HandleTable& KernelCore::ThreadWakeupCallbackHandleTable() {

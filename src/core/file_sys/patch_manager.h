@@ -10,6 +10,11 @@
 #include "common/common_types.h"
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/vfs.h"
+#include "core/memory/dmnt_cheat_types.h"
+
+namespace Core {
+class System;
+}
 
 namespace FileSys {
 
@@ -39,11 +44,15 @@ public:
     // Currently tracked NSO patches:
     // - IPS
     // - IPSwitch
-    std::vector<u8> PatchNSO(const std::vector<u8>& nso) const;
+    std::vector<u8> PatchNSO(const std::vector<u8>& nso, const std::string& name) const;
 
     // Checks to see if PatchNSO() will have any effect given the NSO's build ID.
     // Used to prevent expensive copies in NSO loader.
     bool HasNSOPatch(const std::array<u8, 0x20>& build_id) const;
+
+    // Creates a CheatList object with all
+    std::vector<Memory::CheatEntry> CreateCheatList(const Core::System& system,
+                                                    const std::array<u8, 0x20>& build_id) const;
 
     // Currently tracked RomFS patches:
     // - Game Updates
@@ -57,8 +66,13 @@ public:
     std::map<std::string, std::string, std::less<>> GetPatchVersionNames(
         VirtualFile update_raw = nullptr) const;
 
-    // Given title_id of the program, attempts to get the control data of the update and parse it,
-    // falling back to the base control data.
+    // If the game update exists, returns the u32 version field in its Meta-type NCA. If that fails,
+    // it will fallback to the Meta-type NCA of the base game. If that fails, the result will be
+    // std::nullopt
+    std::optional<u32> GetGameVersion() const;
+
+    // Given title_id of the program, attempts to get the control data of the update and parse
+    // it, falling back to the base control data.
     std::pair<std::unique_ptr<NACP>, VirtualFile> GetControlMetadata() const;
 
     // Version of GetControlMetadata that takes an arbitrary NCA

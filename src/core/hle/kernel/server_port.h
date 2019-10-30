@@ -6,7 +6,7 @@
 
 #include <memory>
 #include <string>
-#include <tuple>
+#include <utility>
 #include <vector>
 #include "common/common_types.h"
 #include "core/hle/kernel/object.h"
@@ -22,6 +22,9 @@ class SessionRequestHandler;
 
 class ServerPort final : public WaitObject {
 public:
+    using HLEHandler = std::shared_ptr<SessionRequestHandler>;
+    using PortPair = std::pair<SharedPtr<ServerPort>, SharedPtr<ClientPort>>;
+
     /**
      * Creates a pair of ServerPort and an associated ClientPort.
      *
@@ -30,8 +33,8 @@ public:
      * @param name Optional name of the ports
      * @return The created port tuple
      */
-    static std::tuple<SharedPtr<ServerPort>, SharedPtr<ClientPort>> CreatePortPair(
-        KernelCore& kernel, u32 max_sessions, std::string name = "UnknownPort");
+    static PortPair CreatePortPair(KernelCore& kernel, u32 max_sessions,
+                                   std::string name = "UnknownPort");
 
     std::string GetTypeName() const override {
         return "ServerPort";
@@ -40,7 +43,7 @@ public:
         return name;
     }
 
-    static const HandleType HANDLE_TYPE = HandleType::ServerPort;
+    static constexpr HandleType HANDLE_TYPE = HandleType::ServerPort;
     HandleType GetHandleType() const override {
         return HANDLE_TYPE;
     }
@@ -51,29 +54,44 @@ public:
      */
     ResultVal<SharedPtr<ServerSession>> Accept();
 
+    /// Whether or not this server port has an HLE handler available.
+    bool HasHLEHandler() const {
+        return hle_handler != nullptr;
+    }
+
+    /// Gets the HLE handler for this port.
+    HLEHandler GetHLEHandler() const {
+        return hle_handler;
+    }
+
     /**
      * Sets the HLE handler template for the port. ServerSessions crated by connecting to this port
      * will inherit a reference to this handler.
      */
-    void SetHleHandler(std::shared_ptr<SessionRequestHandler> hle_handler_) {
+    void SetHleHandler(HLEHandler hle_handler_) {
         hle_handler = std::move(hle_handler_);
     }
 
-    std::string name; ///< Name of port (optional)
+    /// Appends a ServerSession to the collection of ServerSessions
+    /// waiting to be accepted by this port.
+    void AppendPendingSession(SharedPtr<ServerSession> pending_session);
+
+    bool ShouldWait(const Thread* thread) const override;
+    void Acquire(Thread* thread) override;
+
+private:
+    explicit ServerPort(KernelCore& kernel);
+    ~ServerPort() override;
 
     /// ServerSessions waiting to be accepted by the port
     std::vector<SharedPtr<ServerSession>> pending_sessions;
 
     /// This session's HLE request handler template (optional)
     /// ServerSessions created from this port inherit a reference to this handler.
-    std::shared_ptr<SessionRequestHandler> hle_handler;
+    HLEHandler hle_handler;
 
-    bool ShouldWait(Thread* thread) const override;
-    void Acquire(Thread* thread) override;
-
-private:
-    explicit ServerPort(KernelCore& kernel);
-    ~ServerPort() override;
+    /// Name of the port (optional)
+    std::string name;
 };
 
 } // namespace Kernel

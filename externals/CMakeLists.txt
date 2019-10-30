@@ -7,16 +7,16 @@ include(DownloadExternals)
 add_library(catch-single-include INTERFACE)
 target_include_directories(catch-single-include INTERFACE catch/single_include)
 
+# libfmt
+add_subdirectory(fmt)
+add_library(fmt::fmt ALIAS fmt)
+
 # Dynarmic
 if (ARCHITECTURE_x86_64)
     set(DYNARMIC_TESTS OFF)
     set(DYNARMIC_NO_BUNDLED_FMT ON)
     add_subdirectory(dynarmic)
 endif()
-
-# libfmt
-add_subdirectory(fmt)
-add_library(fmt::fmt ALIAS fmt)
 
 # getopt
 if (MSVC)
@@ -42,12 +42,13 @@ target_include_directories(mbedtls PUBLIC ./mbedtls/include)
 add_library(microprofile INTERFACE)
 target_include_directories(microprofile INTERFACE ./microprofile)
 
-# Open Source Archives
-add_subdirectory(open_source_archives EXCLUDE_FROM_ALL)
-
 # Unicorn
 add_library(unicorn-headers INTERFACE)
 target_include_directories(unicorn-headers INTERFACE ./unicorn/include)
+
+# Zstandard
+add_subdirectory(zstd/build/cmake EXCLUDE_FROM_ALL)
+target_include_directories(libzstd_static INTERFACE ./zstd/lib)
 
 # SoundTouch
 add_subdirectory(soundtouch)
@@ -67,6 +68,17 @@ if (USE_DISCORD_PRESENCE)
     add_subdirectory(discord-rpc EXCLUDE_FROM_ALL)
     target_include_directories(discord-rpc INTERFACE ./discord-rpc/include)
 endif()
+
+# Sirit
+if (ENABLE_VULKAN)
+    add_subdirectory(sirit)
+endif()
+
+# zlib
+add_subdirectory(zlib EXCLUDE_FROM_ALL)
+
+# libzip
+add_subdirectory(libzip EXCLUDE_FROM_ALL)
 
 if (ENABLE_WEB_SERVICE)
     # LibreSSL

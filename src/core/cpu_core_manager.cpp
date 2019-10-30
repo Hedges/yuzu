@@ -6,6 +6,7 @@
 #include "core/arm/exclusive_monitor.h"
 #include "core/core.h"
 #include "core/core_cpu.h"
+#include "core/core_timing.h"
 #include "core/cpu_core_manager.h"
 #include "core/gdbstub/gdbstub.h"
 #include "core/settings.h"
@@ -19,17 +20,19 @@ void RunCpuCore(const System& system, Cpu& cpu_state) {
 }
 } // Anonymous namespace
 
-CpuCoreManager::CpuCoreManager() = default;
+CpuCoreManager::CpuCoreManager(System& system) : system{system} {}
 CpuCoreManager::~CpuCoreManager() = default;
 
-void CpuCoreManager::Initialize(System& system) {
+void CpuCoreManager::Initialize() {
     barrier = std::make_unique<CpuBarrier>();
     exclusive_monitor = Cpu::MakeExclusiveMonitor(cores.size());
 
     for (std::size_t index = 0; index < cores.size(); ++index) {
-        cores[index] = std::make_unique<Cpu>(*exclusive_monitor, *barrier, index);
+        cores[index] = std::make_unique<Cpu>(system, *exclusive_monitor, *barrier, index);
     }
+}
 
+void CpuCoreManager::StartThreads() {
     // Create threads for CPU cores 1-3, and build thread_to_cpu map
     // CPU core 0 is run on the main thread
     thread_to_cpu[std::this_thread::get_id()] = cores[0].get();
@@ -55,6 +58,7 @@ void CpuCoreManager::Shutdown() {
 
     thread_to_cpu.clear();
     for (auto& cpu_core : cores) {
+        cpu_core->Shutdown();
         cpu_core.reset();
     }
 
@@ -120,13 +124,19 @@ void CpuCoreManager::RunLoop(bool tight_loop) {
         }
     }
 
-    for (active_core = 0; active_core < NUM_CPU_CORES; ++active_core) {
-        cores[active_core]->RunLoop(tight_loop);
-        if (Settings::values.use_multi_core) {
-            // Cores 1-3 are run on other threads in this mode
-            break;
+    auto& core_timing = system.CoreTiming();
+    core_timing.ResetRun();
+    bool keep_running{};
+    do {
+        keep_running = false;
+        for (active_core = 0; active_core < NUM_CPU_CORES; ++active_core) {
+            core_timing.SwitchContext(active_core);
+            if (core_timing.CanCurrentContextRun()) {
+                cores[active_core]->RunLoop(tight_loop);
+            }
+            keep_running |= core_timing.CanCurrentContextRun();
         }
-    }
+    } while (keep_running);
 
     if (GDBStub::IsServerEnabled()) {
         GDBStub::SetCpuStepFlag(false);

@@ -8,18 +8,9 @@
 #include <utility>
 #include "common/assert.h"
 #include "common/bit_field.h"
-#include "common/common_funcs.h"
 #include "common/common_types.h"
 
 // All the constants in this file come from http://switchbrew.org/index.php?title=Error_codes
-
-/**
- * Detailed description of the error. Code 0 always means success.
- */
-enum class ErrorDescription : u32 {
-    Success = 0,
-    RemoteProcessDead = 301,
-};
 
 /**
  * Identifies the module which caused the error. Error codes can be propagated through a call
@@ -121,29 +112,17 @@ enum class ErrorModule : u32 {
     ShopN = 811,
 };
 
-/// Encapsulates a CTR-OS error code, allowing it to be separated into its constituent fields.
+/// Encapsulates a Horizon OS error code, allowing it to be separated into its constituent fields.
 union ResultCode {
     u32 raw;
 
     BitField<0, 9, ErrorModule> module;
     BitField<9, 13, u32> description;
 
-    // The last bit of `level` is checked by apps and the kernel to determine if a result code is an
-    // error
-    BitField<31, 1, u32> is_error;
-
     constexpr explicit ResultCode(u32 raw) : raw(raw) {}
-
-    constexpr ResultCode(ErrorModule module, ErrorDescription description)
-        : ResultCode(module, static_cast<u32>(description)) {}
 
     constexpr ResultCode(ErrorModule module_, u32 description_)
         : raw(module.FormatValue(module_) | description.FormatValue(description_)) {}
-
-    constexpr ResultCode& operator=(const ResultCode& o) {
-        raw = o.raw;
-        return *this;
-    }
 
     constexpr bool IsSuccess() const {
         return raw == 0;

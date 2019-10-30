@@ -5,7 +5,12 @@
 #pragma once
 
 #include <array>
+#include <vector>
 #include "common/common_types.h"
+
+namespace Common {
+struct PageTable;
+}
 
 namespace Kernel {
 enum class VMAPermission : u8;
@@ -39,18 +44,17 @@ public:
     /// Step CPU by one instruction
     virtual void Step() = 0;
 
-    /// Maps a backing memory region for the CPU
-    virtual void MapBackingMemory(VAddr address, std::size_t size, u8* memory,
-                                  Kernel::VMAPermission perms) = 0;
-
-    /// Unmaps a region of memory that was previously mapped using MapBackingMemory
-    virtual void UnmapMemory(VAddr address, std::size_t size) = 0;
-
     /// Clear all instruction cache
     virtual void ClearInstructionCache() = 0;
 
-    /// Notify CPU emulation that page tables have changed
-    virtual void PageTableChanged() = 0;
+    /// Notifies CPU emulation that the current page table has changed.
+    ///
+    /// @param new_page_table                 The new page table.
+    /// @param new_address_space_size_in_bits The new usable size of the address space in bits.
+    ///                                       This can be either 32, 36, or 39 on official software.
+    ///
+    virtual void PageTableChanged(Common::PageTable& new_page_table,
+                                  std::size_t new_address_space_size_in_bits) = 0;
 
     /**
      * Set the Program Counter to an address
@@ -141,6 +145,24 @@ public:
 
     /// Prepare core for thread reschedule (if needed to correctly handle state)
     virtual void PrepareReschedule() = 0;
+
+    struct BacktraceEntry {
+        std::string module;
+        u64 address;
+        u64 original_address;
+        u64 offset;
+        std::string name;
+    };
+
+    std::vector<BacktraceEntry> GetBacktrace() const;
+
+    /// fp (= r29) points to the last frame record.
+    /// Note that this is the frame record for the *previous* frame, not the current one.
+    /// Note we need to subtract 4 from our last read to get the proper address
+    /// Frame records are two words long:
+    /// fp+0 : pointer to previous frame record
+    /// fp+8 : value of lr for frame
+    void LogBacktrace() const;
 };
 
 } // namespace Core

@@ -11,13 +11,13 @@
 
 namespace Core {
 
+class System;
+
 class ARM_Unicorn final : public ARM_Interface {
 public:
-    ARM_Unicorn();
-    ~ARM_Unicorn();
-    void MapBackingMemory(VAddr address, std::size_t size, u8* memory,
-                          Kernel::VMAPermission perms) override;
-    void UnmapMemory(VAddr address, std::size_t size) override;
+    explicit ARM_Unicorn(System& system);
+    ~ARM_Unicorn() override;
+
     void SetPC(u64 pc) override;
     u64 GetPC() const override;
     u64 GetReg(int index) const override;
@@ -38,13 +38,16 @@ public:
     void Run() override;
     void Step() override;
     void ClearInstructionCache() override;
-    void PageTableChanged() override{};
+    void PageTableChanged(Common::PageTable&, std::size_t) override {}
     void RecordBreak(GDBStub::BreakpointAddress bkpt);
 
 private:
+    static void InterruptHook(uc_engine* uc, u32 int_no, void* user_data);
+
     uc_engine* uc{};
+    System& system;
     GDBStub::BreakpointAddress last_bkpt{};
-    bool last_bkpt_hit;
+    bool last_bkpt_hit = false;
 };
 
 } // namespace Core

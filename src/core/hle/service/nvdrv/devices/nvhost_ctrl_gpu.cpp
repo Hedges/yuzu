@@ -5,22 +5,25 @@
 #include <cstring>
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "core/core.h"
 #include "core/core_timing.h"
 #include "core/core_timing_util.h"
 #include "core/hle/service/nvdrv/devices/nvhost_ctrl_gpu.h"
 
 namespace Service::Nvidia::Devices {
 
-nvhost_ctrl_gpu::nvhost_ctrl_gpu() = default;
+nvhost_ctrl_gpu::nvhost_ctrl_gpu(Core::System& system) : nvdevice(system) {}
 nvhost_ctrl_gpu::~nvhost_ctrl_gpu() = default;
 
-u32 nvhost_ctrl_gpu::ioctl(Ioctl command, const std::vector<u8>& input, std::vector<u8>& output) {
+u32 nvhost_ctrl_gpu::ioctl(Ioctl command, const std::vector<u8>& input,
+                           const std::vector<u8>& input2, std::vector<u8>& output,
+                           std::vector<u8>& output2, IoctlCtrl& ctrl, IoctlVersion version) {
     LOG_DEBUG(Service_NVDRV, "called, command=0x{:08X}, input_size=0x{:X}, output_size=0x{:X}",
               command.raw, input.size(), output.size());
 
     switch (static_cast<IoctlCommand>(command.raw)) {
     case IoctlCommand::IocGetCharacteristicsCommand:
-        return GetCharacteristics(input, output);
+        return GetCharacteristics(input, output, output2, version);
     case IoctlCommand::IocGetTPCMasksCommand:
         return GetTPCMasks(input, output);
     case IoctlCommand::IocGetActiveSlotMaskCommand:
@@ -37,12 +40,14 @@ u32 nvhost_ctrl_gpu::ioctl(Ioctl command, const std::vector<u8>& input, std::vec
         return FlushL2(input, output);
     case IoctlCommand::IocGetGpuTime:
         return GetGpuTime(input, output);
+    default:
+        UNIMPLEMENTED_MSG("Unimplemented ioctl");
+        return 0;
     }
-    UNIMPLEMENTED_MSG("Unimplemented ioctl");
-    return 0;
 }
 
-u32 nvhost_ctrl_gpu::GetCharacteristics(const std::vector<u8>& input, std::vector<u8>& output) {
+u32 nvhost_ctrl_gpu::GetCharacteristics(const std::vector<u8>& input, std::vector<u8>& output,
+                                        std::vector<u8>& output2, IoctlVersion version) {
     LOG_DEBUG(Service_NVDRV, "called");
     IoctlCharacteristics params{};
     std::memcpy(&params, input.data(), input.size());
@@ -83,7 +88,13 @@ u32 nvhost_ctrl_gpu::GetCharacteristics(const std::vector<u8>& input, std::vecto
     params.gc.gr_compbit_store_base_hw = 0x0;
     params.gpu_characteristics_buf_size = 0xA0;
     params.gpu_characteristics_buf_addr = 0xdeadbeef; // Cannot be 0 (UNUSED)
-    std::memcpy(output.data(), &params, output.size());
+
+    if (version == IoctlVersion::Version3) {
+        std::memcpy(output.data(), input.data(), output.size());
+        std::memcpy(output2.data(), &params.gc, output2.size());
+    } else {
+        std::memcpy(output.data(), &params, output.size());
+    }
     return 0;
 }
 
@@ -184,7 +195,8 @@ u32 nvhost_ctrl_gpu::GetGpuTime(const std::vector<u8>& input, std::vector<u8>& o
 
     IoctlGetGpuTime params{};
     std::memcpy(&params, input.data(), input.size());
-    params.gpu_time = CoreTiming::cyclesToNs(CoreTiming::GetTicks());
+    const auto ns = Core::Timing::CyclesToNs(system.CoreTiming().GetTicks());
+    params.gpu_time = static_cast<u64_le>(ns.count());
     std::memcpy(output.data(), &params, output.size());
     return 0;
 }

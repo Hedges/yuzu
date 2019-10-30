@@ -12,7 +12,6 @@
 #include "common/file_util.h"
 #include "common/logging/log.h"
 
-#include "core/core.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/loader/loader.h"
@@ -101,13 +100,30 @@ bool VerifyLogin(const std::string& username, const std::string& token) {
 #endif
 }
 
-TelemetrySession::TelemetrySession() {
+TelemetrySession::TelemetrySession() = default;
+
+TelemetrySession::~TelemetrySession() {
+    // Log one-time session end information
+    const s64 shutdown_time{std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count()};
+    AddField(Telemetry::FieldType::Session, "Shutdown_Time", shutdown_time);
+
 #ifdef ENABLE_WEB_SERVICE
-    backend = std::make_unique<WebService::TelemetryJson>(
+    auto backend = std::make_unique<WebService::TelemetryJson>(
         Settings::values.web_api_url, Settings::values.yuzu_username, Settings::values.yuzu_token);
 #else
-    backend = std::make_unique<Telemetry::NullVisitor>();
+    auto backend = std::make_unique<Telemetry::NullVisitor>();
 #endif
+
+    // Complete the session, submitting to the web service backend if necessary
+    field_collection.Accept(*backend);
+    if (Settings::values.enable_telemetry) {
+        backend->Complete();
+    }
+}
+
+void TelemetrySession::AddInitialInfo(Loader::AppLoader& app_loader) {
     // Log one-time top-level information
     AddField(Telemetry::FieldType::None, "TelemetryId", GetTelemetryId());
 
@@ -118,26 +134,28 @@ TelemetrySession::TelemetrySession() {
     AddField(Telemetry::FieldType::Session, "Init_Time", init_time);
 
     u64 program_id{};
-    const Loader::ResultStatus res{System::GetInstance().GetAppLoader().ReadProgramId(program_id)};
+    const Loader::ResultStatus res{app_loader.ReadProgramId(program_id)};
     if (res == Loader::ResultStatus::Success) {
         const std::string formatted_program_id{fmt::format("{:016X}", program_id)};
         AddField(Telemetry::FieldType::Session, "ProgramId", formatted_program_id);
 
         std::string name;
-        System::GetInstance().GetAppLoader().ReadTitle(name);
+        app_loader.ReadTitle(name);
 
         if (name.empty()) {
             auto [nacp, icon_file] = FileSys::PatchManager(program_id).GetControlMetadata();
-            if (nacp != nullptr)
+            if (nacp != nullptr) {
                 name = nacp->GetApplicationName();
+            }
         }
 
-        if (!name.empty())
+        if (!name.empty()) {
             AddField(Telemetry::FieldType::Session, "ProgramName", name);
+        }
     }
 
     AddField(Telemetry::FieldType::Session, "ProgramFormat",
-             static_cast<u8>(System::GetInstance().GetAppLoader().GetFileType()));
+             static_cast<u8>(app_loader.GetFileType()));
 
     // Log application information
     Telemetry::AppendBuildInfo(field_collection);
@@ -150,7 +168,6 @@ TelemetrySession::TelemetrySession() {
     AddField(Telemetry::FieldType::UserConfig, "Audio_SinkId", Settings::values.sink_id);
     AddField(Telemetry::FieldType::UserConfig, "Audio_EnableAudioStretching",
              Settings::values.enable_audio_stretching);
-    AddField(Telemetry::FieldType::UserConfig, "Core_UseCpuJit", Settings::values.use_cpu_jit);
     AddField(Telemetry::FieldType::UserConfig, "Core_UseMultiCore",
              Settings::values.use_multi_core);
     AddField(Telemetry::FieldType::UserConfig, "Renderer_ResolutionFactor",
@@ -158,30 +175,20 @@ TelemetrySession::TelemetrySession() {
     AddField(Telemetry::FieldType::UserConfig, "Renderer_UseFrameLimit",
              Settings::values.use_frame_limit);
     AddField(Telemetry::FieldType::UserConfig, "Renderer_FrameLimit", Settings::values.frame_limit);
+    AddField(Telemetry::FieldType::UserConfig, "Renderer_UseDiskShaderCache",
+             Settings::values.use_disk_shader_cache);
     AddField(Telemetry::FieldType::UserConfig, "Renderer_UseAccurateGpuEmulation",
              Settings::values.use_accurate_gpu_emulation);
+    AddField(Telemetry::FieldType::UserConfig, "Renderer_UseAsynchronousGpuEmulation",
+             Settings::values.use_asynchronous_gpu_emulation);
     AddField(Telemetry::FieldType::UserConfig, "System_UseDockedMode",
              Settings::values.use_docked_mode);
 }
 
-TelemetrySession::~TelemetrySession() {
-    // Log one-time session end information
-    const s64 shutdown_time{std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::system_clock::now().time_since_epoch())
-                                .count()};
-    AddField(Telemetry::FieldType::Session, "Shutdown_Time", shutdown_time);
-
-    // Complete the session, submitting to web service if necessary
-    // This is just a placeholder to wrap up the session once the core completes and this is
-    // destroyed. This will be moved elsewhere once we are actually doing real I/O with the service.
-    field_collection.Accept(*backend);
-    if (Settings::values.enable_telemetry)
-        backend->Complete();
-    backend = nullptr;
-}
-
 bool TelemetrySession::SubmitTestcase() {
 #ifdef ENABLE_WEB_SERVICE
+    auto backend = std::make_unique<WebService::TelemetryJson>(
+        Settings::values.web_api_url, Settings::values.yuzu_username, Settings::values.yuzu_token);
     field_collection.Accept(*backend);
     return backend->SubmitTestcase();
 #else

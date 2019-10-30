@@ -6,8 +6,16 @@
 
 #include <memory>
 
+namespace Core {
+class System;
+}
+
 namespace Core::Frontend {
 class EmuWindow;
+}
+
+namespace Tegra {
+class GPU;
 }
 
 namespace VideoCore {
@@ -20,6 +28,12 @@ class RendererBase;
  * @note The returned renderer instance is simply allocated. Its Init()
  *       function still needs to be called to fully complete its setup.
  */
-std::unique_ptr<RendererBase> CreateRenderer(Core::Frontend::EmuWindow& emu_window);
+std::unique_ptr<RendererBase> CreateRenderer(Core::Frontend::EmuWindow& emu_window,
+                                             Core::System& system);
+
+/// Creates an emulated GPU instance using the given system context.
+std::unique_ptr<Tegra::GPU> CreateGPU(Core::System& system);
+
+u16 GetResolutionScaleFactor(const RendererBase& renderer);
 
 } // namespace VideoCore

@@ -13,10 +13,12 @@ namespace Service::Nvidia::Devices {
 
 class nvhost_ctrl_gpu final : public nvdevice {
 public:
-    nvhost_ctrl_gpu();
+    explicit nvhost_ctrl_gpu(Core::System& system);
     ~nvhost_ctrl_gpu() override;
 
-    u32 ioctl(Ioctl command, const std::vector<u8>& input, std::vector<u8>& output) override;
+    u32 ioctl(Ioctl command, const std::vector<u8>& input, const std::vector<u8>& input2,
+              std::vector<u8>& output, std::vector<u8>& output2, IoctlCtrl& ctrl,
+              IoctlVersion version) override;
 
 private:
     enum class IoctlCommand : u32_le {
@@ -161,7 +163,8 @@ private:
     };
     static_assert(sizeof(IoctlGetGpuTime) == 8, "IoctlGetGpuTime is incorrect size");
 
-    u32 GetCharacteristics(const std::vector<u8>& input, std::vector<u8>& output);
+    u32 GetCharacteristics(const std::vector<u8>& input, std::vector<u8>& output,
+                           std::vector<u8>& output2, IoctlVersion version);
     u32 GetTPCMasks(const std::vector<u8>& input, std::vector<u8>& output);
     u32 GetActiveSlotMask(const std::vector<u8>& input, std::vector<u8>& output);
     u32 ZCullGetCtxSize(const std::vector<u8>& input, std::vector<u8>& output);

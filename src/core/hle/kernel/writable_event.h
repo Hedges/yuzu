@@ -4,9 +4,7 @@
 
 #pragma once
 
-#include "common/common_types.h"
 #include "core/hle/kernel/object.h"
-#include "core/hle/kernel/wait_object.h"
 
 namespace Kernel {
 
@@ -39,7 +37,7 @@ public:
         return name;
     }
 
-    static const HandleType HANDLE_TYPE = HandleType::WritableEvent;
+    static constexpr HandleType HANDLE_TYPE = HandleType::WritableEvent;
     HandleType GetHandleType() const override {
         return HANDLE_TYPE;
     }

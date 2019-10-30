@@ -6,8 +6,6 @@
 
 #include <memory>
 #include <QDialog>
-#include <QWidget>
-#include "yuzu/configuration/config.h"
 
 namespace Ui {
 class ConfigureTouchscreenAdvanced;
@@ -20,13 +18,16 @@ public:
     explicit ConfigureTouchscreenAdvanced(QWidget* parent);
     ~ConfigureTouchscreenAdvanced() override;
 
-    void applyConfiguration();
+    void ApplyConfiguration();
 
 private:
+    void changeEvent(QEvent* event) override;
+    void RetranslateUI();
+
     /// Load configuration settings.
-    void loadConfiguration();
+    void LoadConfiguration();
     /// Restore all buttons to their default values.
-    void restoreDefaults();
+    void RestoreDefaults();
 
     std::unique_ptr<Ui::ConfigureTouchscreenAdvanced> ui;
 };

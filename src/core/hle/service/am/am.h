@@ -4,17 +4,21 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <queue>
 #include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/service.h"
 
-namespace Service {
-namespace NVFlinger {
+namespace Kernel {
+class KernelCore;
+}
+
+namespace Service::NVFlinger {
 class NVFlinger;
 }
 
-namespace AM {
+namespace Service::AM {
 
 enum SystemLanguage {
     Japanese = 0,
@@ -41,12 +45,13 @@ class AppletMessageQueue {
 public:
     enum class AppletMessage : u32 {
         NoMessage = 0,
+        ExitRequested = 4,
         FocusStateChanged = 15,
         OperationModeChanged = 30,
         PerformanceModeChanged = 31,
     };
 
-    AppletMessageQueue();
+    explicit AppletMessageQueue(Kernel::KernelCore& kernel);
     ~AppletMessageQueue();
 
     const Kernel::SharedPtr<Kernel::ReadableEvent>& GetMesssageRecieveEvent() const;
@@ -55,6 +60,7 @@ public:
     AppletMessage PopMessage();
     std::size_t GetMessageCount() const;
     void OperationModeChanged();
+    void RequestExit();
 
 private:
     std::queue<AppletMessage> messages;
@@ -64,12 +70,14 @@ private:
 
 class IWindowController final : public ServiceFramework<IWindowController> {
 public:
-    IWindowController();
+    explicit IWindowController(Core::System& system_);
     ~IWindowController() override;
 
 private:
     void GetAppletResourceUserId(Kernel::HLERequestContext& ctx);
     void AcquireForegroundRights(Kernel::HLERequestContext& ctx);
+
+    Core::System& system;
 };
 
 class IAudioController final : public ServiceFramework<IAudioController> {
@@ -81,8 +89,21 @@ private:
     void SetExpectedMasterVolume(Kernel::HLERequestContext& ctx);
     void GetMainAppletExpectedMasterVolume(Kernel::HLERequestContext& ctx);
     void GetLibraryAppletExpectedMasterVolume(Kernel::HLERequestContext& ctx);
+    void ChangeMainAppletMasterVolume(Kernel::HLERequestContext& ctx);
+    void SetTransparentAudioRate(Kernel::HLERequestContext& ctx);
 
-    u32 volume{100};
+    static constexpr float min_allowed_volume = 0.0f;
+    static constexpr float max_allowed_volume = 1.0f;
+
+    float main_applet_volume{0.25f};
+    float library_applet_volume{max_allowed_volume};
+    float transparent_volume_rate{min_allowed_volume};
+
+    // Volume transition fade time in nanoseconds.
+    // e.g. If the main applet volume was 0% and was changed to 50%
+    //      with a fade of 50ns, then over the course of 50ns,
+    //      the volume will gradually fade up to 50%
+    std::chrono::nanoseconds fade_time_ns{0};
 };
 
 class IDisplayController final : public ServiceFramework<IDisplayController> {
@@ -99,33 +120,47 @@ public:
 
 class ISelfController final : public ServiceFramework<ISelfController> {
 public:
-    explicit ISelfController(std::shared_ptr<NVFlinger::NVFlinger> nvflinger);
+    explicit ISelfController(Core::System& system_,
+                             std::shared_ptr<NVFlinger::NVFlinger> nvflinger_);
     ~ISelfController() override;
 
 private:
-    void SetFocusHandlingMode(Kernel::HLERequestContext& ctx);
-    void SetRestartMessageEnabled(Kernel::HLERequestContext& ctx);
-    void SetPerformanceModeChangedNotification(Kernel::HLERequestContext& ctx);
-    void SetOperationModeChangedNotification(Kernel::HLERequestContext& ctx);
-    void SetOutOfFocusSuspendingEnabled(Kernel::HLERequestContext& ctx);
+    void Exit(Kernel::HLERequestContext& ctx);
     void LockExit(Kernel::HLERequestContext& ctx);
     void UnlockExit(Kernel::HLERequestContext& ctx);
+    void EnterFatalSection(Kernel::HLERequestContext& ctx);
+    void LeaveFatalSection(Kernel::HLERequestContext& ctx);
     void GetLibraryAppletLaunchableEvent(Kernel::HLERequestContext& ctx);
+    void SetScreenShotPermission(Kernel::HLERequestContext& ctx);
+    void SetOperationModeChangedNotification(Kernel::HLERequestContext& ctx);
+    void SetPerformanceModeChangedNotification(Kernel::HLERequestContext& ctx);
+    void SetFocusHandlingMode(Kernel::HLERequestContext& ctx);
+    void SetRestartMessageEnabled(Kernel::HLERequestContext& ctx);
+    void SetOutOfFocusSuspendingEnabled(Kernel::HLERequestContext& ctx);
     void SetScreenShotImageOrientation(Kernel::HLERequestContext& ctx);
     void CreateManagedDisplayLayer(Kernel::HLERequestContext& ctx);
-    void SetScreenShotPermission(Kernel::HLERequestContext& ctx);
     void SetHandlesRequestToDisplay(Kernel::HLERequestContext& ctx);
     void SetIdleTimeDetectionExtension(Kernel::HLERequestContext& ctx);
     void GetIdleTimeDetectionExtension(Kernel::HLERequestContext& ctx);
+    void SetAutoSleepDisabled(Kernel::HLERequestContext& ctx);
+    void IsAutoSleepDisabled(Kernel::HLERequestContext& ctx);
+    void GetAccumulatedSuspendedTickValue(Kernel::HLERequestContext& ctx);
+    void GetAccumulatedSuspendedTickChangedEvent(Kernel::HLERequestContext& ctx);
 
+    Core::System& system;
     std::shared_ptr<NVFlinger::NVFlinger> nvflinger;
     Kernel::EventPair launchable_event;
+    Kernel::EventPair accumulated_suspended_tick_changed_event;
+
     u32 idle_time_detection_extension = 0;
+    u64 num_fatal_sections_entered = 0;
+    bool is_auto_sleep_disabled = false;
 };
 
 class ICommonStateGetter final : public ServiceFramework<ICommonStateGetter> {
 public:
-    explicit ICommonStateGetter(std::shared_ptr<AppletMessageQueue> msg_queue);
+    explicit ICommonStateGetter(Core::System& system,
+                                std::shared_ptr<AppletMessageQueue> msg_queue);
     ~ICommonStateGetter() override;
 
 private:
@@ -147,7 +182,9 @@ private:
     void GetPerformanceMode(Kernel::HLERequestContext& ctx);
     void GetBootMode(Kernel::HLERequestContext& ctx);
     void GetDefaultDisplayResolution(Kernel::HLERequestContext& ctx);
+    void SetCpuBoostMode(Kernel::HLERequestContext& ctx);
 
+    Core::System& system;
     std::shared_ptr<AppletMessageQueue> msg_queue;
 };
 
@@ -181,18 +218,20 @@ private:
 
 class ILibraryAppletCreator final : public ServiceFramework<ILibraryAppletCreator> {
 public:
-    ILibraryAppletCreator();
+    explicit ILibraryAppletCreator(Core::System& system_);
     ~ILibraryAppletCreator() override;
 
 private:
     void CreateLibraryApplet(Kernel::HLERequestContext& ctx);
     void CreateStorage(Kernel::HLERequestContext& ctx);
     void CreateTransferMemoryStorage(Kernel::HLERequestContext& ctx);
+
+    Core::System& system;
 };
 
 class IApplicationFunctions final : public ServiceFramework<IApplicationFunctions> {
 public:
-    IApplicationFunctions();
+    explicit IApplicationFunctions(Core::System& system_);
     ~IApplicationFunctions() override;
 
 private:
@@ -206,11 +245,19 @@ private:
     void SetGamePlayRecordingState(Kernel::HLERequestContext& ctx);
     void NotifyRunning(Kernel::HLERequestContext& ctx);
     void GetPseudoDeviceId(Kernel::HLERequestContext& ctx);
+    void ExtendSaveData(Kernel::HLERequestContext& ctx);
+    void GetSaveDataSize(Kernel::HLERequestContext& ctx);
     void BeginBlockingHomeButtonShortAndLongPressed(Kernel::HLERequestContext& ctx);
     void EndBlockingHomeButtonShortAndLongPressed(Kernel::HLERequestContext& ctx);
     void BeginBlockingHomeButton(Kernel::HLERequestContext& ctx);
     void EndBlockingHomeButton(Kernel::HLERequestContext& ctx);
     void EnableApplicationCrashReport(Kernel::HLERequestContext& ctx);
+    void GetGpuErrorDetectedSystemEvent(Kernel::HLERequestContext& ctx);
+
+    bool launch_popped_application_specific = false;
+    bool launch_popped_account_preselect = false;
+    Kernel::EventPair gpu_error_detected_event;
+    Core::System& system;
 };
 
 class IHomeMenuFunctions final : public ServiceFramework<IHomeMenuFunctions> {
@@ -242,7 +289,6 @@ public:
 
 /// Registers all AM services with the specified service manager.
 void InstallInterfaces(SM::ServiceManager& service_manager,
-                       std::shared_ptr<NVFlinger::NVFlinger> nvflinger);
+                       std::shared_ptr<NVFlinger::NVFlinger> nvflinger, Core::System& system);
 
-} // namespace AM
-} // namespace Service
+} // namespace Service::AM

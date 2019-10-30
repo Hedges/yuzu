@@ -6,9 +6,9 @@
 
 #include <memory>
 #include <string>
-#include "common/common_types.h"
 #include "core/hle/kernel/object.h"
-#include "core/hle/result.h"
+
+union ResultCode;
 
 namespace Kernel {
 
@@ -29,21 +29,22 @@ public:
         return name;
     }
 
-    static const HandleType HANDLE_TYPE = HandleType::ClientSession;
+    static constexpr HandleType HANDLE_TYPE = HandleType::ClientSession;
     HandleType GetHandleType() const override {
         return HANDLE_TYPE;
     }
 
     ResultCode SendSyncRequest(SharedPtr<Thread> thread);
 
-    std::string name; ///< Name of client port (optional)
+private:
+    explicit ClientSession(KernelCore& kernel);
+    ~ClientSession() override;
 
     /// The parent session, which links to the server endpoint.
     std::shared_ptr<Session> parent;
 
-private:
-    explicit ClientSession(KernelCore& kernel);
-    ~ClientSession() override;
+    /// Name of the client session (optional)
+    std::string name;
 };
 
 } // namespace Kernel

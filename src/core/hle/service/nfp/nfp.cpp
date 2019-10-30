@@ -9,23 +9,24 @@
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/readable_event.h"
+#include "core/hle/kernel/thread.h"
 #include "core/hle/kernel/writable_event.h"
 #include "core/hle/lock.h"
-#include "core/hle/service/hid/hid.h"
 #include "core/hle/service/nfp/nfp.h"
 #include "core/hle/service/nfp/nfp_user.h"
 
 namespace Service::NFP {
 
 namespace ErrCodes {
-constexpr ResultCode ERR_TAG_FAILED(ErrorModule::NFP,
-                                    -1); // TODO(ogniK): Find the actual error code
-}
+[[maybe_unused]] constexpr ResultCode ERR_TAG_FAILED(ErrorModule::NFP,
+                                                     -1); // TODO(ogniK): Find the actual error code
+constexpr ResultCode ERR_NO_APPLICATION_AREA(ErrorModule::NFP, 152);
+} // namespace ErrCodes
 
-Module::Interface::Interface(std::shared_ptr<Module> module, const char* name)
-    : ServiceFramework(name), module(std::move(module)) {
-    auto& kernel = Core::System::GetInstance().Kernel();
-    nfc_tag_load = Kernel::WritableEvent::CreateEventPair(kernel, Kernel::ResetType::OneShot,
+Module::Interface::Interface(std::shared_ptr<Module> module, Core::System& system, const char* name)
+    : ServiceFramework(name), module(std::move(module)), system(system) {
+    auto& kernel = system.Kernel();
+    nfc_tag_load = Kernel::WritableEvent::CreateEventPair(kernel, Kernel::ResetType::Automatic,
                                                           "IUser:NFCTagDetected");
 }
 
@@ -33,7 +34,7 @@ Module::Interface::~Interface() = default;
 
 class IUser final : public ServiceFramework<IUser> {
 public:
-    IUser(Module::Interface& nfp_interface)
+    IUser(Module::Interface& nfp_interface, Core::System& system)
         : ServiceFramework("NFP::IUser"), nfp_interface(nfp_interface) {
         static const FunctionInfo functions[] = {
             {0, &IUser::Initialize, "Initialize"},
@@ -64,11 +65,11 @@ public:
         };
         RegisterHandlers(functions);
 
-        auto& kernel = Core::System::GetInstance().Kernel();
+        auto& kernel = system.Kernel();
         deactivate_event = Kernel::WritableEvent::CreateEventPair(
-            kernel, Kernel::ResetType::OneShot, "IUser:DeactivateEvent");
+            kernel, Kernel::ResetType::Automatic, "IUser:DeactivateEvent");
         availability_change_event = Kernel::WritableEvent::CreateEventPair(
-            kernel, Kernel::ResetType::OneShot, "IUser:AvailabilityChangeEvent");
+            kernel, Kernel::ResetType::Automatic, "IUser:AvailabilityChangeEvent");
     }
 
 private:
@@ -182,6 +183,8 @@ private:
         case DeviceState::TagRemoved:
             device_state = DeviceState::Initialized;
             break;
+        default:
+            break;
         }
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
@@ -292,10 +295,9 @@ private:
     }
 
     void OpenApplicationArea(Kernel::HLERequestContext& ctx) {
-        LOG_DEBUG(Service_NFP, "called");
-        // We don't need to worry about this since we can just open the file
+        LOG_WARNING(Service_NFP, "(STUBBED) called");
         IPC::ResponseBuilder rb{ctx, 2};
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ErrCodes::ERR_NO_APPLICATION_AREA);
     }
 
     void GetApplicationAreaSize(Kernel::HLERequestContext& ctx) {
@@ -317,8 +319,8 @@ private:
     }
 
     bool has_attached_handle{};
-    const u64 device_handle{Common::MakeMagic('Y', 'U', 'Z', 'U')};
-    const u32 npad_id{0}; // Player 1 controller
+    const u64 device_handle{0}; // Npad device 1
+    const u32 npad_id{0};       // Player 1 controller
     State state{State::NonInitialized};
     DeviceState device_state{DeviceState::Initialized};
     Kernel::EventPair deactivate_event;
@@ -331,11 +333,11 @@ void Module::Interface::CreateUserInterface(Kernel::HLERequestContext& ctx) {
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<IUser>(*this);
+    rb.PushIpcInterface<IUser>(*this, system);
 }
 
 bool Module::Interface::LoadAmiibo(const std::vector<u8>& buffer) {
-    std::lock_guard<std::recursive_mutex> lock(HLE::g_hle_lock);
+    std::lock_guard lock{HLE::g_hle_lock};
     if (buffer.size() < sizeof(AmiiboFile)) {
         return false;
     }
@@ -353,9 +355,9 @@ const Module::Interface::AmiiboFile& Module::Interface::GetAmiiboBuffer() const 
     return amiibo;
 }
 
-void InstallInterfaces(SM::ServiceManager& service_manager) {
+void InstallInterfaces(SM::ServiceManager& service_manager, Core::System& system) {
     auto module = std::make_shared<Module>();
-    std::make_shared<NFP_User>(module)->InstallAsService(service_manager);
+    std::make_shared<NFP_User>(module, system)->InstallAsService(service_manager);
 }
 
 } // namespace Service::NFP

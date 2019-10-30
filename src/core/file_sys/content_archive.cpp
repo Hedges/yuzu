@@ -359,6 +359,8 @@ bool NCA::ReadPFS0Section(const NCASectionHeader& section, const NCASectionTable
             dirs.push_back(std::move(npfs));
             if (IsDirectoryExeFS(dirs.back()))
                 exefs = dirs.back();
+            else if (IsDirectoryLogoPartition(dirs.back()))
+                logo = dirs.back();
         } else {
             if (has_rights_id)
                 status = Loader::ResultStatus::ErrorIncorrectTitlekeyOrTitlekek;
@@ -450,13 +452,13 @@ VirtualFile NCA::Decrypt(const NCASectionHeader& s_header, VirtualFile in, u64 s
 
     switch (s_header.raw.header.crypto_type) {
     case NCASectionCryptoType::NONE:
-        LOG_DEBUG(Crypto, "called with mode=NONE");
+        LOG_TRACE(Crypto, "called with mode=NONE");
         return in;
     case NCASectionCryptoType::CTR:
     // During normal BKTR decryption, this entire function is skipped. This is for the metadata,
     // which uses the same CTR as usual.
     case NCASectionCryptoType::BKTR:
-        LOG_DEBUG(Crypto, "called with mode=CTR, starting_offset={:016X}", starting_offset);
+        LOG_TRACE(Crypto, "called with mode=CTR, starting_offset={:016X}", starting_offset);
         {
             std::optional<Core::Crypto::Key128> key = {};
             if (has_rights_id) {
@@ -526,6 +528,14 @@ u64 NCA::GetTitleId() const {
     return header.title_id;
 }
 
+std::array<u8, 16> NCA::GetRightsId() const {
+    return header.rights_id;
+}
+
+u32 NCA::GetSDKVersion() const {
+    return header.sdk_version;
+}
+
 bool NCA::IsUpdate() const {
     return is_update;
 }
@@ -544,6 +554,10 @@ VirtualFile NCA::GetBaseFile() const {
 
 u64 NCA::GetBaseIVFCOffset() const {
     return ivfc_offset;
+}
+
+VirtualDir NCA::GetLogoPartition() const {
+    return logo;
 }
 
 } // namespace FileSys

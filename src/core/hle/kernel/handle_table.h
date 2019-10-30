@@ -43,8 +43,25 @@ enum KernelHandle : Handle {
  */
 class HandleTable final : NonCopyable {
 public:
+    /// This is the maximum limit of handles allowed per process in Horizon
+    static constexpr std::size_t MAX_COUNT = 1024;
+
     HandleTable();
     ~HandleTable();
+
+    /**
+     * Sets the number of handles that may be in use at one time
+     * for this handle table.
+     *
+     * @param handle_table_size The desired size to limit the handle table to.
+     *
+     * @returns an error code indicating if initialization was successful.
+     *          If initialization was not successful, then ERR_OUT_OF_MEMORY
+     *          will be returned.
+     *
+     * @pre handle_table_size must be within the range [0, 1024]
+     */
+    ResultCode SetSize(s32 handle_table_size);
 
     /**
      * Allocates a handle for the given object.
@@ -91,9 +108,6 @@ public:
     void Clear();
 
 private:
-    /// This is the maximum limit of handles allowed per process in Horizon
-    static constexpr std::size_t MAX_COUNT = 1024;
-
     /// Stores the Object referenced by the handle or null if the slot is empty.
     std::array<SharedPtr<Object>, MAX_COUNT> objects;
 
@@ -104,13 +118,20 @@ private:
     std::array<u16, MAX_COUNT> generations;
 
     /**
+     * The limited size of the handle table. This can be specified by process
+     * capabilities in order to restrict the overall number of handles that
+     * can be created in a process instance
+     */
+    u16 table_size = static_cast<u16>(MAX_COUNT);
+
+    /**
      * Global counter of the number of created handles. Stored in `generations` when a handle is
      * created, and wraps around to 1 when it hits 0x8000.
      */
-    u16 next_generation;
+    u16 next_generation = 1;
 
     /// Head of the free slots linked list.
-    u16 next_free_slot;
+    u16 next_free_slot = 0;
 };
 
 } // namespace Kernel

@@ -4,6 +4,7 @@
 
 #include "common/logging/log.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/process.h"
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/am/applet_ae.h"
 #include "core/hle/service/nvflinger/nvflinger.h"
@@ -13,9 +14,11 @@ namespace Service::AM {
 class ILibraryAppletProxy final : public ServiceFramework<ILibraryAppletProxy> {
 public:
     explicit ILibraryAppletProxy(std::shared_ptr<NVFlinger::NVFlinger> nvflinger,
-                                 std::shared_ptr<AppletMessageQueue> msg_queue)
+                                 std::shared_ptr<AppletMessageQueue> msg_queue,
+                                 Core::System& system)
         : ServiceFramework("ILibraryAppletProxy"), nvflinger(std::move(nvflinger)),
-          msg_queue(std::move(msg_queue)) {
+          msg_queue(std::move(msg_queue)), system(system) {
+        // clang-format off
         static const FunctionInfo functions[] = {
             {0, &ILibraryAppletProxy::GetCommonStateGetter, "GetCommonStateGetter"},
             {1, &ILibraryAppletProxy::GetSelfController, "GetSelfController"},
@@ -25,8 +28,11 @@ public:
             {10, &ILibraryAppletProxy::GetProcessWindingController, "GetProcessWindingController"},
             {11, &ILibraryAppletProxy::GetLibraryAppletCreator, "GetLibraryAppletCreator"},
             {20, &ILibraryAppletProxy::GetApplicationFunctions, "GetApplicationFunctions"},
+            {21, nullptr, "GetAppletCommonFunctions"},
             {1000, &ILibraryAppletProxy::GetDebugFunctions, "GetDebugFunctions"},
         };
+        // clang-format on
+
         RegisterHandlers(functions);
     }
 
@@ -36,7 +42,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushIpcInterface<ICommonStateGetter>(msg_queue);
+        rb.PushIpcInterface<ICommonStateGetter>(system, msg_queue);
     }
 
     void GetSelfController(Kernel::HLERequestContext& ctx) {
@@ -44,7 +50,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushIpcInterface<ISelfController>(nvflinger);
+        rb.PushIpcInterface<ISelfController>(system, nvflinger);
     }
 
     void GetWindowController(Kernel::HLERequestContext& ctx) {
@@ -52,7 +58,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushIpcInterface<IWindowController>();
+        rb.PushIpcInterface<IWindowController>(system);
     }
 
     void GetAudioController(Kernel::HLERequestContext& ctx) {
@@ -92,7 +98,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushIpcInterface<ILibraryAppletCreator>();
+        rb.PushIpcInterface<ILibraryAppletCreator>(system);
     }
 
     void GetApplicationFunctions(Kernel::HLERequestContext& ctx) {
@@ -100,19 +106,21 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushIpcInterface<IApplicationFunctions>();
+        rb.PushIpcInterface<IApplicationFunctions>(system);
     }
 
     std::shared_ptr<NVFlinger::NVFlinger> nvflinger;
     std::shared_ptr<AppletMessageQueue> msg_queue;
+    Core::System& system;
 };
 
 class ISystemAppletProxy final : public ServiceFramework<ISystemAppletProxy> {
 public:
     explicit ISystemAppletProxy(std::shared_ptr<NVFlinger::NVFlinger> nvflinger,
-                                std::shared_ptr<AppletMessageQueue> msg_queue)
+                                std::shared_ptr<AppletMessageQueue> msg_queue, Core::System& system)
         : ServiceFramework("ISystemAppletProxy"), nvflinger(std::move(nvflinger)),
-          msg_queue(std::move(msg_queue)) {
+          msg_queue(std::move(msg_queue)), system(system) {
+        // clang-format off
         static const FunctionInfo functions[] = {
             {0, &ISystemAppletProxy::GetCommonStateGetter, "GetCommonStateGetter"},
             {1, &ISystemAppletProxy::GetSelfController, "GetSelfController"},
@@ -124,8 +132,11 @@ public:
             {20, &ISystemAppletProxy::GetHomeMenuFunctions, "GetHomeMenuFunctions"},
             {21, &ISystemAppletProxy::GetGlobalStateController, "GetGlobalStateController"},
             {22, &ISystemAppletProxy::GetApplicationCreator, "GetApplicationCreator"},
+            {23, nullptr, "GetAppletCommonFunctions"},
             {1000, &ISystemAppletProxy::GetDebugFunctions, "GetDebugFunctions"},
         };
+        // clang-format on
+
         RegisterHandlers(functions);
     }
 
@@ -135,7 +146,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushIpcInterface<ICommonStateGetter>(msg_queue);
+        rb.PushIpcInterface<ICommonStateGetter>(system, msg_queue);
     }
 
     void GetSelfController(Kernel::HLERequestContext& ctx) {
@@ -143,7 +154,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushIpcInterface<ISelfController>(nvflinger);
+        rb.PushIpcInterface<ISelfController>(system, nvflinger);
     }
 
     void GetWindowController(Kernel::HLERequestContext& ctx) {
@@ -151,7 +162,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushIpcInterface<IWindowController>();
+        rb.PushIpcInterface<IWindowController>(system);
     }
 
     void GetAudioController(Kernel::HLERequestContext& ctx) {
@@ -183,7 +194,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushIpcInterface<ILibraryAppletCreator>();
+        rb.PushIpcInterface<ILibraryAppletCreator>(system);
     }
 
     void GetHomeMenuFunctions(Kernel::HLERequestContext& ctx) {
@@ -211,6 +222,7 @@ private:
     }
     std::shared_ptr<NVFlinger::NVFlinger> nvflinger;
     std::shared_ptr<AppletMessageQueue> msg_queue;
+    Core::System& system;
 };
 
 void AppletAE::OpenSystemAppletProxy(Kernel::HLERequestContext& ctx) {
@@ -218,7 +230,7 @@ void AppletAE::OpenSystemAppletProxy(Kernel::HLERequestContext& ctx) {
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<ISystemAppletProxy>(nvflinger, msg_queue);
+    rb.PushIpcInterface<ISystemAppletProxy>(nvflinger, msg_queue, system);
 }
 
 void AppletAE::OpenLibraryAppletProxy(Kernel::HLERequestContext& ctx) {
@@ -226,7 +238,7 @@ void AppletAE::OpenLibraryAppletProxy(Kernel::HLERequestContext& ctx) {
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<ILibraryAppletProxy>(nvflinger, msg_queue);
+    rb.PushIpcInterface<ILibraryAppletProxy>(nvflinger, msg_queue, system);
 }
 
 void AppletAE::OpenLibraryAppletProxyOld(Kernel::HLERequestContext& ctx) {
@@ -234,13 +246,13 @@ void AppletAE::OpenLibraryAppletProxyOld(Kernel::HLERequestContext& ctx) {
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<ILibraryAppletProxy>(nvflinger, msg_queue);
+    rb.PushIpcInterface<ILibraryAppletProxy>(nvflinger, msg_queue, system);
 }
 
 AppletAE::AppletAE(std::shared_ptr<NVFlinger::NVFlinger> nvflinger,
-                   std::shared_ptr<AppletMessageQueue> msg_queue)
+                   std::shared_ptr<AppletMessageQueue> msg_queue, Core::System& system)
     : ServiceFramework("appletAE"), nvflinger(std::move(nvflinger)),
-      msg_queue(std::move(msg_queue)) {
+      msg_queue(std::move(msg_queue)), system(system) {
     // clang-format off
     static const FunctionInfo functions[] = {
         {100, &AppletAE::OpenSystemAppletProxy, "OpenSystemAppletProxy"},
@@ -249,7 +261,8 @@ AppletAE::AppletAE(std::shared_ptr<NVFlinger::NVFlinger> nvflinger,
         {300, nullptr, "OpenOverlayAppletProxy"},
         {350, nullptr, "OpenSystemApplicationProxy"},
         {400, nullptr, "CreateSelfLibraryAppletCreatorForDevelop"},
-        {401, nullptr, "GetSystemAppletControllerForDebug"},
+        {410, nullptr, "GetSystemAppletControllerForDebug"},
+        {1000, nullptr, "GetDebugFunctions"},
     };
     // clang-format on
 

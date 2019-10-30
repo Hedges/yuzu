@@ -6,11 +6,9 @@
 
 #include "common/assert.h"
 #include "common/logging/log.h"
-#include "core/core.h"
 #include "core/hle/kernel/errors.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/shared_memory.h"
-#include "core/memory.h"
 
 namespace Kernel {
 
@@ -30,12 +28,12 @@ SharedPtr<SharedMemory> SharedMemory::Create(KernelCore& kernel, Process* owner_
     shared_memory->other_permissions = other_permissions;
 
     if (address == 0) {
-        shared_memory->backing_block = std::make_shared<std::vector<u8>>(size);
+        shared_memory->backing_block = std::make_shared<Kernel::PhysicalMemory>(size);
         shared_memory->backing_block_offset = 0;
 
         // Refresh the address mappings for the current process.
-        if (Core::CurrentProcess() != nullptr) {
-            Core::CurrentProcess()->VMManager().RefreshMemoryBlockMappings(
+        if (kernel.CurrentProcess() != nullptr) {
+            kernel.CurrentProcess()->VMManager().RefreshMemoryBlockMappings(
                 shared_memory->backing_block.get());
         }
     } else {
@@ -61,8 +59,8 @@ SharedPtr<SharedMemory> SharedMemory::Create(KernelCore& kernel, Process* owner_
 }
 
 SharedPtr<SharedMemory> SharedMemory::CreateForApplet(
-    KernelCore& kernel, std::shared_ptr<std::vector<u8>> heap_block, std::size_t offset, u64 size,
-    MemoryPermission permissions, MemoryPermission other_permissions, std::string name) {
+    KernelCore& kernel, std::shared_ptr<Kernel::PhysicalMemory> heap_block, std::size_t offset,
+    u64 size, MemoryPermission permissions, MemoryPermission other_permissions, std::string name) {
     SharedPtr<SharedMemory> shared_memory(new SharedMemory(kernel));
 
     shared_memory->owner_process = nullptr;
@@ -120,7 +118,15 @@ ResultCode SharedMemory::Map(Process& target_process, VAddr address, MemoryPermi
                                                      ConvertPermissions(permissions));
 }
 
-ResultCode SharedMemory::Unmap(Process& target_process, VAddr address) {
+ResultCode SharedMemory::Unmap(Process& target_process, VAddr address, u64 unmap_size) {
+    if (unmap_size != size) {
+        LOG_ERROR(Kernel,
+                  "Invalid size passed to Unmap. Size must be equal to the size of the "
+                  "memory managed. Shared memory size=0x{:016X}, Unmap size=0x{:016X}",
+                  size, unmap_size);
+        return ERR_INVALID_SIZE;
+    }
+
     // TODO(Subv): Verify what happens if the application tries to unmap an address that is not
     // mapped to a SharedMemory.
     return target_process.VMManager().UnmapRange(address, size);

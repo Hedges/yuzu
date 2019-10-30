@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <memory>
 
+#include <QSignalBlocker>
 #include <QTimer>
 
 #include "configuration/configure_touchscreen_advanced.h"
@@ -20,81 +21,7 @@
 #include "yuzu/configuration/configure_input_player.h"
 #include "yuzu/configuration/configure_mouse_advanced.h"
 
-namespace {
-template <typename Dialog, typename... Args>
-void CallConfigureDialog(ConfigureInput& parent, Args&&... args) {
-    parent.applyConfiguration();
-    Dialog dialog(&parent, std::forward<Args>(args)...);
-
-    const auto res = dialog.exec();
-    if (res == QDialog::Accepted) {
-        dialog.applyConfiguration();
-    }
-}
-} // Anonymous namespace
-
-ConfigureInput::ConfigureInput(QWidget* parent)
-    : QWidget(parent), ui(std::make_unique<Ui::ConfigureInput>()) {
-    ui->setupUi(this);
-
-    players_controller = {
-        ui->player1_combobox, ui->player2_combobox, ui->player3_combobox, ui->player4_combobox,
-        ui->player5_combobox, ui->player6_combobox, ui->player7_combobox, ui->player8_combobox,
-    };
-
-    players_configure = {
-        ui->player1_configure, ui->player2_configure, ui->player3_configure, ui->player4_configure,
-        ui->player5_configure, ui->player6_configure, ui->player7_configure, ui->player8_configure,
-    };
-
-    for (auto* controller_box : players_controller) {
-        controller_box->addItems({"None", "Pro Controller", "Dual Joycons", "Single Right Joycon",
-                                  "Single Left Joycon"});
-    }
-
-    this->loadConfiguration();
-    updateUIEnabled();
-
-    connect(ui->restore_defaults_button, &QPushButton::pressed, this,
-            &ConfigureInput::restoreDefaults);
-
-    for (auto* enabled : players_controller)
-        connect(enabled, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                &ConfigureInput::updateUIEnabled);
-    connect(ui->use_docked_mode, &QCheckBox::stateChanged, this, &ConfigureInput::updateUIEnabled);
-    connect(ui->handheld_connected, &QCheckBox::stateChanged, this,
-            &ConfigureInput::updateUIEnabled);
-    connect(ui->mouse_enabled, &QCheckBox::stateChanged, this, &ConfigureInput::updateUIEnabled);
-    connect(ui->keyboard_enabled, &QCheckBox::stateChanged, this, &ConfigureInput::updateUIEnabled);
-    connect(ui->debug_enabled, &QCheckBox::stateChanged, this, &ConfigureInput::updateUIEnabled);
-    connect(ui->touchscreen_enabled, &QCheckBox::stateChanged, this,
-            &ConfigureInput::updateUIEnabled);
-
-    for (std::size_t i = 0; i < players_configure.size(); ++i) {
-        connect(players_configure[i], &QPushButton::pressed, this,
-                [this, i] { CallConfigureDialog<ConfigureInputPlayer>(*this, i, false); });
-    }
-
-    connect(ui->handheld_configure, &QPushButton::pressed, this,
-            [this] { CallConfigureDialog<ConfigureInputPlayer>(*this, 8, false); });
-
-    connect(ui->debug_configure, &QPushButton::pressed, this,
-            [this] { CallConfigureDialog<ConfigureInputPlayer>(*this, 9, true); });
-
-    connect(ui->mouse_advanced, &QPushButton::pressed, this,
-            [this] { CallConfigureDialog<ConfigureMouseAdvanced>(*this); });
-
-    connect(ui->touchscreen_advanced, &QPushButton::pressed, this,
-            [this] { CallConfigureDialog<ConfigureTouchscreenAdvanced>(*this); });
-}
-
-ConfigureInput::~ConfigureInput() = default;
-
-void ConfigureInput::OnDockedModeChanged(bool last_state, bool new_state) {
-    if (ui->use_docked_mode->isChecked() && ui->handheld_connected->isChecked()) {
-        ui->handheld_connected->setChecked(false);
-    }
-
+void OnDockedModeChanged(bool last_state, bool new_state) {
     if (last_state == new_state) {
         return;
     }
@@ -121,7 +48,74 @@ void ConfigureInput::OnDockedModeChanged(bool last_state, bool new_state) {
     }
 }
 
-void ConfigureInput::applyConfiguration() {
+namespace {
+template <typename Dialog, typename... Args>
+void CallConfigureDialog(ConfigureInput& parent, Args&&... args) {
+    parent.ApplyConfiguration();
+    Dialog dialog(&parent, std::forward<Args>(args)...);
+
+    const auto res = dialog.exec();
+    if (res == QDialog::Accepted) {
+        dialog.ApplyConfiguration();
+    }
+}
+} // Anonymous namespace
+
+ConfigureInput::ConfigureInput(QWidget* parent)
+    : QDialog(parent), ui(std::make_unique<Ui::ConfigureInput>()) {
+    ui->setupUi(this);
+
+    players_controller = {
+        ui->player1_combobox, ui->player2_combobox, ui->player3_combobox, ui->player4_combobox,
+        ui->player5_combobox, ui->player6_combobox, ui->player7_combobox, ui->player8_combobox,
+    };
+
+    players_configure = {
+        ui->player1_configure, ui->player2_configure, ui->player3_configure, ui->player4_configure,
+        ui->player5_configure, ui->player6_configure, ui->player7_configure, ui->player8_configure,
+    };
+
+    RetranslateUI();
+    LoadConfiguration();
+    UpdateUIEnabled();
+
+    connect(ui->restore_defaults_button, &QPushButton::clicked, this,
+            &ConfigureInput::RestoreDefaults);
+
+    for (auto* enabled : players_controller) {
+        connect(enabled, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                &ConfigureInput::UpdateUIEnabled);
+    }
+    connect(ui->use_docked_mode, &QCheckBox::stateChanged, this, &ConfigureInput::UpdateUIEnabled);
+    connect(ui->handheld_connected, &QCheckBox::stateChanged, this,
+            &ConfigureInput::UpdateUIEnabled);
+    connect(ui->mouse_enabled, &QCheckBox::stateChanged, this, &ConfigureInput::UpdateUIEnabled);
+    connect(ui->keyboard_enabled, &QCheckBox::stateChanged, this, &ConfigureInput::UpdateUIEnabled);
+    connect(ui->debug_enabled, &QCheckBox::stateChanged, this, &ConfigureInput::UpdateUIEnabled);
+    connect(ui->touchscreen_enabled, &QCheckBox::stateChanged, this,
+            &ConfigureInput::UpdateUIEnabled);
+
+    for (std::size_t i = 0; i < players_configure.size(); ++i) {
+        connect(players_configure[i], &QPushButton::clicked, this,
+                [this, i] { CallConfigureDialog<ConfigureInputPlayer>(*this, i, false); });
+    }
+
+    connect(ui->handheld_configure, &QPushButton::clicked, this,
+            [this] { CallConfigureDialog<ConfigureInputPlayer>(*this, 8, false); });
+
+    connect(ui->debug_configure, &QPushButton::clicked, this,
+            [this] { CallConfigureDialog<ConfigureInputPlayer>(*this, 9, true); });
+
+    connect(ui->mouse_advanced, &QPushButton::clicked, this,
+            [this] { CallConfigureDialog<ConfigureMouseAdvanced>(*this); });
+
+    connect(ui->touchscreen_advanced, &QPushButton::clicked, this,
+            [this] { CallConfigureDialog<ConfigureTouchscreenAdvanced>(*this); });
+}
+
+ConfigureInput::~ConfigureInput() = default;
+
+void ConfigureInput::ApplyConfiguration() {
     for (std::size_t i = 0; i < players_controller.size(); ++i) {
         const auto controller_type_index = players_controller[i]->currentIndex();
 
@@ -147,20 +141,49 @@ void ConfigureInput::applyConfiguration() {
     Settings::values.touchscreen.enabled = ui->touchscreen_enabled->isChecked();
 }
 
-void ConfigureInput::updateUIEnabled() {
+void ConfigureInput::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::LanguageChange) {
+        RetranslateUI();
+    }
+
+    QDialog::changeEvent(event);
+}
+
+void ConfigureInput::RetranslateUI() {
+    ui->retranslateUi(this);
+    RetranslateControllerComboBoxes();
+}
+
+void ConfigureInput::RetranslateControllerComboBoxes() {
+    for (auto* controller_box : players_controller) {
+        [[maybe_unused]] const QSignalBlocker blocker(controller_box);
+
+        controller_box->clear();
+        controller_box->addItems({tr("None"), tr("Pro Controller"), tr("Dual Joycons"),
+                                  tr("Single Right Joycon"), tr("Single Left Joycon")});
+    }
+
+    LoadPlayerControllerIndices();
+}
+
+void ConfigureInput::UpdateUIEnabled() {
     bool hit_disabled = false;
     for (auto* player : players_controller) {
         player->setDisabled(hit_disabled);
-        if (hit_disabled)
+        if (hit_disabled) {
             player->setCurrentIndex(0);
-        if (!hit_disabled && player->currentIndex() == 0)
+        }
+        if (!hit_disabled && player->currentIndex() == 0) {
             hit_disabled = true;
+        }
     }
 
     for (std::size_t i = 0; i < players_controller.size(); ++i) {
         players_configure[i]->setEnabled(players_controller[i]->currentIndex() != 0);
     }
 
+    ui->handheld_connected->setChecked(ui->handheld_connected->isChecked() &&
+                                       !ui->use_docked_mode->isChecked());
     ui->handheld_connected->setEnabled(!ui->use_docked_mode->isChecked());
     ui->handheld_configure->setEnabled(ui->handheld_connected->isChecked() &&
                                        !ui->use_docked_mode->isChecked());
@@ -169,18 +192,14 @@ void ConfigureInput::updateUIEnabled() {
     ui->touchscreen_advanced->setEnabled(ui->touchscreen_enabled->isChecked());
 }
 
-void ConfigureInput::loadConfiguration() {
+void ConfigureInput::LoadConfiguration() {
     std::stable_partition(
         Settings::values.players.begin(),
         Settings::values.players.begin() +
             Service::HID::Controller_NPad::NPadIdToIndex(Service::HID::NPAD_HANDHELD),
         [](const auto& player) { return player.connected; });
 
-    for (std::size_t i = 0; i < players_controller.size(); ++i) {
-        const auto connected = Settings::values.players[i].connected;
-        players_controller[i]->setCurrentIndex(
-            connected ? static_cast<u8>(Settings::values.players[i].type) + 1 : 0);
-    }
+    LoadPlayerControllerIndices();
 
     ui->use_docked_mode->setChecked(Settings::values.use_docked_mode);
     ui->handheld_connected->setChecked(
@@ -192,10 +211,18 @@ void ConfigureInput::loadConfiguration() {
     ui->keyboard_enabled->setChecked(Settings::values.keyboard_enabled);
     ui->touchscreen_enabled->setChecked(Settings::values.touchscreen.enabled);
 
-    updateUIEnabled();
+    UpdateUIEnabled();
 }
 
-void ConfigureInput::restoreDefaults() {
+void ConfigureInput::LoadPlayerControllerIndices() {
+    for (std::size_t i = 0; i < players_controller.size(); ++i) {
+        const auto connected = Settings::values.players[i].connected;
+        players_controller[i]->setCurrentIndex(
+            connected ? static_cast<u8>(Settings::values.players[i].type) + 1 : 0);
+    }
+}
+
+void ConfigureInput::RestoreDefaults() {
     players_controller[0]->setCurrentIndex(2);
 
     for (std::size_t i = 1; i < players_controller.size(); ++i) {
@@ -208,5 +235,5 @@ void ConfigureInput::restoreDefaults() {
     ui->keyboard_enabled->setCheckState(Qt::Unchecked);
     ui->debug_enabled->setCheckState(Qt::Unchecked);
     ui->touchscreen_enabled->setCheckState(Qt::Checked);
-    updateUIEnabled();
+    UpdateUIEnabled();
 }

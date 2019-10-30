@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>400</width>
-    <height>357</height>
+    <height>474</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -45,7 +45,7 @@
            </spacer>
           </item>
           <item>
-           <widget class="QLabel" name="label_2">
+           <widget class="QLabel" name="label_1">
             <property name="text">
              <string>Port:</string>
             </property>
@@ -70,11 +70,11 @@
      <property name="title">
       <string>Logging</string>
      </property>
-     <layout class="QVBoxLayout" name="verticalLayout">
+     <layout class="QVBoxLayout" name="verticalLayout_4">
       <item>
-       <layout class="QHBoxLayout" name="horizontalLayout">
+       <layout class="QHBoxLayout" name="horizontalLayout_2">
         <item>
-         <widget class="QLabel" name="label">
+         <widget class="QLabel" name="label_2">
           <property name="text">
            <string>Global Log Filter</string>
           </property>
@@ -86,7 +86,7 @@
        </layout>
       </item>
       <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_2">
+       <layout class="QHBoxLayout" name="horizontalLayout_3">
         <item>
          <widget class="QCheckBox" name="toggle_console">
           <property name="text">
@@ -103,6 +103,44 @@
         </item>
        </layout>
       </item>
+      <item>
+       <widget class="QCheckBox" name="reporting_services">
+        <property name="text">
+         <string>Enable Verbose Reporting Services</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="label">
+        <property name="font">
+         <font>
+          <italic>true</italic>
+         </font>
+        </property>
+        <property name="text">
+         <string>This will be reset automatically when yuzu closes.</string>
+        </property>
+        <property name="indent">
+         <number>20</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBox_5">
+     <property name="title">
+      <string>Advanced</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout">
+      <item>
+       <widget class="QCheckBox" name="quest_flag">
+        <property name="text">
+         <string>Kiosk (Quest) Mode</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>
@@ -111,11 +149,11 @@
      <property name="title">
       <string>Homebrew</string>
      </property>
-     <layout class="QVBoxLayout" name="verticalLayout">
+     <layout class="QVBoxLayout" name="verticalLayout_5">
       <item>
-       <layout class="QHBoxLayout" name="horizontalLayout">
+       <layout class="QHBoxLayout" name="horizontalLayout_4">
         <item>
-         <widget class="QLabel" name="label">
+         <widget class="QLabel" name="label_3">
           <property name="text">
            <string>Arguments String</string>
           </property>
@@ -130,38 +168,12 @@
     </widget>
    </item>
    <item>
-    <widget class="QGroupBox" name="groupBox_4">
-     <property name="title">
-      <string>Dump</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_4">
-      <item>
-       <widget class="QCheckBox" name="dump_decompressed_nso">
-        <property name="whatsThis">
-         <string>When checked, any NSO yuzu tries to load or patch will be copied decompressed to the yuzu/dump directory.</string>
-        </property>
-        <property name="text">
-         <string>Dump Decompressed NSOs</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="dump_exefs">
-        <property name="whatsThis">
-         <string>When checked, any game that yuzu loads will have its ExeFS dumped to the yuzu/dump directory.</string>
-        </property>
-        <property name="text">
-         <string>Dump ExeFS</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
     <spacer name="verticalSpacer">
      <property name="orientation">
       <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeType">
+      <enum>QSizePolicy::Expanding</enum>
      </property>
      <property name="sizeHint" stdset="0">
       <size>

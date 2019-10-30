@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
-#include <cstring>
 #include <memory>
 #include <glad/glad.h>
 #include "common/assert.h"
@@ -14,11 +13,11 @@
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/frontend/emu_window.h"
+#include "core/frontend/scope_acquire_window_context.h"
 #include "core/memory.h"
 #include "core/perf_stats.h"
 #include "core/settings.h"
 #include "core/telemetry_session.h"
-#include "core/tracer/recorder.h"
 #include "video_core/morton.h"
 #include "video_core/renderer_opengl/gl_rasterizer.h"
 #include "video_core/renderer_opengl/renderer_opengl.h"
@@ -97,39 +96,22 @@ static std::array<GLfloat, 3 * 2> MakeOrthographicMatrix(const float width, cons
     return matrix;
 }
 
-ScopeAcquireGLContext::ScopeAcquireGLContext(Core::Frontend::EmuWindow& emu_window_)
-    : emu_window{emu_window_} {
-    if (Settings::values.use_multi_core) {
-        emu_window.MakeCurrent();
-    }
-}
-ScopeAcquireGLContext::~ScopeAcquireGLContext() {
-    if (Settings::values.use_multi_core) {
-        emu_window.DoneCurrent();
-    }
-}
-
-RendererOpenGL::RendererOpenGL(Core::Frontend::EmuWindow& window)
-    : VideoCore::RendererBase{window} {}
+RendererOpenGL::RendererOpenGL(Core::Frontend::EmuWindow& emu_window, Core::System& system)
+    : VideoCore::RendererBase{emu_window}, emu_window{emu_window}, system{system} {}
 
 RendererOpenGL::~RendererOpenGL() = default;
 
-/// Swap buffers (render frame)
-void RendererOpenGL::SwapBuffers(
-    std::optional<std::reference_wrapper<const Tegra::FramebufferConfig>> framebuffer) {
-    ScopeAcquireGLContext acquire_context{render_window};
-
-    Core::System::GetInstance().GetPerfStats().EndSystemFrame();
-
+void RendererOpenGL::SwapBuffers(const Tegra::FramebufferConfig* framebuffer) {
     // Maintain the rasterizer's state as a priority
     OpenGLState prev_state = OpenGLState::GetCurState();
+    state.AllDirty();
     state.Apply();
 
     if (framebuffer) {
         // If framebuffer is provided, reload it from memory to a texture
-        if (screen_info.texture.width != (GLsizei)framebuffer->get().width ||
-            screen_info.texture.height != (GLsizei)framebuffer->get().height ||
-            screen_info.texture.pixel_format != framebuffer->get().pixel_format) {
+        if (screen_info.texture.width != static_cast<GLsizei>(framebuffer->width) ||
+            screen_info.texture.height != static_cast<GLsizei>(framebuffer->height) ||
+            screen_info.texture.pixel_format != framebuffer->pixel_format) {
             // Reallocate texture if the framebuffer size has changed.
             // This is expected to not happen very often and hence should not be a
             // performance problem.
@@ -138,16 +120,21 @@ void RendererOpenGL::SwapBuffers(
 
         // Load the framebuffer from memory, draw it to the screen, and swap buffers
         LoadFBToScreenInfo(*framebuffer);
-        DrawScreen();
+
+        if (renderer_settings.screenshot_requested)
+            CaptureScreenshot();
+
+        DrawScreen(render_window.GetFramebufferLayout());
+
+        rasterizer->TickFrame();
+
         render_window.SwapBuffers();
     }
 
     render_window.PollEvents();
 
-    Core::System::GetInstance().FrameLimiter().DoFrameLimiting(CoreTiming::GetGlobalTimeUs());
-    Core::System::GetInstance().GetPerfStats().BeginSystemFrame();
-
     // Restore the rasterizer state
+    prev_state.AllDirty();
     prev_state.Apply();
 }
 
@@ -155,49 +142,43 @@ void RendererOpenGL::SwapBuffers(
  * Loads framebuffer from emulated memory into the active OpenGL texture.
  */
 void RendererOpenGL::LoadFBToScreenInfo(const Tegra::FramebufferConfig& framebuffer) {
-    const u32 bytes_per_pixel{Tegra::FramebufferConfig::BytesPerPixel(framebuffer.pixel_format)};
-    const u64 size_in_bytes{framebuffer.stride * framebuffer.height * bytes_per_pixel};
-    const VAddr framebuffer_addr{framebuffer.address + framebuffer.offset};
-
     // Framebuffer orientation handling
     framebuffer_transform_flags = framebuffer.transform_flags;
     framebuffer_crop_rect = framebuffer.crop_rect;
 
-    // Ensure no bad interactions with GL_UNPACK_ALIGNMENT, which by default
-    // only allows rows to have a memory alignement of 4.
-    ASSERT(framebuffer.stride % 4 == 0);
-
-    if (!rasterizer->AccelerateDisplay(framebuffer, framebuffer_addr, framebuffer.stride)) {
-        // Reset the screen info's display texture to its own permanent texture
-        screen_info.display_texture = screen_info.texture.resource.handle;
-
-        Memory::RasterizerFlushVirtualRegion(framebuffer_addr, size_in_bytes,
-                                             Memory::FlushMode::Flush);
-
-        VideoCore::MortonCopyPixels128(framebuffer.width, framebuffer.height, bytes_per_pixel, 4,
-                                       Memory::GetPointer(framebuffer_addr),
-                                       gl_framebuffer_data.data(), true);
-
-        state.texture_units[0].texture = screen_info.texture.resource.handle;
-        state.Apply();
-
-        glActiveTexture(GL_TEXTURE0);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(framebuffer.stride));
-
-        // Update existing texture
-        // TODO: Test what happens on hardware when you change the framebuffer dimensions so that
-        //       they differ from the LCD resolution.
-        // TODO: Applications could theoretically crash yuzu here by specifying too large
-        //       framebuffer sizes. We should make sure that this cannot happen.
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, framebuffer.width, framebuffer.height,
-                        screen_info.texture.gl_format, screen_info.texture.gl_type,
-                        gl_framebuffer_data.data());
-
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-
-        state.texture_units[0].texture = 0;
-        state.Apply();
+    const VAddr framebuffer_addr{framebuffer.address + framebuffer.offset};
+    if (rasterizer->AccelerateDisplay(framebuffer, framebuffer_addr, framebuffer.stride)) {
+        return;
     }
+
+    // Reset the screen info's display texture to its own permanent texture
+    screen_info.display_texture = screen_info.texture.resource.handle;
+
+    const auto pixel_format{
+        VideoCore::Surface::PixelFormatFromGPUPixelFormat(framebuffer.pixel_format)};
+    const u32 bytes_per_pixel{VideoCore::Surface::GetBytesPerPixel(pixel_format)};
+    const u64 size_in_bytes{framebuffer.stride * framebuffer.height * bytes_per_pixel};
+    const auto host_ptr{Memory::GetPointer(framebuffer_addr)};
+    rasterizer->FlushRegion(ToCacheAddr(host_ptr), size_in_bytes);
+
+    // TODO(Rodrigo): Read this from HLE
+    constexpr u32 block_height_log2 = 4;
+    VideoCore::MortonSwizzle(VideoCore::MortonSwizzleMode::MortonToLinear, pixel_format,
+                             framebuffer.stride, block_height_log2, framebuffer.height, 0, 1, 1,
+                             gl_framebuffer_data.data(), host_ptr);
+
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(framebuffer.stride));
+
+    // Update existing texture
+    // TODO: Test what happens on hardware when you change the framebuffer dimensions so that
+    //       they differ from the LCD resolution.
+    // TODO: Applications could theoretically crash yuzu here by specifying too large
+    //       framebuffer sizes. We should make sure that this cannot happen.
+    glTextureSubImage2D(screen_info.texture.resource.handle, 0, 0, 0, framebuffer.width,
+                        framebuffer.height, screen_info.texture.gl_format,
+                        screen_info.texture.gl_type, gl_framebuffer_data.data());
+
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 }
 
 /**
@@ -206,17 +187,8 @@ void RendererOpenGL::LoadFBToScreenInfo(const Tegra::FramebufferConfig& framebuf
  */
 void RendererOpenGL::LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b, u8 color_a,
                                                 const TextureInfo& texture) {
-    state.texture_units[0].texture = texture.resource.handle;
-    state.Apply();
-
-    glActiveTexture(GL_TEXTURE0);
-    u8 framebuffer_data[4] = {color_a, color_b, color_g, color_r};
-
-    // Update existing texture
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, framebuffer_data);
-
-    state.texture_units[0].texture = 0;
-    state.Apply();
+    const u8 framebuffer_data[4] = {color_a, color_b, color_g, color_r};
+    glClearTexImage(texture.resource.handle, 0, GL_RGBA, GL_UNSIGNED_BYTE, framebuffer_data);
 }
 
 /**
@@ -229,6 +201,7 @@ void RendererOpenGL::InitOpenGLObjects() {
     // Link shaders and get variable locations
     shader.CreateFromSource(vertex_shader, nullptr, fragment_shader);
     state.draw.shader_program = shader.handle;
+    state.AllDirty();
     state.Apply();
     uniform_modelview_matrix = glGetUniformLocation(shader.handle, "modelview_matrix");
     uniform_color_texture = glGetUniformLocation(shader.handle, "color_texture");
@@ -240,88 +213,89 @@ void RendererOpenGL::InitOpenGLObjects() {
 
     // Generate VAO
     vertex_array.Create();
-
     state.draw.vertex_array = vertex_array.handle;
-    state.draw.vertex_buffer = vertex_buffer.handle;
-    state.draw.uniform_buffer = 0;
-    state.Apply();
 
     // Attach vertex data to VAO
-    glBufferData(GL_ARRAY_BUFFER, sizeof(ScreenRectVertex) * 4, nullptr, GL_STREAM_DRAW);
-    glVertexAttribPointer(attrib_position, 2, GL_FLOAT, GL_FALSE, sizeof(ScreenRectVertex),
-                          (GLvoid*)offsetof(ScreenRectVertex, position));
-    glVertexAttribPointer(attrib_tex_coord, 2, GL_FLOAT, GL_FALSE, sizeof(ScreenRectVertex),
-                          (GLvoid*)offsetof(ScreenRectVertex, tex_coord));
-    glEnableVertexAttribArray(attrib_position);
-    glEnableVertexAttribArray(attrib_tex_coord);
+    glNamedBufferData(vertex_buffer.handle, sizeof(ScreenRectVertex) * 4, nullptr, GL_STREAM_DRAW);
+    glVertexArrayAttribFormat(vertex_array.handle, attrib_position, 2, GL_FLOAT, GL_FALSE,
+                              offsetof(ScreenRectVertex, position));
+    glVertexArrayAttribFormat(vertex_array.handle, attrib_tex_coord, 2, GL_FLOAT, GL_FALSE,
+                              offsetof(ScreenRectVertex, tex_coord));
+    glVertexArrayAttribBinding(vertex_array.handle, attrib_position, 0);
+    glVertexArrayAttribBinding(vertex_array.handle, attrib_tex_coord, 0);
+    glEnableVertexArrayAttrib(vertex_array.handle, attrib_position);
+    glEnableVertexArrayAttrib(vertex_array.handle, attrib_tex_coord);
+    glVertexArrayVertexBuffer(vertex_array.handle, 0, vertex_buffer.handle, 0,
+                              sizeof(ScreenRectVertex));
 
     // Allocate textures for the screen
-    screen_info.texture.resource.Create();
+    screen_info.texture.resource.Create(GL_TEXTURE_2D);
 
-    // Allocation of storage is deferred until the first frame, when we
-    // know the framebuffer size.
-
-    state.texture_units[0].texture = screen_info.texture.resource.handle;
-    state.Apply();
-
-    glActiveTexture(GL_TEXTURE0);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    const GLuint texture = screen_info.texture.resource.handle;
+    glTextureStorage2D(texture, 1, GL_RGBA8, 1, 1);
 
     screen_info.display_texture = screen_info.texture.resource.handle;
 
-    state.texture_units[0].texture = 0;
-    state.Apply();
-
     // Clear screen to black
     LoadColorToActiveGLTexture(0, 0, 0, 0, screen_info.texture);
+}
+
+void RendererOpenGL::AddTelemetryFields() {
+    const char* const gl_version{reinterpret_cast<char const*>(glGetString(GL_VERSION))};
+    const char* const gpu_vendor{reinterpret_cast<char const*>(glGetString(GL_VENDOR))};
+    const char* const gpu_model{reinterpret_cast<char const*>(glGetString(GL_RENDERER))};
+
+    LOG_INFO(Render_OpenGL, "GL_VERSION: {}", gl_version);
+    LOG_INFO(Render_OpenGL, "GL_VENDOR: {}", gpu_vendor);
+    LOG_INFO(Render_OpenGL, "GL_RENDERER: {}", gpu_model);
+
+    auto& telemetry_session = system.TelemetrySession();
+    telemetry_session.AddField(Telemetry::FieldType::UserSystem, "GPU_Vendor", gpu_vendor);
+    telemetry_session.AddField(Telemetry::FieldType::UserSystem, "GPU_Model", gpu_model);
+    telemetry_session.AddField(Telemetry::FieldType::UserSystem, "GPU_OpenGL_Version", gl_version);
 }
 
 void RendererOpenGL::CreateRasterizer() {
     if (rasterizer) {
         return;
     }
-    // Initialize sRGB Usage
-    OpenGLState::ClearsRGBUsed();
-    rasterizer = std::make_unique<RasterizerOpenGL>(render_window, screen_info);
+    rasterizer = std::make_unique<RasterizerOpenGL>(system, emu_window, screen_info);
 }
 
 void RendererOpenGL::ConfigureFramebufferTexture(TextureInfo& texture,
                                                  const Tegra::FramebufferConfig& framebuffer) {
-
     texture.width = framebuffer.width;
     texture.height = framebuffer.height;
+    texture.pixel_format = framebuffer.pixel_format;
+
+    const auto pixel_format{
+        VideoCore::Surface::PixelFormatFromGPUPixelFormat(framebuffer.pixel_format)};
+    const u32 bytes_per_pixel{VideoCore::Surface::GetBytesPerPixel(pixel_format)};
+    gl_framebuffer_data.resize(texture.width * texture.height * bytes_per_pixel);
 
     GLint internal_format;
     switch (framebuffer.pixel_format) {
     case Tegra::FramebufferConfig::PixelFormat::ABGR8:
-        internal_format = GL_RGBA;
+        internal_format = GL_RGBA8;
         texture.gl_format = GL_RGBA;
         texture.gl_type = GL_UNSIGNED_INT_8_8_8_8_REV;
-        gl_framebuffer_data.resize(texture.width * texture.height * 4);
+        break;
+    case Tegra::FramebufferConfig::PixelFormat::RGB565:
+        internal_format = GL_RGB565;
+        texture.gl_format = GL_RGB;
+        texture.gl_type = GL_UNSIGNED_SHORT_5_6_5;
         break;
     default:
-        internal_format = GL_RGBA;
+        internal_format = GL_RGBA8;
         texture.gl_format = GL_RGBA;
         texture.gl_type = GL_UNSIGNED_INT_8_8_8_8_REV;
-        gl_framebuffer_data.resize(texture.width * texture.height * 4);
-        LOG_CRITICAL(Render_OpenGL, "Unknown framebuffer pixel format: {}",
-                     static_cast<u32>(framebuffer.pixel_format));
-        UNREACHABLE();
+        UNIMPLEMENTED_MSG("Unknown framebuffer pixel format: {}",
+                          static_cast<u32>(framebuffer.pixel_format));
     }
 
-    state.texture_units[0].texture = texture.resource.handle;
-    state.Apply();
-
-    glActiveTexture(GL_TEXTURE0);
-    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, texture.width, texture.height, 0,
-                 texture.gl_format, texture.gl_type, nullptr);
-
-    state.texture_units[0].texture = 0;
-    state.Apply();
+    texture.resource.Release();
+    texture.resource.Create(GL_TEXTURE_2D);
+    glTextureStorage2D(texture.resource.handle, 1, internal_format, texture.width, texture.height);
 }
 
 void RendererOpenGL::DrawScreenTriangles(const ScreenInfo& screen_info, float x, float y, float w,
@@ -362,35 +336,29 @@ void RendererOpenGL::DrawScreenTriangles(const ScreenInfo& screen_info, float x,
         ScreenRectVertex(x + w, y + h, texcoords.bottom * scale_u, right * scale_v),
     }};
 
-    state.texture_units[0].texture = screen_info.display_texture;
-    state.texture_units[0].swizzle = {GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA};
-    // Workaround brigthness problems in SMO by enabling sRGB in the final output
-    // if it has been used in the frame
-    // Needed because of this bug in QT
-    // QTBUG-50987
-    state.framebuffer_srgb.enabled = OpenGLState::GetsRGBUsed();
+    state.textures[0] = screen_info.display_texture;
+    state.framebuffer_srgb.enabled = screen_info.display_srgb;
+    state.AllDirty();
     state.Apply();
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices.data());
+    glNamedBufferSubData(vertex_buffer.handle, 0, sizeof(vertices), vertices.data());
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    // restore default state
+    // Restore default state
     state.framebuffer_srgb.enabled = false;
-    state.texture_units[0].texture = 0;
+    state.textures[0] = 0;
+    state.AllDirty();
     state.Apply();
-    // Clear sRGB state for the next frame
-    OpenGLState::ClearsRGBUsed();
 }
 
 /**
  * Draws the emulated screens to the emulator window.
  */
-void RendererOpenGL::DrawScreen() {
+void RendererOpenGL::DrawScreen(const Layout::FramebufferLayout& layout) {
     if (renderer_settings.set_background_color) {
         // Update background color before drawing
         glClearColor(Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue,
                      0.0f);
     }
 
-    const auto& layout = render_window.GetFramebufferLayout();
     const auto& screen = layout.screen;
 
     glViewport(0, 0, layout.width, layout.height);
@@ -414,6 +382,40 @@ void RendererOpenGL::DrawScreen() {
 /// Updates the framerate
 void RendererOpenGL::UpdateFramerate() {}
 
+void RendererOpenGL::CaptureScreenshot() {
+    // Draw the current frame to the screenshot framebuffer
+    screenshot_framebuffer.Create();
+    GLuint old_read_fb = state.draw.read_framebuffer;
+    GLuint old_draw_fb = state.draw.draw_framebuffer;
+    state.draw.read_framebuffer = state.draw.draw_framebuffer = screenshot_framebuffer.handle;
+    state.AllDirty();
+    state.Apply();
+
+    Layout::FramebufferLayout layout{renderer_settings.screenshot_framebuffer_layout};
+
+    GLuint renderbuffer;
+    glGenRenderbuffers(1, &renderbuffer);
+    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+    glRenderbufferStorage(GL_RENDERBUFFER, screen_info.display_srgb ? GL_SRGB8 : GL_RGB8,
+                          layout.width, layout.height);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+
+    DrawScreen(layout);
+
+    glReadPixels(0, 0, layout.width, layout.height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
+                 renderer_settings.screenshot_bits);
+
+    screenshot_framebuffer.Release();
+    state.draw.read_framebuffer = old_read_fb;
+    state.draw.draw_framebuffer = old_draw_fb;
+    state.AllDirty();
+    state.Apply();
+    glDeleteRenderbuffers(1, &renderbuffer);
+
+    renderer_settings.screenshot_complete_callback();
+    renderer_settings.screenshot_requested = false;
+}
+
 static const char* GetSource(GLenum source) {
 #define RET(s)                                                                                     \
     case GL_DEBUG_SOURCE_##s:                                                                      \
@@ -427,6 +429,7 @@ static const char* GetSource(GLenum source) {
         RET(OTHER);
     default:
         UNREACHABLE();
+        return "Unknown source";
     }
 #undef RET
 }
@@ -445,6 +448,7 @@ static const char* GetType(GLenum type) {
         RET(MARKER);
     default:
         UNREACHABLE();
+        return "Unknown type";
     }
 #undef RET
 }
@@ -469,26 +473,15 @@ static void APIENTRY DebugHandler(GLenum source, GLenum type, GLuint id, GLenum 
     }
 }
 
-/// Initialize the renderer
 bool RendererOpenGL::Init() {
-    ScopeAcquireGLContext acquire_context{render_window};
+    Core::Frontend::ScopeAcquireWindowContext acquire_context{render_window};
 
     if (GLAD_GL_KHR_debug) {
         glEnable(GL_DEBUG_OUTPUT);
         glDebugMessageCallback(DebugHandler, nullptr);
     }
 
-    const char* gl_version{reinterpret_cast<char const*>(glGetString(GL_VERSION))};
-    const char* gpu_vendor{reinterpret_cast<char const*>(glGetString(GL_VENDOR))};
-    const char* gpu_model{reinterpret_cast<char const*>(glGetString(GL_RENDERER))};
-
-    LOG_INFO(Render_OpenGL, "GL_VERSION: {}", gl_version);
-    LOG_INFO(Render_OpenGL, "GL_VENDOR: {}", gpu_vendor);
-    LOG_INFO(Render_OpenGL, "GL_RENDERER: {}", gpu_model);
-
-    Core::Telemetry().AddField(Telemetry::FieldType::UserSystem, "GPU_Vendor", gpu_vendor);
-    Core::Telemetry().AddField(Telemetry::FieldType::UserSystem, "GPU_Model", gpu_model);
-    Core::Telemetry().AddField(Telemetry::FieldType::UserSystem, "GPU_OpenGL_Version", gl_version);
+    AddTelemetryFields();
 
     if (!GLAD_GL_VERSION_4_3) {
         return false;

@@ -18,10 +18,15 @@ public:
     explicit ConfigureGraphics(QWidget* parent = nullptr);
     ~ConfigureGraphics() override;
 
-    void applyConfiguration();
+    void ApplyConfiguration();
 
 private:
-    void setConfiguration();
+    void changeEvent(QEvent* event) override;
+    void RetranslateUI();
+
+    void SetConfiguration();
+
+    void UpdateBackgroundColorButton(QColor color);
 
     std::unique_ptr<Ui::ConfigureGraphics> ui;
     QColor bg_color;

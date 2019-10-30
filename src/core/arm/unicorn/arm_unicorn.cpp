@@ -48,30 +48,19 @@ static void CodeHook(uc_engine* uc, uint64_t address, uint32_t size, void* user_
     }
 }
 
-static void InterruptHook(uc_engine* uc, u32 intNo, void* user_data) {
-    u32 esr{};
-    CHECKED(uc_reg_read(uc, UC_ARM64_REG_ESR, &esr));
-
-    auto ec = esr >> 26;
-    auto iss = esr & 0xFFFFFF;
-
-    switch (ec) {
-    case 0x15: // SVC
-        Kernel::CallSVC(iss);
-        break;
-    }
-}
-
 static bool UnmappedMemoryHook(uc_engine* uc, uc_mem_type type, u64 addr, int size, u64 value,
                                void* user_data) {
+    auto* const system = static_cast<System*>(user_data);
+
     ARM_Interface::ThreadContext ctx{};
-    Core::CurrentArmInterface().SaveContext(ctx);
+    system->CurrentArmInterface().SaveContext(ctx);
     ASSERT_MSG(false, "Attempted to read from unmapped memory: 0x{:X}, pc=0x{:X}, lr=0x{:X}", addr,
                ctx.pc, ctx.cpu_registers[30]);
-    return {};
+
+    return false;
 }
 
-ARM_Unicorn::ARM_Unicorn() {
+ARM_Unicorn::ARM_Unicorn(System& system) : system{system} {
     CHECKED(uc_open(UC_ARCH_ARM64, UC_MODE_ARM, &uc));
 
     auto fpv = 3 << 20;
@@ -79,7 +68,7 @@ ARM_Unicorn::ARM_Unicorn() {
 
     uc_hook hook{};
     CHECKED(uc_hook_add(uc, &hook, UC_HOOK_INTR, (void*)InterruptHook, this, 0, -1));
-    CHECKED(uc_hook_add(uc, &hook, UC_HOOK_MEM_INVALID, (void*)UnmappedMemoryHook, this, 0, -1));
+    CHECKED(uc_hook_add(uc, &hook, UC_HOOK_MEM_INVALID, (void*)UnmappedMemoryHook, &system, 0, -1));
     if (GDBStub::IsServerEnabled()) {
         CHECKED(uc_hook_add(uc, &hook, UC_HOOK_CODE, (void*)CodeHook, this, 0, -1));
         last_bkpt_hit = false;
@@ -88,15 +77,6 @@ ARM_Unicorn::ARM_Unicorn() {
 
 ARM_Unicorn::~ARM_Unicorn() {
     CHECKED(uc_close(uc));
-}
-
-void ARM_Unicorn::MapBackingMemory(VAddr address, std::size_t size, u8* memory,
-                                   Kernel::VMAPermission perms) {
-    CHECKED(uc_mem_map_ptr(uc, address, size, static_cast<u32>(perms), memory));
-}
-
-void ARM_Unicorn::UnmapMemory(VAddr address, std::size_t size) {
-    CHECKED(uc_mem_unmap(uc, address, size));
 }
 
 void ARM_Unicorn::SetPC(u64 pc) {
@@ -176,7 +156,7 @@ void ARM_Unicorn::Run() {
     if (GDBStub::IsServerEnabled()) {
         ExecuteInstructions(std::max(4000000, 0));
     } else {
-        ExecuteInstructions(std::max(CoreTiming::GetDowncount(), 0));
+        ExecuteInstructions(std::max(system.CoreTiming().GetDowncount(), s64{0}));
     }
 }
 
@@ -189,14 +169,15 @@ MICROPROFILE_DEFINE(ARM_Jit_Unicorn, "ARM JIT", "Unicorn", MP_RGB(255, 64, 64));
 void ARM_Unicorn::ExecuteInstructions(int num_instructions) {
     MICROPROFILE_SCOPE(ARM_Jit_Unicorn);
     CHECKED(uc_emu_start(uc, GetPC(), 1ULL << 63, 0, num_instructions));
-    CoreTiming::AddTicks(num_instructions);
+    system.CoreTiming().AddTicks(num_instructions);
     if (GDBStub::IsServerEnabled()) {
-        if (last_bkpt_hit) {
+        if (last_bkpt_hit && last_bkpt.type == GDBStub::BreakpointType::Execute) {
             uc_reg_write(uc, UC_ARM64_REG_PC, &last_bkpt.address);
         }
+
         Kernel::Thread* thread = Kernel::GetCurrentThread();
         SaveContext(thread->GetContext());
-        if (last_bkpt_hit || GDBStub::GetCpuStepFlag()) {
+        if (last_bkpt_hit || GDBStub::IsMemoryBreak() || GDBStub::GetCpuStepFlag()) {
             last_bkpt_hit = false;
             GDBStub::Break();
             GDBStub::SendTrap(thread, 5);
@@ -269,6 +250,22 @@ void ARM_Unicorn::ClearInstructionCache() {}
 void ARM_Unicorn::RecordBreak(GDBStub::BreakpointAddress bkpt) {
     last_bkpt = bkpt;
     last_bkpt_hit = true;
+}
+
+void ARM_Unicorn::InterruptHook(uc_engine* uc, u32 int_no, void* user_data) {
+    u32 esr{};
+    CHECKED(uc_reg_read(uc, UC_ARM64_REG_ESR, &esr));
+
+    const auto ec = esr >> 26;
+    const auto iss = esr & 0xFFFFFF;
+
+    auto* const arm_instance = static_cast<ARM_Unicorn*>(user_data);
+
+    switch (ec) {
+    case 0x15: // SVC
+        Kernel::CallSVC(arm_instance->system, iss);
+        break;
+    }
 }
 
 } // namespace Core

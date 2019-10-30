@@ -27,8 +27,7 @@ using Maxwell = Tegra::Engines::Maxwell3D::Regs;
 inline GLenum VertexType(Maxwell::VertexAttribute attrib) {
     switch (attrib.type) {
     case Maxwell::VertexAttribute::Type::UnsignedInt:
-    case Maxwell::VertexAttribute::Type::UnsignedNorm: {
-
+    case Maxwell::VertexAttribute::Type::UnsignedNorm:
         switch (attrib.size) {
         case Maxwell::VertexAttribute::Size::Size_8:
         case Maxwell::VertexAttribute::Size::Size_8_8:
@@ -47,16 +46,13 @@ inline GLenum VertexType(Maxwell::VertexAttribute attrib) {
             return GL_UNSIGNED_INT;
         case Maxwell::VertexAttribute::Size::Size_10_10_10_2:
             return GL_UNSIGNED_INT_2_10_10_10_REV;
+        default:
+            LOG_CRITICAL(Render_OpenGL, "Unimplemented vertex size={}", attrib.SizeString());
+            UNREACHABLE();
+            return {};
         }
-
-        LOG_CRITICAL(Render_OpenGL, "Unimplemented vertex size={}", attrib.SizeString());
-        UNREACHABLE();
-        return {};
-    }
-
     case Maxwell::VertexAttribute::Type::SignedInt:
-    case Maxwell::VertexAttribute::Type::SignedNorm: {
-
+    case Maxwell::VertexAttribute::Type::SignedNorm:
         switch (attrib.size) {
         case Maxwell::VertexAttribute::Size::Size_8:
         case Maxwell::VertexAttribute::Size::Size_8_8:
@@ -75,14 +71,12 @@ inline GLenum VertexType(Maxwell::VertexAttribute attrib) {
             return GL_INT;
         case Maxwell::VertexAttribute::Size::Size_10_10_10_2:
             return GL_INT_2_10_10_10_REV;
+        default:
+            LOG_CRITICAL(Render_OpenGL, "Unimplemented vertex size={}", attrib.SizeString());
+            UNREACHABLE();
+            return {};
         }
-
-        LOG_CRITICAL(Render_OpenGL, "Unimplemented vertex size={}", attrib.SizeString());
-        UNREACHABLE();
-        return {};
-    }
-
-    case Maxwell::VertexAttribute::Type::Float: {
+    case Maxwell::VertexAttribute::Type::Float:
         switch (attrib.size) {
         case Maxwell::VertexAttribute::Size::Size_16:
         case Maxwell::VertexAttribute::Size::Size_16_16:
@@ -94,14 +88,16 @@ inline GLenum VertexType(Maxwell::VertexAttribute attrib) {
         case Maxwell::VertexAttribute::Size::Size_32_32_32:
         case Maxwell::VertexAttribute::Size::Size_32_32_32_32:
             return GL_FLOAT;
+        default:
+            LOG_CRITICAL(Render_OpenGL, "Unimplemented vertex size={}", attrib.SizeString());
+            UNREACHABLE();
+            return {};
         }
+    default:
+        LOG_CRITICAL(Render_OpenGL, "Unimplemented vertex type={}", attrib.TypeString());
+        UNREACHABLE();
+        return {};
     }
-    }
-
-    // LOG_CRITICAL(Render_OpenGL, "Unimplemented vertex type={}", attrib.TypeString());
-    // UNREACHABLE();
-    // return {};
-    return GL_UNSIGNED_BYTE;
 }
 
 inline GLenum IndexFormat(Maxwell::IndexFormat index_format) {
@@ -127,14 +123,18 @@ inline GLenum PrimitiveTopology(Maxwell::PrimitiveTopology topology) {
     case Maxwell::PrimitiveTopology::LineStrip:
         return GL_LINE_STRIP;
     case Maxwell::PrimitiveTopology::Triangles:
-    default:
         return GL_TRIANGLES;
     case Maxwell::PrimitiveTopology::TriangleStrip:
         return GL_TRIANGLE_STRIP;
+    case Maxwell::PrimitiveTopology::TriangleFan:
+        return GL_TRIANGLE_FAN;
+    case Maxwell::PrimitiveTopology::Quads:
+        return GL_QUADS;
+    default:
+        LOG_CRITICAL(Render_OpenGL, "Unimplemented topology={}", static_cast<u32>(topology));
+        UNREACHABLE();
+        return {};
     }
-    LOG_CRITICAL(Render_OpenGL, "Unimplemented topology={}", static_cast<u32>(topology));
-    UNREACHABLE();
-    return {};
 }
 
 inline GLenum TextureFilterMode(Tegra::Texture::TextureFilter filter_mode,
@@ -145,7 +145,7 @@ inline GLenum TextureFilterMode(Tegra::Texture::TextureFilter filter_mode,
         case Tegra::Texture::TextureMipmapFilter::None:
             return GL_LINEAR;
         case Tegra::Texture::TextureMipmapFilter::Nearest:
-            return GL_NEAREST_MIPMAP_LINEAR;
+            return GL_LINEAR_MIPMAP_NEAREST;
         case Tegra::Texture::TextureMipmapFilter::Linear:
             return GL_LINEAR_MIPMAP_LINEAR;
         }
@@ -157,7 +157,7 @@ inline GLenum TextureFilterMode(Tegra::Texture::TextureFilter filter_mode,
         case Tegra::Texture::TextureMipmapFilter::Nearest:
             return GL_NEAREST_MIPMAP_NEAREST;
         case Tegra::Texture::TextureMipmapFilter::Linear:
-            return GL_LINEAR_MIPMAP_NEAREST;
+            return GL_NEAREST_MIPMAP_LINEAR;
         }
     }
     }
@@ -175,11 +175,8 @@ inline GLenum WrapMode(Tegra::Texture::WrapMode wrap_mode) {
         return GL_CLAMP_TO_EDGE;
     case Tegra::Texture::WrapMode::Border:
         return GL_CLAMP_TO_BORDER;
-    case Tegra::Texture::WrapMode::ClampOGL:
-        // TODO(Subv): GL_CLAMP was removed as of OpenGL 3.1, to implement GL_CLAMP, we can use
-        // GL_CLAMP_TO_BORDER to get the border color of the texture, and then sample the edge to
-        // manually mix them. However the shader part of this is not yet implemented.
-        return GL_CLAMP_TO_BORDER;
+    case Tegra::Texture::WrapMode::Clamp:
+        return GL_CLAMP;
     case Tegra::Texture::WrapMode::MirrorOnceClampToEdge:
         return GL_MIRROR_CLAMP_TO_EDGE;
     case Tegra::Texture::WrapMode::MirrorOnceBorder:
@@ -188,9 +185,10 @@ inline GLenum WrapMode(Tegra::Texture::WrapMode wrap_mode) {
         } else {
             return GL_MIRROR_CLAMP_TO_EDGE;
         }
+    default:
+        LOG_ERROR(Render_OpenGL, "Unimplemented texture wrap mode={}", static_cast<u32>(wrap_mode));
+        return GL_REPEAT;
     }
-    LOG_ERROR(Render_OpenGL, "Unimplemented texture wrap mode={}", static_cast<u32>(wrap_mode));
-    return GL_REPEAT;
 }
 
 inline GLenum DepthCompareFunc(Tegra::Texture::DepthCompareFunc func) {
@@ -246,7 +244,6 @@ inline GLenum BlendFunc(Maxwell::Blend::Factor factor) {
         return GL_ZERO;
     case Maxwell::Blend::Factor::One:
     case Maxwell::Blend::Factor::OneGL:
-    default:
         return GL_ONE;
     case Maxwell::Blend::Factor::SourceColor:
     case Maxwell::Blend::Factor::SourceColorGL:

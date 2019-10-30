@@ -7,10 +7,28 @@
 #include <memory>
 #include <queue>
 #include "common/swap.h"
-#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/object.h"
 #include "core/hle/kernel/writable_event.h"
 
 union ResultCode;
+
+namespace Core {
+class System;
+}
+
+namespace Core::Frontend {
+class ECommerceApplet;
+class ErrorApplet;
+class ParentalControlsApplet;
+class PhotoViewerApplet;
+class ProfileSelectApplet;
+class SoftwareKeyboardApplet;
+class WebBrowserApplet;
+} // namespace Core::Frontend
+
+namespace Kernel {
+class KernelCore;
+}
 
 namespace Service::AM {
 
@@ -18,10 +36,41 @@ class IStorage;
 
 namespace Applets {
 
+enum class AppletId : u32 {
+    OverlayDisplay = 0x02,
+    QLaunch = 0x03,
+    Starter = 0x04,
+    Auth = 0x0A,
+    Cabinet = 0x0B,
+    Controller = 0x0C,
+    DataErase = 0x0D,
+    Error = 0x0E,
+    NetConnect = 0x0F,
+    ProfileSelect = 0x10,
+    SoftwareKeyboard = 0x11,
+    MiiEdit = 0x12,
+    LibAppletWeb = 0x13,
+    LibAppletShop = 0x14,
+    PhotoViewer = 0x15,
+    Settings = 0x16,
+    LibAppletOff = 0x17,
+    LibAppletWhitelisted = 0x18,
+    LibAppletAuth = 0x19,
+    MyPage = 0x1A,
+};
+
 class AppletDataBroker final {
 public:
-    AppletDataBroker();
+    explicit AppletDataBroker(Kernel::KernelCore& kernel_);
     ~AppletDataBroker();
+
+    struct RawChannelData {
+        std::vector<std::vector<u8>> normal;
+        std::vector<std::vector<u8>> interactive;
+    };
+
+    // Retrieves but does not pop the data sent to applet.
+    RawChannelData PeekDataToAppletForDebug() const;
 
     std::unique_ptr<IStorage> PopNormalDataToGame();
     std::unique_ptr<IStorage> PopNormalDataToApplet();
@@ -45,16 +94,16 @@ private:
     // Queues are named from applet's perspective
 
     // PopNormalDataToApplet and PushNormalDataFromGame
-    std::queue<std::unique_ptr<IStorage>> in_channel;
+    std::deque<std::unique_ptr<IStorage>> in_channel;
 
     // PopNormalDataToGame and PushNormalDataFromApplet
-    std::queue<std::unique_ptr<IStorage>> out_channel;
+    std::deque<std::unique_ptr<IStorage>> out_channel;
 
     // PopInteractiveDataToApplet and PushInteractiveDataFromGame
-    std::queue<std::unique_ptr<IStorage>> in_interactive_channel;
+    std::deque<std::unique_ptr<IStorage>> in_interactive_channel;
 
     // PopInteractiveDataToGame and PushInteractiveDataFromApplet
-    std::queue<std::unique_ptr<IStorage>> out_interactive_channel;
+    std::deque<std::unique_ptr<IStorage>> out_interactive_channel;
 
     Kernel::EventPair state_changed_event;
 
@@ -67,7 +116,7 @@ private:
 
 class Applet {
 public:
-    Applet();
+    explicit Applet(Kernel::KernelCore& kernel_);
     virtual ~Applet();
 
     virtual void Initialize();
@@ -103,6 +152,56 @@ protected:
     CommonArguments common_args{};
     AppletDataBroker broker;
     bool initialized = false;
+};
+
+struct AppletFrontendSet {
+    using ParentalControlsApplet = std::unique_ptr<Core::Frontend::ParentalControlsApplet>;
+    using ErrorApplet = std::unique_ptr<Core::Frontend::ErrorApplet>;
+    using PhotoViewer = std::unique_ptr<Core::Frontend::PhotoViewerApplet>;
+    using ProfileSelect = std::unique_ptr<Core::Frontend::ProfileSelectApplet>;
+    using SoftwareKeyboard = std::unique_ptr<Core::Frontend::SoftwareKeyboardApplet>;
+    using WebBrowser = std::unique_ptr<Core::Frontend::WebBrowserApplet>;
+    using ECommerceApplet = std::unique_ptr<Core::Frontend::ECommerceApplet>;
+
+    AppletFrontendSet();
+    AppletFrontendSet(ParentalControlsApplet parental_controls, ErrorApplet error,
+                      PhotoViewer photo_viewer, ProfileSelect profile_select,
+                      SoftwareKeyboard software_keyboard, WebBrowser web_browser,
+                      ECommerceApplet e_commerce);
+    ~AppletFrontendSet();
+
+    AppletFrontendSet(const AppletFrontendSet&) = delete;
+    AppletFrontendSet& operator=(const AppletFrontendSet&) = delete;
+
+    AppletFrontendSet(AppletFrontendSet&&) noexcept;
+    AppletFrontendSet& operator=(AppletFrontendSet&&) noexcept;
+
+    ParentalControlsApplet parental_controls;
+    ErrorApplet error;
+    PhotoViewer photo_viewer;
+    ProfileSelect profile_select;
+    SoftwareKeyboard software_keyboard;
+    WebBrowser web_browser;
+    ECommerceApplet e_commerce;
+};
+
+class AppletManager {
+public:
+    explicit AppletManager(Core::System& system_);
+    ~AppletManager();
+
+    const AppletFrontendSet& GetAppletFrontendSet() const;
+
+    void SetAppletFrontendSet(AppletFrontendSet set);
+    void SetDefaultAppletFrontendSet();
+    void SetDefaultAppletsIfMissing();
+    void ClearAll();
+
+    std::shared_ptr<Applet> GetApplet(AppletId id) const;
+
+private:
+    AppletFrontendSet frontend;
+    Core::System& system;
 };
 
 } // namespace Applets

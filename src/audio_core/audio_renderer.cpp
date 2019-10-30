@@ -8,6 +8,7 @@
 #include "audio_core/codec.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "core/core.h"
 #include "core/hle/kernel/writable_event.h"
 #include "core/memory.h"
 
@@ -71,13 +72,15 @@ private:
     EffectOutStatus out_status{};
     EffectInStatus info{};
 };
-AudioRenderer::AudioRenderer(AudioRendererParameter params,
-                             Kernel::SharedPtr<Kernel::WritableEvent> buffer_event)
+AudioRenderer::AudioRenderer(Core::Timing::CoreTiming& core_timing, AudioRendererParameter params,
+                             Kernel::SharedPtr<Kernel::WritableEvent> buffer_event,
+                             std::size_t instance_number)
     : worker_params{params}, buffer_event{buffer_event}, voices(params.voice_count),
       effects(params.effect_count) {
 
     audio_out = std::make_unique<AudioCore::AudioOut>();
-    stream = audio_out->OpenStream(STREAM_SAMPLE_RATE, STREAM_NUM_CHANNELS, "AudioRenderer",
+    stream = audio_out->OpenStream(core_timing, STREAM_SAMPLE_RATE, STREAM_NUM_CHANNELS,
+                                   fmt::format("AudioRenderer-Instance{}", instance_number),
                                    [=]() { buffer_event->Signal(); });
     audio_out->StartStream(stream);
 
@@ -102,6 +105,11 @@ u32 AudioRenderer::GetMixBufferCount() const {
 
 Stream::State AudioRenderer::GetStreamState() const {
     return stream->GetState();
+}
+
+static constexpr u32 VersionFromRevision(u32_le rev) {
+    // "REV7" -> 7
+    return ((rev >> 24) & 0xff) - 0x30;
 }
 
 std::vector<u8> AudioRenderer::UpdateAudioRenderer(const std::vector<u8>& input_params) {
@@ -163,6 +171,11 @@ std::vector<u8> AudioRenderer::UpdateAudioRenderer(const std::vector<u8>& input_
     // Copy output header
     UpdateDataHeader response_data{worker_params};
     std::vector<u8> output_params(response_data.total_size);
+    const auto audren_revision = VersionFromRevision(config.revision);
+    if (audren_revision >= 5) {
+        response_data.frame_count = 0x10;
+        response_data.total_size += 0x10;
+    }
     std::memcpy(output_params.data(), &response_data, sizeof(UpdateDataHeader));
 
     // Copy output memory pool entries
@@ -216,13 +229,15 @@ std::vector<s16> AudioRenderer::VoiceState::DequeueSamples(std::size_t sample_co
     if (offset == samples.size()) {
         offset = 0;
 
-        if (!wave_buffer.is_looping) {
+        if (!wave_buffer.is_looping && wave_buffer.buffer_sz) {
             SetWaveIndex(wave_index + 1);
         }
 
-        out_status.wave_buffer_consumed++;
+        if (wave_buffer.buffer_sz) {
+            out_status.wave_buffer_consumed++;
+        }
 
-        if (wave_buffer.end_of_stream) {
+        if (wave_buffer.end_of_stream || wave_buffer.buffer_sz == 0) {
             info.play_state = PlayState::Paused;
         }
     }
@@ -260,8 +275,7 @@ void AudioRenderer::VoiceState::RefreshBuffer() {
         break;
     }
     default:
-        LOG_CRITICAL(Audio, "Unimplemented sample_format={}", info.sample_format);
-        UNREACHABLE();
+        UNIMPLEMENTED_MSG("Unimplemented sample_format={}", info.sample_format);
         break;
     }
 
@@ -280,8 +294,7 @@ void AudioRenderer::VoiceState::RefreshBuffer() {
         break;
     }
     default:
-        LOG_CRITICAL(Audio, "Unimplemented channel_count={}", info.channel_count);
-        UNREACHABLE();
+        UNIMPLEMENTED_MSG("Unimplemented channel_count={}", info.channel_count);
         break;
     }
 

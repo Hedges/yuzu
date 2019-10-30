@@ -8,12 +8,13 @@
 
 #include <QHeaderView>
 #include <QMenu>
-#include <QMessageBox>
 #include <QStandardItemModel>
 #include <QString>
 #include <QTimer>
 #include <QTreeView>
 
+#include "common/common_paths.h"
+#include "common/file_util.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/xts_archive.h"
@@ -22,7 +23,7 @@
 #include "yuzu/configuration/config.h"
 #include "yuzu/configuration/configure_input.h"
 #include "yuzu/configuration/configure_per_general.h"
-#include "yuzu/ui_settings.h"
+#include "yuzu/uisettings.h"
 #include "yuzu/util/util.h"
 
 ConfigurePerGameGeneral::ConfigurePerGameGeneral(QWidget* parent, u64 title_id)
@@ -47,8 +48,8 @@ ConfigurePerGameGeneral::ConfigurePerGameGeneral(QWidget* parent, u64 title_id)
     tree_view->setContextMenuPolicy(Qt::NoContextMenu);
 
     item_model->insertColumns(0, 2);
-    item_model->setHeaderData(0, Qt::Horizontal, "Patch Name");
-    item_model->setHeaderData(1, Qt::Horizontal, "Version");
+    item_model->setHeaderData(0, Qt::Horizontal, tr("Patch Name"));
+    item_model->setHeaderData(1, Qt::Horizontal, tr("Version"));
 
     // We must register all custom types with the Qt Automoc system so that we are able to use it
     // with signals/slots. In this case, QList falls under the umbrells of custom types.
@@ -66,12 +67,12 @@ ConfigurePerGameGeneral::ConfigurePerGameGeneral(QWidget* parent, u64 title_id)
     connect(item_model, &QStandardItemModel::itemChanged,
             [] { UISettings::values.is_game_list_reload_pending.exchange(true); });
 
-    this->loadConfiguration();
+    LoadConfiguration();
 }
 
 ConfigurePerGameGeneral::~ConfigurePerGameGeneral() = default;
 
-void ConfigurePerGameGeneral::applyConfiguration() {
+void ConfigurePerGameGeneral::ApplyConfiguration() {
     std::vector<std::string> disabled_addons;
 
     for (const auto& item : list_items) {
@@ -80,24 +81,44 @@ void ConfigurePerGameGeneral::applyConfiguration() {
             disabled_addons.push_back(item.front()->text().toStdString());
     }
 
+    auto current = Settings::values.disabled_addons[title_id];
+    std::sort(disabled_addons.begin(), disabled_addons.end());
+    std::sort(current.begin(), current.end());
+    if (disabled_addons != current) {
+        FileUtil::Delete(FileUtil::GetUserPath(FileUtil::UserPath::CacheDir) + DIR_SEP +
+                         "game_list" + DIR_SEP + fmt::format("{:016X}.pv.txt", title_id));
+    }
+
     Settings::values.disabled_addons[title_id] = disabled_addons;
 }
 
-void ConfigurePerGameGeneral::loadFromFile(FileSys::VirtualFile file) {
-    this->file = std::move(file);
-    this->loadConfiguration();
+void ConfigurePerGameGeneral::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::LanguageChange) {
+        RetranslateUI();
+    }
+
+    QDialog::changeEvent(event);
 }
 
-void ConfigurePerGameGeneral::loadConfiguration() {
-    if (file == nullptr)
+void ConfigurePerGameGeneral::RetranslateUI() {
+    ui->retranslateUi(this);
+}
+
+void ConfigurePerGameGeneral::LoadFromFile(FileSys::VirtualFile file) {
+    this->file = std::move(file);
+    LoadConfiguration();
+}
+
+void ConfigurePerGameGeneral::LoadConfiguration() {
+    if (file == nullptr) {
         return;
+    }
 
-    const auto loader = Loader::GetLoader(file);
-
-    ui->display_title_id->setText(fmt::format("{:016X}", title_id).c_str());
+    ui->display_title_id->setText(QString::fromStdString(fmt::format("{:016X}", title_id)));
 
     FileSys::PatchManager pm{title_id};
     const auto control = pm.GetControlMetadata();
+    const auto loader = Loader::GetLoader(file);
 
     if (control.first != nullptr) {
         ui->display_version->setText(QString::fromStdString(control.first->GetVersionString()));
@@ -108,9 +129,9 @@ void ConfigurePerGameGeneral::loadConfiguration() {
         if (loader->ReadTitle(title) == Loader::ResultStatus::Success)
             ui->display_name->setText(QString::fromStdString(title));
 
-        std::string developer;
-        if (loader->ReadDeveloper(developer) == Loader::ResultStatus::Success)
-            ui->display_developer->setText(QString::fromStdString(developer));
+        FileSys::NACP nacp;
+        if (loader->ReadControlData(nacp) == Loader::ResultStatus::Success)
+            ui->display_developer->setText(QString::fromStdString(nacp.GetDeveloperName()));
 
         ui->display_version->setText(QStringLiteral("1.0.0"));
     }
@@ -120,7 +141,7 @@ void ConfigurePerGameGeneral::loadConfiguration() {
 
         QPixmap map;
         const auto bytes = control.second->ReadAllBytes();
-        map.loadFromData(bytes.data(), bytes.size());
+        map.loadFromData(bytes.data(), static_cast<u32>(bytes.size()));
 
         scene->addPixmap(map.scaled(ui->icon_view->width(), ui->icon_view->height(),
                                     Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
@@ -130,7 +151,7 @@ void ConfigurePerGameGeneral::loadConfiguration() {
             scene->clear();
 
             QPixmap map;
-            map.loadFromData(bytes.data(), bytes.size());
+            map.loadFromData(bytes.data(), static_cast<u32>(bytes.size()));
 
             scene->addPixmap(map.scaled(ui->icon_view->width(), ui->icon_view->height(),
                                         Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
@@ -143,8 +164,10 @@ void ConfigurePerGameGeneral::loadConfiguration() {
     const auto& disabled = Settings::values.disabled_addons[title_id];
 
     for (const auto& patch : pm.GetPatchVersionNames(update_raw)) {
-        QStandardItem* first_item = new QStandardItem;
-        const auto name = QString::fromStdString(patch.first).replace("[D] ", "");
+        const auto name =
+            QString::fromStdString(patch.first).replace(QStringLiteral("[D] "), QString{});
+
+        auto* const first_item = new QStandardItem;
         first_item->setText(name);
         first_item->setCheckable(true);
 

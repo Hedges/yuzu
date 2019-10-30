@@ -35,7 +35,7 @@ public:
         return IdentifyType(file);
     }
 
-    ResultStatus Load(Kernel::Process& process) override;
+    LoadResult Load(Kernel::Process& process) override;
 
     ResultStatus ReadRomFS(FileSys::VirtualFile& file) override;
     u64 ReadRomFSIVFCOffset() const override;
@@ -43,7 +43,13 @@ public:
     ResultStatus ReadProgramId(u64& out_program_id) override;
     ResultStatus ReadIcon(std::vector<u8>& buffer) override;
     ResultStatus ReadTitle(std::string& title) override;
-    ResultStatus ReadDeveloper(std::string& developer) override;
+    ResultStatus ReadControlData(FileSys::NACP& nacp) override;
+    ResultStatus ReadManualRomFS(FileSys::VirtualFile& file) override;
+
+    ResultStatus ReadBanner(std::vector<u8>& buffer) override;
+    ResultStatus ReadLogo(std::vector<u8>& buffer) override;
+
+    ResultStatus ReadNSOModules(Modules& modules) override;
 
 private:
     std::unique_ptr<FileSys::NSP> nsp;

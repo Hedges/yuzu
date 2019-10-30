@@ -2,18 +2,20 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/core.h"
-#include "core/memory.h"
 #include "video_core/engines/kepler_memory.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/memory_manager.h"
 #include "video_core/rasterizer_interface.h"
+#include "video_core/renderer_base.h"
+#include "video_core/textures/decoders.h"
 
 namespace Tegra::Engines {
 
-KeplerMemory::KeplerMemory(VideoCore::RasterizerInterface& rasterizer,
-                           MemoryManager& memory_manager)
-    : memory_manager(memory_manager), rasterizer{rasterizer} {}
+KeplerMemory::KeplerMemory(Core::System& system, MemoryManager& memory_manager)
+    : system{system}, upload_state{memory_manager, regs.upload} {}
 
 KeplerMemory::~KeplerMemory() = default;
 
@@ -25,35 +27,18 @@ void KeplerMemory::CallMethod(const GPU::MethodCall& method_call) {
 
     switch (method_call.method) {
     case KEPLERMEMORY_REG_INDEX(exec): {
-        state.write_offset = 0;
+        upload_state.ProcessExec(regs.exec.linear != 0);
         break;
     }
     case KEPLERMEMORY_REG_INDEX(data): {
-        ProcessData(method_call.argument);
+        const bool is_last_call = method_call.IsLastCall();
+        upload_state.ProcessData(method_call.argument, is_last_call);
+        if (is_last_call) {
+            system.GPU().Maxwell3D().dirty.OnMemoryWrite();
+        }
         break;
     }
     }
-}
-
-void KeplerMemory::ProcessData(u32 data) {
-    ASSERT_MSG(regs.exec.linear, "Non-linear uploads are not supported");
-    ASSERT(regs.dest.x == 0 && regs.dest.y == 0 && regs.dest.z == 0);
-
-    GPUVAddr address = regs.dest.Address();
-    VAddr dest_address =
-        *memory_manager.GpuToCpuAddress(address + state.write_offset * sizeof(u32));
-
-    // We have to invalidate the destination region to evict any outdated surfaces from the cache.
-    // We do this before actually writing the new data because the destination address might contain
-    // a dirty surface that will have to be written back to memory.
-    rasterizer.InvalidateRegion(dest_address, sizeof(u32));
-
-    Memory::Write32(dest_address, data);
-    Core::System::GetInstance().GPU().Maxwell3D().dirty_flags.OnMemoryWrite();
-
-    rasterizer.InvalidateRegion(dest_address, sizeof(u32));
-
-    state.write_offset++;
 }
 
 } // namespace Tegra::Engines

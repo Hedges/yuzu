@@ -12,6 +12,7 @@
 #include "core/core.h"
 #include "core/core_cpu.h"
 #include "core/core_timing.h"
+#include "core/core_timing_util.h"
 #include "core/gdbstub/gdbstub.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/svc.h"
@@ -25,7 +26,6 @@ using Vector = Dynarmic::A64::Vector;
 class ARM_Dynarmic_Callbacks : public Dynarmic::A64::UserCallbacks {
 public:
     explicit ARM_Dynarmic_Callbacks(ARM_Dynarmic& parent) : parent(parent) {}
-    ~ARM_Dynarmic_Callbacks() = default;
 
     u8 MemoryRead8(u64 vaddr) override {
         return Memory::Read8(vaddr);
@@ -99,7 +99,7 @@ public:
     }
 
     void CallSVC(u32 swi) override {
-        Kernel::CallSVC(swi);
+        Kernel::CallSVC(parent.system, swi);
     }
 
     void AddTicks(u64 ticks) override {
@@ -112,14 +112,14 @@ public:
         // Always execute at least one tick.
         amortized_ticks = std::max<u64>(amortized_ticks, 1);
 
-        CoreTiming::AddTicks(amortized_ticks);
+        parent.system.CoreTiming().AddTicks(amortized_ticks);
         num_interpreted_instructions = 0;
     }
     u64 GetTicksRemaining() override {
-        return std::max(CoreTiming::GetDowncount(), 0);
+        return std::max(parent.system.CoreTiming().GetDowncount(), s64{0});
     }
     u64 GetCNTPCT() override {
-        return CoreTiming::GetTicks();
+        return Timing::CpuCyclesToClockCycles(parent.system.CoreTiming().GetTicks());
     }
 
     ARM_Dynarmic& parent;
@@ -128,18 +128,16 @@ public:
     u64 tpidr_el0 = 0;
 };
 
-std::unique_ptr<Dynarmic::A64::Jit> ARM_Dynarmic::MakeJit() const {
-    auto* current_process = Core::CurrentProcess();
-    auto** const page_table = current_process->VMManager().page_table.pointers.data();
-
+std::unique_ptr<Dynarmic::A64::Jit> ARM_Dynarmic::MakeJit(Common::PageTable& page_table,
+                                                          std::size_t address_space_bits) const {
     Dynarmic::A64::UserConfig config;
 
     // Callbacks
     config.callbacks = cb.get();
 
     // Memory
-    config.page_table = reinterpret_cast<void**>(page_table);
-    config.page_table_address_space_bits = current_process->VMManager().GetAddressSpaceWidth();
+    config.page_table = reinterpret_cast<void**>(page_table.pointers.data());
+    config.page_table_address_space_bits = address_space_bits;
     config.silently_mirror_page_table = false;
 
     // Multi-process state
@@ -151,6 +149,7 @@ std::unique_ptr<Dynarmic::A64::Jit> ARM_Dynarmic::MakeJit() const {
     config.tpidr_el0 = &cb->tpidr_el0;
     config.dczid_el0 = 4;
     config.ctr_el0 = 0x8444c004;
+    config.cntfrq_el0 = Timing::CNTFREQ;
 
     // Unpredictable instructions
     config.define_unpredictable_behaviour = true;
@@ -162,7 +161,6 @@ MICROPROFILE_DEFINE(ARM_Jit_Dynarmic, "ARM JIT", "Dynarmic", MP_RGB(255, 64, 64)
 
 void ARM_Dynarmic::Run() {
     MICROPROFILE_SCOPE(ARM_Jit_Dynarmic);
-    ASSERT(Memory::GetCurrentPageTable() == current_page_table);
 
     jit->Run();
 }
@@ -171,25 +169,13 @@ void ARM_Dynarmic::Step() {
     cb->InterpreterFallback(jit->GetPC(), 1);
 }
 
-ARM_Dynarmic::ARM_Dynarmic(ExclusiveMonitor& exclusive_monitor, std::size_t core_index)
-    : cb(std::make_unique<ARM_Dynarmic_Callbacks>(*this)), core_index{core_index},
-      exclusive_monitor{dynamic_cast<DynarmicExclusiveMonitor&>(exclusive_monitor)} {
-    ThreadContext ctx{};
-    inner_unicorn.SaveContext(ctx);
-    PageTableChanged();
-    LoadContext(ctx);
-}
+ARM_Dynarmic::ARM_Dynarmic(System& system, ExclusiveMonitor& exclusive_monitor,
+                           std::size_t core_index)
+    : cb(std::make_unique<ARM_Dynarmic_Callbacks>(*this)), inner_unicorn{system},
+      core_index{core_index}, system{system},
+      exclusive_monitor{dynamic_cast<DynarmicExclusiveMonitor&>(exclusive_monitor)} {}
 
 ARM_Dynarmic::~ARM_Dynarmic() = default;
-
-void ARM_Dynarmic::MapBackingMemory(u64 address, std::size_t size, u8* memory,
-                                    Kernel::VMAPermission perms) {
-    inner_unicorn.MapBackingMemory(address, size, memory, perms);
-}
-
-void ARM_Dynarmic::UnmapMemory(u64 address, std::size_t size) {
-    inner_unicorn.UnmapMemory(address, size);
-}
 
 void ARM_Dynarmic::SetPC(u64 pc) {
     jit->SetPC(pc);
@@ -273,9 +259,9 @@ void ARM_Dynarmic::ClearExclusiveState() {
     jit->ClearExclusiveState();
 }
 
-void ARM_Dynarmic::PageTableChanged() {
-    jit = MakeJit();
-    current_page_table = Memory::GetCurrentPageTable();
+void ARM_Dynarmic::PageTableChanged(Common::PageTable& page_table,
+                                    std::size_t new_address_space_size_in_bits) {
+    jit = MakeJit(page_table, new_address_space_size_in_bits);
 }
 
 DynarmicExclusiveMonitor::DynarmicExclusiveMonitor(std::size_t core_count) : monitor(core_count) {}

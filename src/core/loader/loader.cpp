@@ -11,6 +11,7 @@
 #include "core/hle/kernel/process.h"
 #include "core/loader/deconstructed_rom_directory.h"
 #include "core/loader/elf.h"
+#include "core/loader/kip.h"
 #include "core/loader/nax.h"
 #include "core/loader/nca.h"
 #include "core/loader/nro.h"
@@ -36,6 +37,7 @@ FileType IdentifyFile(FileSys::VirtualFile file) {
     CHECK_TYPE(XCI)
     CHECK_TYPE(NAX)
     CHECK_TYPE(NSP)
+    CHECK_TYPE(KIP)
 
 #undef CHECK_TYPE
 
@@ -63,6 +65,8 @@ FileType GuessFromFilename(const std::string& name) {
         return FileType::XCI;
     if (extension == "nsp")
         return FileType::NSP;
+    if (extension == "kip")
+        return FileType::KIP;
 
     return FileType::Unknown;
 }
@@ -83,6 +87,8 @@ std::string GetFileTypeString(FileType type) {
         return "NAX";
     case FileType::NSP:
         return "NSP";
+    case FileType::KIP:
+        return "KIP";
     case FileType::DeconstructedRomDirectory:
         return "Directory";
     case FileType::Error:
@@ -93,7 +99,7 @@ std::string GetFileTypeString(FileType type) {
     return "unknown";
 }
 
-constexpr std::array<const char*, 60> RESULT_MESSAGES{
+constexpr std::array<const char*, 66> RESULT_MESSAGES{
     "The operation completed successfully.",
     "The loader requested to load is already loaded.",
     "The operation is not implemented.",
@@ -103,6 +109,7 @@ constexpr std::array<const char*, 60> RESULT_MESSAGES{
     "The NPDM has a bad ACI header,",
     "The NPDM file has a bad file access control.",
     "The NPDM has a bad file access header.",
+    "The NPDM has bad kernel capability descriptors.",
     "The PFS/HFS partition has a bad header.",
     "The PFS/HFS partition has incorrect size as determined by the header.",
     "The NCA file has a bad header.",
@@ -125,6 +132,7 @@ constexpr std::array<const char*, 60> RESULT_MESSAGES{
     "The file could not be found or does not exist.",
     "The game is missing a program metadata file (main.npdm).",
     "The game uses the currently-unimplemented 32-bit architecture.",
+    "Unable to completely parse the kernel metadata when loading the emulated process",
     "The RomFS could not be found.",
     "The ELF file has incorrect size as determined by the header.",
     "There was a general error loading the NRO into emulated memory.",
@@ -154,6 +162,10 @@ constexpr std::array<const char*, 60> RESULT_MESSAGES{
     "The BKTR-type NCA has a bad Subsection bucket.",
     "The BKTR-type NCA is missing the base RomFS.",
     "The NSP or XCI does not contain an update in addition to the base game.",
+    "The KIP file has a bad header.",
+    "The KIP BLZ decompression of the section failed unexpectedly.",
+    "The INI file has a bad header.",
+    "The INI file contains more than the maximum allowable number of KIP files.",
 };
 
 std::ostream& operator<<(std::ostream& os, ResultStatus status) {
@@ -202,6 +214,10 @@ static std::unique_ptr<AppLoader> GetFileLoader(FileSys::VirtualFile file, FileT
     // NX NSP (Nintendo Submission Package) file format
     case FileType::NSP:
         return std::make_unique<AppLoader_NSP>(std::move(file));
+
+    // NX KIP (Kernel Internal Process) file format
+    case FileType::KIP:
+        return std::make_unique<AppLoader_KIP>(std::move(file));
 
     // NX deconstructed ROM directory.
     case FileType::DeconstructedRomDirectory:

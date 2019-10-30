@@ -76,10 +76,6 @@ motion_device=
 touch_device=
 
 [Core]
-# Whether to use the Just-In-Time (JIT) compiler for CPU emulation
-# 0: Interpreter (slow), 1 (default): JIT (fast)
-use_cpu_jit =
-
 # Whether to use multi-core for CPU emulation
 # 0 (default): Disabled, 1: Enabled
 use_multi_core=
@@ -110,9 +106,17 @@ use_frame_limit =
 # 1 - 9999: Speed limit as a percentage of target game speed. 100 (default)
 frame_limit =
 
+# Whether to use disk based shader cache
+# 0 (default): Off, 1 : On
+use_disk_shader_cache =
+
 # Whether to use accurate GPU emulation
 # 0 (default): Off (fast), 1 : On (slow)
 use_accurate_gpu_emulation =
+
+# Whether to use asynchronous GPU emulation
+# 0 : Off (slow), 1 (default): On (fast)
+use_asynchronous_gpu_emulation =
 
 # The clear color for the renderer. What shows up on the sides of the bottom screen.
 # Must be in range of 0.0-1.0. Defaults to 1.0 for all.
@@ -169,6 +173,20 @@ volume =
 # 1 (default): Yes, 0: No
 use_virtual_sd =
 
+# Whether or not to enable gamecard emulation
+# 1: Yes, 0 (default): No
+gamecard_inserted =
+
+# Whether or not the gamecard should be emulated as the current game
+# If 'gamecard_inserted' is 0 this setting is irrelevant
+# 1: Yes, 0 (default): No
+gamecard_current_game =
+
+# Path to an XCI file to use as the gamecard
+# If 'gamecard_inserted' is 0 this setting is irrelevant
+# If 'gamecard_current_game' is 1 this setting is irrelevant
+gamecard_path =
+
 [System]
 # Whether the system is docked
 # 1: Yes, 0 (default): No
@@ -182,6 +200,12 @@ enable_nfc =
 # rng_seed will be ignored and randomly generated if rng_seed_enabled is false
 rng_seed_enabled =
 rng_seed =
+
+# Sets the current time (in seconds since 12:00 AM Jan 1, 1970) that will be used by the time service
+# This will auto-increment, with the time set being the time the game is started
+# This override will only occur if custom_rtc_enabled is true, otherwise the current time is used
+custom_rtc_enabled =
+custom_rtc =
 
 # Sets the account username, max length is 32 characters
 # yuzu (default)
@@ -203,6 +227,8 @@ region_value =
 log_filter = *:Trace
 
 [Debugging]
+# Record frame time data, can be found in the log directory. Boolean value
+record_frame_times =
 # Port for listening to GDB connections.
 use_gdbstub=false
 gdbstub_port=24689
@@ -210,6 +236,9 @@ gdbstub_port=24689
 dump_exefs=false
 # Determines whether or not yuzu will dump all NSOs it attempts to load while loading them
 dump_nso=false
+# Determines whether or not yuzu will report to the game that the emulated console is in Kiosk Mode
+# false: Retail/Normal Mode (default), true: Kiosk Mode
+quest_flag =
 
 [WebService]
 # Whether or not to enable telemetry
@@ -221,6 +250,11 @@ web_api_url = https://api.yuzu-emu.org
 # See https://profile.yuzu-emu.org/ for more info
 yuzu_username =
 yuzu_token =
+
+[Services]
+# The name of the backend to use for BCAT
+# If this is set to 'boxcat' boxcat will be used, otherwise a null implementation will be used
+bcat_backend =
 
 [AddOns]
 # Used to disable add-ons

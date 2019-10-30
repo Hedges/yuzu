@@ -19,10 +19,13 @@
 #include "core/core_timing.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/readable_event.h"
+#include "core/hle/kernel/thread.h"
 #include "core/hle/kernel/writable_event.h"
+#include "core/hle/service/nvdrv/nvdata.h"
 #include "core/hle/service/nvdrv/nvdrv.h"
 #include "core/hle/service/nvflinger/buffer_queue.h"
 #include "core/hle/service/nvflinger/nvflinger.h"
+#include "core/hle/service/service.h"
 #include "core/hle/service/vi/vi.h"
 #include "core/hle/service/vi/vi_m.h"
 #include "core/hle/service/vi/vi_s.h"
@@ -31,12 +34,28 @@
 
 namespace Service::VI {
 
+constexpr ResultCode ERR_OPERATION_FAILED{ErrorModule::VI, 1};
+constexpr ResultCode ERR_PERMISSION_DENIED{ErrorModule::VI, 5};
+constexpr ResultCode ERR_UNSUPPORTED{ErrorModule::VI, 6};
+constexpr ResultCode ERR_NOT_FOUND{ErrorModule::VI, 7};
+
 struct DisplayInfo {
+    /// The name of this particular display.
     char display_name[0x40]{"Default"};
-    u64 unknown_1{1};
-    u64 unknown_2{1};
-    u64 width{1280};
-    u64 height{720};
+
+    /// Whether or not the display has a limited number of layers.
+    u8 has_limited_layers{1};
+    INSERT_PADDING_BYTES(7){};
+
+    /// Indicates the total amount of layers supported by the display.
+    /// @note This is only valid if has_limited_layers is set.
+    u64 max_layers{1};
+
+    /// Maximum width in pixels.
+    u64 width{1920};
+
+    /// Maximum height in pixels.
+    u64 height{1080};
 };
 static_assert(sizeof(DisplayInfo) == 0x60, "DisplayInfo has wrong size");
 
@@ -310,32 +329,22 @@ public:
     Data data;
 };
 
-struct BufferProducerFence {
-    u32 is_valid;
-    std::array<Nvidia::IoctlFence, 4> fences;
-};
-static_assert(sizeof(BufferProducerFence) == 36, "BufferProducerFence has wrong size");
-
 class IGBPDequeueBufferResponseParcel : public Parcel {
 public:
-    explicit IGBPDequeueBufferResponseParcel(u32 slot) : slot(slot) {}
+    explicit IGBPDequeueBufferResponseParcel(u32 slot, Service::Nvidia::MultiFence& multi_fence)
+        : slot(slot), multi_fence(multi_fence) {}
     ~IGBPDequeueBufferResponseParcel() override = default;
 
 protected:
     void SerializeData() override {
-        // TODO(Subv): Find out how this Fence is used.
-        BufferProducerFence fence = {};
-        fence.is_valid = 1;
-        for (auto& fence_ : fence.fences)
-            fence_.id = -1;
-
         Write(slot);
         Write<u32_le>(1);
-        WriteObject(fence);
+        WriteObject(multi_fence);
         Write<u32_le>(0);
     }
 
     u32_le slot;
+    Service::Nvidia::MultiFence multi_fence;
 };
 
 class IGBPRequestBufferRequestParcel : public Parcel {
@@ -382,12 +391,6 @@ public:
         data = Read<Data>();
     }
 
-    struct Fence {
-        u32_le id;
-        u32_le value;
-    };
-    static_assert(sizeof(Fence) == 8, "Fence has wrong size");
-
     struct Data {
         u32_le slot;
         INSERT_PADDING_WORDS(3);
@@ -400,15 +403,15 @@ public:
         s32_le scaling_mode;
         NVFlinger::BufferQueue::BufferTransformFlags transform;
         u32_le sticky_transform;
-        INSERT_PADDING_WORDS(2);
-        u32_le fence_is_valid;
-        std::array<Fence, 2> fences;
+        INSERT_PADDING_WORDS(1);
+        u32_le swap_interval;
+        Service::Nvidia::MultiFence multi_fence;
 
-        MathUtil::Rectangle<int> GetCropRect() const {
+        Common::Rectangle<int> GetCropRect() const {
             return {crop_left, crop_top, crop_right, crop_bottom};
         }
     };
-    static_assert(sizeof(Data) == 80, "ParcelData has wrong size");
+    static_assert(sizeof(Data) == 96, "ParcelData has wrong size");
 
     Data data;
 };
@@ -480,7 +483,6 @@ public:
         };
         RegisterHandlers(functions);
     }
-    ~IHOSBinderDriver() = default;
 
 private:
     enum class TransactionId {
@@ -502,12 +504,14 @@ private:
 
     void TransactParcel(Kernel::HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
-        u32 id = rp.Pop<u32>();
-        auto transaction = static_cast<TransactionId>(rp.Pop<u32>());
-        u32 flags = rp.Pop<u32>();
-        LOG_DEBUG(Service_VI, "called, transaction={:X}", static_cast<u32>(transaction));
+        const u32 id = rp.Pop<u32>();
+        const auto transaction = static_cast<TransactionId>(rp.Pop<u32>());
+        const u32 flags = rp.Pop<u32>();
 
-        auto buffer_queue = nv_flinger->GetBufferQueue(id);
+        LOG_DEBUG(Service_VI, "called. id=0x{:08X} transaction={:X}, flags=0x{:08X}", id,
+                  static_cast<u32>(transaction), flags);
+
+        auto& buffer_queue = nv_flinger->FindBufferQueue(id);
 
         if (transaction == TransactionId::Connect) {
             IGBPConnectRequestParcel request{ctx.ReadBuffer()};
@@ -520,7 +524,7 @@ private:
         } else if (transaction == TransactionId::SetPreallocatedBuffer) {
             IGBPSetPreallocatedBufferRequestParcel request{ctx.ReadBuffer()};
 
-            buffer_queue->SetPreallocatedBuffer(request.data.slot, request.buffer);
+            buffer_queue.SetPreallocatedBuffer(request.data.slot, request.buffer);
 
             IGBPSetPreallocatedBufferResponseParcel response{};
             ctx.WriteBuffer(response.Serialize());
@@ -528,50 +532,51 @@ private:
             IGBPDequeueBufferRequestParcel request{ctx.ReadBuffer()};
             const u32 width{request.data.width};
             const u32 height{request.data.height};
-            std::optional<u32> slot = buffer_queue->DequeueBuffer(width, height);
+            auto result = buffer_queue.DequeueBuffer(width, height);
 
-            if (slot) {
+            if (result) {
                 // Buffer is available
-                IGBPDequeueBufferResponseParcel response{*slot};
+                IGBPDequeueBufferResponseParcel response{result->first, *result->second};
                 ctx.WriteBuffer(response.Serialize());
             } else {
                 // Wait the current thread until a buffer becomes available
                 ctx.SleepClientThread(
-                    Kernel::GetCurrentThread(), "IHOSBinderDriver::DequeueBuffer", -1,
+                    "IHOSBinderDriver::DequeueBuffer", -1,
                     [=](Kernel::SharedPtr<Kernel::Thread> thread, Kernel::HLERequestContext& ctx,
                         Kernel::ThreadWakeupReason reason) {
                         // Repeat TransactParcel DequeueBuffer when a buffer is available
-                        auto buffer_queue = nv_flinger->GetBufferQueue(id);
-                        std::optional<u32> slot = buffer_queue->DequeueBuffer(width, height);
-                        ASSERT_MSG(slot != std::nullopt, "Could not dequeue buffer.");
+                        auto& buffer_queue = nv_flinger->FindBufferQueue(id);
+                        auto result = buffer_queue.DequeueBuffer(width, height);
+                        ASSERT_MSG(result != std::nullopt, "Could not dequeue buffer.");
 
-                        IGBPDequeueBufferResponseParcel response{*slot};
+                        IGBPDequeueBufferResponseParcel response{result->first, *result->second};
                         ctx.WriteBuffer(response.Serialize());
                         IPC::ResponseBuilder rb{ctx, 2};
                         rb.Push(RESULT_SUCCESS);
                     },
-                    buffer_queue->GetWritableBufferWaitEvent());
+                    buffer_queue.GetWritableBufferWaitEvent());
             }
         } else if (transaction == TransactionId::RequestBuffer) {
             IGBPRequestBufferRequestParcel request{ctx.ReadBuffer()};
 
-            auto& buffer = buffer_queue->RequestBuffer(request.slot);
+            auto& buffer = buffer_queue.RequestBuffer(request.slot);
 
             IGBPRequestBufferResponseParcel response{buffer};
             ctx.WriteBuffer(response.Serialize());
         } else if (transaction == TransactionId::QueueBuffer) {
             IGBPQueueBufferRequestParcel request{ctx.ReadBuffer()};
 
-            buffer_queue->QueueBuffer(request.data.slot, request.data.transform,
-                                      request.data.GetCropRect());
+            buffer_queue.QueueBuffer(request.data.slot, request.data.transform,
+                                     request.data.GetCropRect(), request.data.swap_interval,
+                                     request.data.multi_fence);
 
             IGBPQueueBufferResponseParcel response{1280, 720};
             ctx.WriteBuffer(response.Serialize());
         } else if (transaction == TransactionId::Query) {
             IGBPQueryRequestParcel request{ctx.ReadBuffer()};
 
-            u32 value =
-                buffer_queue->Query(static_cast<NVFlinger::BufferQueue::QueryType>(request.type));
+            const u32 value =
+                buffer_queue.Query(static_cast<NVFlinger::BufferQueue::QueryType>(request.type));
 
             IGBPQueryResponseParcel response{value};
             ctx.WriteBuffer(response.Serialize());
@@ -593,9 +598,10 @@ private:
 
     void AdjustRefcount(Kernel::HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
-        u32 id = rp.Pop<u32>();
-        s32 addval = rp.PopRaw<s32>();
-        u32 type = rp.Pop<u32>();
+        const u32 id = rp.Pop<u32>();
+        const s32 addval = rp.PopRaw<s32>();
+        const u32 type = rp.Pop<u32>();
+
         LOG_WARNING(Service_VI, "(STUBBED) called id={}, addval={:08X}, type={:08X}", id, addval,
                     type);
 
@@ -605,16 +611,17 @@ private:
 
     void GetNativeHandle(Kernel::HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
-        u32 id = rp.Pop<u32>();
-        u32 unknown = rp.Pop<u32>();
+        const u32 id = rp.Pop<u32>();
+        const u32 unknown = rp.Pop<u32>();
+
         LOG_WARNING(Service_VI, "(STUBBED) called id={}, unknown={:08X}", id, unknown);
 
-        auto buffer_queue = nv_flinger->GetBufferQueue(id);
+        const auto& buffer_queue = nv_flinger->FindBufferQueue(id);
 
         // TODO(Subv): Find out what this actually is.
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(buffer_queue->GetBufferWaitEvent());
+        rb.PushCopyObjects(buffer_queue.GetBufferWaitEvent());
     }
 
     std::shared_ptr<NVFlinger::NVFlinger> nv_flinger;
@@ -670,26 +677,28 @@ public:
         };
         RegisterHandlers(functions);
     }
-    ~ISystemDisplayService() = default;
 
 private:
     void SetLayerZ(Kernel::HLERequestContext& ctx) {
-        LOG_WARNING(Service_VI, "(STUBBED) called");
-
         IPC::RequestParser rp{ctx};
-        u64 layer_id = rp.Pop<u64>();
-        u64 z_value = rp.Pop<u64>();
+        const u64 layer_id = rp.Pop<u64>();
+        const u64 z_value = rp.Pop<u64>();
+
+        LOG_WARNING(Service_VI, "(STUBBED) called. layer_id=0x{:016X}, z_value=0x{:016X}", layer_id,
+                    z_value);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
     }
 
+    // This function currently does nothing but return a success error code in
+    // the vi library itself, so do the same thing, but log out the passed in values.
     void SetLayerVisibility(Kernel::HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
-        u64 layer_id = rp.Pop<u64>();
-        bool visibility = rp.Pop<bool>();
-        LOG_WARNING(Service_VI, "(STUBBED) called, layer_id=0x{:08X}, visibility={}", layer_id,
-                    visibility);
+        const u64 layer_id = rp.Pop<u64>();
+        const bool visibility = rp.Pop<bool>();
+
+        LOG_DEBUG(Service_VI, "called, layer_id=0x{:08X}, visibility={}", layer_id, visibility);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
@@ -729,6 +738,7 @@ public:
             {1102, nullptr, "GetDisplayResolution"},
             {2010, &IManagerDisplayService::CreateManagedLayer, "CreateManagedLayer"},
             {2011, nullptr, "DestroyManagedLayer"},
+            {2012, nullptr, "CreateStrayLayer"},
             {2050, nullptr, "CreateIndirectLayer"},
             {2051, nullptr, "DestroyIndirectLayer"},
             {2052, nullptr, "CreateIndirectProducerEndPoint"},
@@ -792,41 +802,48 @@ public:
         };
         RegisterHandlers(functions);
     }
-    ~IManagerDisplayService() = default;
 
 private:
     void CloseDisplay(Kernel::HLERequestContext& ctx) {
-        LOG_WARNING(Service_VI, "(STUBBED) called");
-
         IPC::RequestParser rp{ctx};
-        u64 display = rp.Pop<u64>();
+        const u64 display = rp.Pop<u64>();
+
+        LOG_WARNING(Service_VI, "(STUBBED) called. display=0x{:016X}", display);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
     }
 
     void CreateManagedLayer(Kernel::HLERequestContext& ctx) {
-        LOG_WARNING(Service_VI, "(STUBBED) called");
-
         IPC::RequestParser rp{ctx};
-        u32 unknown = rp.Pop<u32>();
+        const u32 unknown = rp.Pop<u32>();
         rp.Skip(1, false);
-        u64 display = rp.Pop<u64>();
-        u64 aruid = rp.Pop<u64>();
+        const u64 display = rp.Pop<u64>();
+        const u64 aruid = rp.Pop<u64>();
 
-        u64 layer_id = nv_flinger->CreateLayer(display);
+        LOG_WARNING(Service_VI,
+                    "(STUBBED) called. unknown=0x{:08X}, display=0x{:016X}, aruid=0x{:016X}",
+                    unknown, display, aruid);
+
+        const auto layer_id = nv_flinger->CreateLayer(display);
+        if (!layer_id) {
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ERR_NOT_FOUND);
+            return;
+        }
 
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(RESULT_SUCCESS);
-        rb.Push(layer_id);
+        rb.Push(*layer_id);
     }
 
     void AddToLayerStack(Kernel::HLERequestContext& ctx) {
-        LOG_WARNING(Service_VI, "(STUBBED) called");
-
         IPC::RequestParser rp{ctx};
-        u32 stack = rp.Pop<u32>();
-        u64 layer_id = rp.Pop<u64>();
+        const u32 stack = rp.Pop<u32>();
+        const u64 layer_id = rp.Pop<u64>();
+
+        LOG_WARNING(Service_VI, "(STUBBED) called. stack=0x{:08X}, layer_id=0x{:016X}", stack,
+                    layer_id);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
@@ -834,8 +851,9 @@ private:
 
     void SetLayerVisibility(Kernel::HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
-        u64 layer_id = rp.Pop<u64>();
-        bool visibility = rp.Pop<bool>();
+        const u64 layer_id = rp.Pop<u64>();
+        const bool visibility = rp.Pop<bool>();
+
         LOG_WARNING(Service_VI, "(STUBBED) called, layer_id=0x{:X}, visibility={}", layer_id,
                     visibility);
 
@@ -849,9 +867,24 @@ private:
 class IApplicationDisplayService final : public ServiceFramework<IApplicationDisplayService> {
 public:
     explicit IApplicationDisplayService(std::shared_ptr<NVFlinger::NVFlinger> nv_flinger);
-    ~IApplicationDisplayService() = default;
 
 private:
+    enum class ConvertedScaleMode : u64 {
+        Freeze = 0,
+        ScaleToWindow = 1,
+        ScaleAndCrop = 2,
+        None = 3,
+        PreserveAspectRatio = 4,
+    };
+
+    enum class NintendoScaleMode : u32 {
+        None = 0,
+        Freeze = 1,
+        ScaleToWindow = 2,
+        ScaleAndCrop = 3,
+        PreserveAspectRatio = 4,
+    };
+
     void GetRelayService(Kernel::HLERequestContext& ctx) {
         LOG_WARNING(Service_VI, "(STUBBED) called");
 
@@ -888,65 +921,104 @@ private:
         LOG_WARNING(Service_VI, "(STUBBED) called");
 
         IPC::RequestParser rp{ctx};
-        auto name_buf = rp.PopRaw<std::array<u8, 0x40>>();
-        auto end = std::find(name_buf.begin(), name_buf.end(), '\0');
+        const auto name_buf = rp.PopRaw<std::array<char, 0x40>>();
 
-        std::string name(name_buf.begin(), end);
+        OpenDisplayImpl(ctx, std::string_view{name_buf.data(), name_buf.size()});
+    }
+
+    void OpenDefaultDisplay(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_VI, "called");
+
+        OpenDisplayImpl(ctx, "Default");
+    }
+
+    void OpenDisplayImpl(Kernel::HLERequestContext& ctx, std::string_view name) {
+        const auto trim_pos = name.find('\0');
+
+        if (trim_pos != std::string_view::npos) {
+            name.remove_suffix(name.size() - trim_pos);
+        }
 
         ASSERT_MSG(name == "Default", "Non-default displays aren't supported yet");
 
+        const auto display_id = nv_flinger->OpenDisplay(name);
+        if (!display_id) {
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ERR_NOT_FOUND);
+            return;
+        }
+
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(RESULT_SUCCESS);
-        rb.Push<u64>(nv_flinger->OpenDisplay(name));
+        rb.Push<u64>(*display_id);
     }
 
     void CloseDisplay(Kernel::HLERequestContext& ctx) {
-        LOG_WARNING(Service_VI, "(STUBBED) called");
-
         IPC::RequestParser rp{ctx};
-        u64 display_id = rp.Pop<u64>();
+        const u64 display_id = rp.Pop<u64>();
+
+        LOG_WARNING(Service_VI, "(STUBBED) called. display_id=0x{:016X}", display_id);
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
+
+    // This literally does nothing internally in the actual service itself,
+    // and just returns a successful result code regardless of the input.
+    void SetDisplayEnabled(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_VI, "called.");
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
     }
 
     void GetDisplayResolution(Kernel::HLERequestContext& ctx) {
-        LOG_WARNING(Service_VI, "(STUBBED) called");
-
         IPC::RequestParser rp{ctx};
-        u64 display_id = rp.Pop<u64>();
+        const u64 display_id = rp.Pop<u64>();
+
+        LOG_DEBUG(Service_VI, "called. display_id=0x{:016X}", display_id);
 
         IPC::ResponseBuilder rb{ctx, 6};
         rb.Push(RESULT_SUCCESS);
 
-        if (Settings::values.use_docked_mode) {
-            rb.Push(static_cast<u64>(DisplayResolution::DockedWidth) *
-                    static_cast<u32>(Settings::values.resolution_factor));
-            rb.Push(static_cast<u64>(DisplayResolution::DockedHeight) *
-                    static_cast<u32>(Settings::values.resolution_factor));
-        } else {
-            rb.Push(static_cast<u64>(DisplayResolution::UndockedWidth) *
-                    static_cast<u32>(Settings::values.resolution_factor));
-            rb.Push(static_cast<u64>(DisplayResolution::UndockedHeight) *
-                    static_cast<u32>(Settings::values.resolution_factor));
-        }
+        // This only returns the fixed values of 1280x720 and makes no distinguishing
+        // between docked and undocked dimensions. We take the liberty of applying
+        // the resolution scaling factor here.
+        rb.Push(static_cast<u64>(DisplayResolution::UndockedWidth) *
+                static_cast<u32>(Settings::values.resolution_factor));
+        rb.Push(static_cast<u64>(DisplayResolution::UndockedHeight) *
+                static_cast<u32>(Settings::values.resolution_factor));
     }
 
     void SetLayerScalingMode(Kernel::HLERequestContext& ctx) {
-        LOG_WARNING(Service_VI, "(STUBBED) called");
-
         IPC::RequestParser rp{ctx};
-        u32 scaling_mode = rp.Pop<u32>();
-        u64 unknown = rp.Pop<u64>();
+        const auto scaling_mode = rp.PopEnum<NintendoScaleMode>();
+        const u64 unknown = rp.Pop<u64>();
+
+        LOG_DEBUG(Service_VI, "called. scaling_mode=0x{:08X}, unknown=0x{:016X}",
+                  static_cast<u32>(scaling_mode), unknown);
 
         IPC::ResponseBuilder rb{ctx, 2};
+
+        if (scaling_mode > NintendoScaleMode::PreserveAspectRatio) {
+            LOG_ERROR(Service_VI, "Invalid scaling mode provided.");
+            rb.Push(ERR_OPERATION_FAILED);
+            return;
+        }
+
+        if (scaling_mode != NintendoScaleMode::ScaleToWindow &&
+            scaling_mode != NintendoScaleMode::PreserveAspectRatio) {
+            LOG_ERROR(Service_VI, "Unsupported scaling mode supplied.");
+            rb.Push(ERR_UNSUPPORTED);
+            return;
+        }
+
         rb.Push(RESULT_SUCCESS);
     }
 
     void ListDisplays(Kernel::HLERequestContext& ctx) {
         LOG_WARNING(Service_VI, "(STUBBED) called");
 
-        IPC::RequestParser rp{ctx};
         DisplayInfo display_info;
         display_info.width *= static_cast<u64>(Settings::values.resolution_factor);
         display_info.height *= static_cast<u64>(Settings::values.resolution_factor);
@@ -957,114 +1029,127 @@ private:
     }
 
     void OpenLayer(Kernel::HLERequestContext& ctx) {
-        LOG_DEBUG(Service_VI, "called");
-
         IPC::RequestParser rp{ctx};
-        auto name_buf = rp.PopRaw<std::array<u8, 0x40>>();
-        auto end = std::find(name_buf.begin(), name_buf.end(), '\0');
+        const auto name_buf = rp.PopRaw<std::array<u8, 0x40>>();
+        const auto end = std::find(name_buf.begin(), name_buf.end(), '\0');
 
-        std::string display_name(name_buf.begin(), end);
+        const std::string display_name(name_buf.begin(), end);
 
-        u64 layer_id = rp.Pop<u64>();
-        u64 aruid = rp.Pop<u64>();
+        const u64 layer_id = rp.Pop<u64>();
+        const u64 aruid = rp.Pop<u64>();
 
-        u64 display_id = nv_flinger->OpenDisplay(display_name);
-        u32 buffer_queue_id = nv_flinger->GetBufferQueueId(display_id, layer_id);
+        LOG_DEBUG(Service_VI, "called. layer_id=0x{:016X}, aruid=0x{:016X}", layer_id, aruid);
 
-        NativeWindow native_window{buffer_queue_id};
+        const auto display_id = nv_flinger->OpenDisplay(display_name);
+        if (!display_id) {
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ERR_NOT_FOUND);
+            return;
+        }
+
+        const auto buffer_queue_id = nv_flinger->FindBufferQueueId(*display_id, layer_id);
+        if (!buffer_queue_id) {
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ERR_NOT_FOUND);
+            return;
+        }
+
+        NativeWindow native_window{*buffer_queue_id};
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(RESULT_SUCCESS);
         rb.Push<u64>(ctx.WriteBuffer(native_window.Serialize()));
     }
 
     void CreateStrayLayer(Kernel::HLERequestContext& ctx) {
-        LOG_DEBUG(Service_VI, "called");
-
         IPC::RequestParser rp{ctx};
-        u32 flags = rp.Pop<u32>();
+        const u32 flags = rp.Pop<u32>();
         rp.Pop<u32>(); // padding
-        u64 display_id = rp.Pop<u64>();
+        const u64 display_id = rp.Pop<u64>();
+
+        LOG_DEBUG(Service_VI, "called. flags=0x{:08X}, display_id=0x{:016X}", flags, display_id);
 
         // TODO(Subv): What's the difference between a Stray and a Managed layer?
 
-        u64 layer_id = nv_flinger->CreateLayer(display_id);
-        u32 buffer_queue_id = nv_flinger->GetBufferQueueId(display_id, layer_id);
+        const auto layer_id = nv_flinger->CreateLayer(display_id);
+        if (!layer_id) {
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ERR_NOT_FOUND);
+            return;
+        }
 
-        NativeWindow native_window{buffer_queue_id};
+        const auto buffer_queue_id = nv_flinger->FindBufferQueueId(display_id, *layer_id);
+        if (!buffer_queue_id) {
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ERR_NOT_FOUND);
+            return;
+        }
+
+        NativeWindow native_window{*buffer_queue_id};
         IPC::ResponseBuilder rb{ctx, 6};
         rb.Push(RESULT_SUCCESS);
-        rb.Push(layer_id);
+        rb.Push(*layer_id);
         rb.Push<u64>(ctx.WriteBuffer(native_window.Serialize()));
     }
 
     void DestroyStrayLayer(Kernel::HLERequestContext& ctx) {
-        LOG_WARNING(Service_VI, "(STUBBED) called");
-
         IPC::RequestParser rp{ctx};
-        u64 layer_id = rp.Pop<u64>();
+        const u64 layer_id = rp.Pop<u64>();
+
+        LOG_WARNING(Service_VI, "(STUBBED) called. layer_id=0x{:016X}", layer_id);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
     }
 
     void GetDisplayVsyncEvent(Kernel::HLERequestContext& ctx) {
-        LOG_WARNING(Service_VI, "(STUBBED) called");
-
         IPC::RequestParser rp{ctx};
-        u64 display_id = rp.Pop<u64>();
+        const u64 display_id = rp.Pop<u64>();
 
-        auto vsync_event = nv_flinger->GetVsyncEvent(display_id);
+        LOG_WARNING(Service_VI, "(STUBBED) called. display_id=0x{:016X}", display_id);
+
+        const auto vsync_event = nv_flinger->FindVsyncEvent(display_id);
+        if (!vsync_event) {
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ERR_NOT_FOUND);
+            return;
+        }
 
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
         rb.PushCopyObjects(vsync_event);
     }
 
-    enum class ConvertedScaleMode : u64 {
-        None = 0, // VI seems to name this as "Unknown" but lots of games pass it, assume it's no
-                  // scaling/default
-        Freeze = 1,
-        ScaleToWindow = 2,
-        Crop = 3,
-        NoCrop = 4,
-    };
-
-    // This struct is different, currently it's 1:1 but this might change in the future.
-    enum class NintendoScaleMode : u32 {
-        None = 0,
-        Freeze = 1,
-        ScaleToWindow = 2,
-        Crop = 3,
-        NoCrop = 4,
-    };
-
     void ConvertScalingMode(Kernel::HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
-        auto mode = rp.PopEnum<NintendoScaleMode>();
+        const auto mode = rp.PopEnum<NintendoScaleMode>();
         LOG_DEBUG(Service_VI, "called mode={}", static_cast<u32>(mode));
 
-        IPC::ResponseBuilder rb{ctx, 4};
-        rb.Push(RESULT_SUCCESS);
+        const auto converted_mode = ConvertScalingModeImpl(mode);
+
+        if (converted_mode.Succeeded()) {
+            IPC::ResponseBuilder rb{ctx, 4};
+            rb.Push(RESULT_SUCCESS);
+            rb.PushEnum(*converted_mode);
+        } else {
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(converted_mode.Code());
+        }
+    }
+
+    static ResultVal<ConvertedScaleMode> ConvertScalingModeImpl(NintendoScaleMode mode) {
         switch (mode) {
         case NintendoScaleMode::None:
-            rb.PushEnum(ConvertedScaleMode::None);
-            break;
+            return MakeResult(ConvertedScaleMode::None);
         case NintendoScaleMode::Freeze:
-            rb.PushEnum(ConvertedScaleMode::Freeze);
-            break;
+            return MakeResult(ConvertedScaleMode::Freeze);
         case NintendoScaleMode::ScaleToWindow:
-            rb.PushEnum(ConvertedScaleMode::ScaleToWindow);
-            break;
-        case NintendoScaleMode::Crop:
-            rb.PushEnum(ConvertedScaleMode::Crop);
-            break;
-        case NintendoScaleMode::NoCrop:
-            rb.PushEnum(ConvertedScaleMode::NoCrop);
-            break;
+            return MakeResult(ConvertedScaleMode::ScaleToWindow);
+        case NintendoScaleMode::ScaleAndCrop:
+            return MakeResult(ConvertedScaleMode::ScaleAndCrop);
+        case NintendoScaleMode::PreserveAspectRatio:
+            return MakeResult(ConvertedScaleMode::PreserveAspectRatio);
         default:
-            UNIMPLEMENTED_MSG("Unknown scaling mode {}", static_cast<u32>(mode));
-            rb.PushEnum(ConvertedScaleMode::None);
-            break;
+            return ERR_OPERATION_FAILED;
         }
     }
 
@@ -1082,9 +1167,9 @@ IApplicationDisplayService::IApplicationDisplayService(
          "GetIndirectDisplayTransactionService"},
         {1000, &IApplicationDisplayService::ListDisplays, "ListDisplays"},
         {1010, &IApplicationDisplayService::OpenDisplay, "OpenDisplay"},
-        {1011, nullptr, "OpenDefaultDisplay"},
+        {1011, &IApplicationDisplayService::OpenDefaultDisplay, "OpenDefaultDisplay"},
         {1020, &IApplicationDisplayService::CloseDisplay, "CloseDisplay"},
-        {1101, nullptr, "SetDisplayEnabled"},
+        {1101, &IApplicationDisplayService::SetDisplayEnabled, "SetDisplayEnabled"},
         {1102, &IApplicationDisplayService::GetDisplayResolution, "GetDisplayResolution"},
         {2020, &IApplicationDisplayService::OpenLayer, "OpenLayer"},
         {2021, nullptr, "CloseLayer"},
@@ -1101,26 +1186,40 @@ IApplicationDisplayService::IApplicationDisplayService(
     RegisterHandlers(functions);
 }
 
-Module::Interface::Interface(std::shared_ptr<Module> module, const char* name,
-                             std::shared_ptr<NVFlinger::NVFlinger> nv_flinger)
-    : ServiceFramework(name), module(std::move(module)), nv_flinger(std::move(nv_flinger)) {}
+static bool IsValidServiceAccess(Permission permission, Policy policy) {
+    if (permission == Permission::User) {
+        return policy == Policy::User;
+    }
 
-Module::Interface::~Interface() = default;
+    if (permission == Permission::System || permission == Permission::Manager) {
+        return policy == Policy::User || policy == Policy::Compositor;
+    }
 
-void Module::Interface::GetDisplayService(Kernel::HLERequestContext& ctx) {
-    LOG_WARNING(Service_VI, "(STUBBED) called");
+    return false;
+}
+
+void detail::GetDisplayServiceImpl(Kernel::HLERequestContext& ctx,
+                                   std::shared_ptr<NVFlinger::NVFlinger> nv_flinger,
+                                   Permission permission) {
+    IPC::RequestParser rp{ctx};
+    const auto policy = rp.PopEnum<Policy>();
+
+    if (!IsValidServiceAccess(permission, policy)) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ERR_PERMISSION_DENIED);
+        return;
+    }
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<IApplicationDisplayService>(nv_flinger);
+    rb.PushIpcInterface<IApplicationDisplayService>(std::move(nv_flinger));
 }
 
 void InstallInterfaces(SM::ServiceManager& service_manager,
                        std::shared_ptr<NVFlinger::NVFlinger> nv_flinger) {
-    auto module = std::make_shared<Module>();
-    std::make_shared<VI_M>(module, nv_flinger)->InstallAsService(service_manager);
-    std::make_shared<VI_S>(module, nv_flinger)->InstallAsService(service_manager);
-    std::make_shared<VI_U>(module, nv_flinger)->InstallAsService(service_manager);
+    std::make_shared<VI_M>(nv_flinger)->InstallAsService(service_manager);
+    std::make_shared<VI_S>(nv_flinger)->InstallAsService(service_manager);
+    std::make_shared<VI_U>(nv_flinger)->InstallAsService(service_manager);
 }
 
 } // namespace Service::VI

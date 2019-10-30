@@ -11,18 +11,19 @@
 namespace Service::HID {
 
 constexpr s32 HID_JOYSTICK_MAX = 0x7fff;
-constexpr s32 HID_JOYSTICK_MIN = -0x7fff;
+[[maybe_unused]] constexpr s32 HID_JOYSTICK_MIN = -0x7fff;
 enum class JoystickId : std::size_t { Joystick_Left, Joystick_Right };
 
-Controller_DebugPad::Controller_DebugPad() = default;
+Controller_DebugPad::Controller_DebugPad(Core::System& system) : ControllerBase(system) {}
 Controller_DebugPad::~Controller_DebugPad() = default;
 
 void Controller_DebugPad::OnInit() {}
 
 void Controller_DebugPad::OnRelease() {}
 
-void Controller_DebugPad::OnUpdate(u8* data, std::size_t size) {
-    shared_memory.header.timestamp = CoreTiming::GetTicks();
+void Controller_DebugPad::OnUpdate(const Core::Timing::CoreTiming& core_timing, u8* data,
+                                   std::size_t size) {
+    shared_memory.header.timestamp = core_timing.GetTicks();
     shared_memory.header.total_entry_count = 17;
 
     if (!IsControllerActivated()) {

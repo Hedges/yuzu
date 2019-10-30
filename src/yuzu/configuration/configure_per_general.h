@@ -7,16 +7,16 @@
 #include <memory>
 #include <vector>
 
-#include <QKeyEvent>
+#include <QDialog>
 #include <QList>
-#include <QWidget>
 
 #include "core/file_sys/vfs_types.h"
 
-class QTreeView;
 class QGraphicsScene;
 class QStandardItem;
 class QStandardItemModel;
+class QTreeView;
+class QVBoxLayout;
 
 namespace Ui {
 class ConfigurePerGameGeneral;
@@ -30,11 +30,16 @@ public:
     ~ConfigurePerGameGeneral() override;
 
     /// Save all button configurations to settings file
-    void applyConfiguration();
+    void ApplyConfiguration();
 
-    void loadFromFile(FileSys::VirtualFile file);
+    void LoadFromFile(FileSys::VirtualFile file);
 
 private:
+    void changeEvent(QEvent* event) override;
+    void RetranslateUI();
+
+    void LoadConfiguration();
+
     std::unique_ptr<Ui::ConfigurePerGameGeneral> ui;
     FileSys::VirtualFile file;
     u64 title_id;
@@ -45,6 +50,4 @@ private:
     QGraphicsScene* scene;
 
     std::vector<QList<QStandardItem*>> list_items;
-
-    void loadConfiguration();
 };

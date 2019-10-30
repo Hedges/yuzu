@@ -14,6 +14,7 @@
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/partition_filesystem.h"
+#include "core/file_sys/program_metadata.h"
 #include "core/file_sys/submission_package.h"
 #include "core/loader/loader.h"
 
@@ -78,6 +79,10 @@ Loader::ResultStatus NSP::GetStatus() const {
 }
 
 Loader::ResultStatus NSP::GetProgramStatus(u64 title_id) const {
+    if (IsExtractedType() && GetExeFS() != nullptr && FileSys::IsDirectoryExeFS(GetExeFS())) {
+        return Loader::ResultStatus::Success;
+    }
+
     const auto iter = program_status.find(title_id);
     if (iter == program_status.end())
         return Loader::ResultStatus::ErrorNSPMissingProgramNCA;
@@ -85,12 +90,29 @@ Loader::ResultStatus NSP::GetProgramStatus(u64 title_id) const {
 }
 
 u64 NSP::GetFirstTitleID() const {
+    if (IsExtractedType()) {
+        return GetProgramTitleID();
+    }
+
     if (program_status.empty())
         return 0;
     return program_status.begin()->first;
 }
 
 u64 NSP::GetProgramTitleID() const {
+    if (IsExtractedType()) {
+        if (GetExeFS() == nullptr || !IsDirectoryExeFS(GetExeFS())) {
+            return 0;
+        }
+
+        ProgramMetadata meta;
+        if (meta.Load(GetExeFS()->GetFile("main.npdm")) == Loader::ResultStatus::Success) {
+            return meta.GetTitleID();
+        } else {
+            return 0;
+        }
+    }
+
     const auto out = GetFirstTitleID();
     if ((out & 0x800) == 0)
         return out;
@@ -102,6 +124,10 @@ u64 NSP::GetProgramTitleID() const {
 }
 
 std::vector<u64> NSP::GetTitleIDs() const {
+    if (IsExtractedType()) {
+        return {GetProgramTitleID()};
+    }
+
     std::vector<u64> out;
     out.reserve(ncas.size());
     for (const auto& kv : ncas)
@@ -143,11 +169,12 @@ std::multimap<u64, std::shared_ptr<NCA>> NSP::GetNCAsByTitleID() const {
     return out;
 }
 
-std::map<u64, std::map<ContentRecordType, std::shared_ptr<NCA>>> NSP::GetNCAs() const {
+std::map<u64, std::map<std::pair<TitleType, ContentRecordType>, std::shared_ptr<NCA>>>
+NSP::GetNCAs() const {
     return ncas;
 }
 
-std::shared_ptr<NCA> NSP::GetNCA(u64 title_id, ContentRecordType type) const {
+std::shared_ptr<NCA> NSP::GetNCA(u64 title_id, ContentRecordType type, TitleType title_type) const {
     if (extracted)
         LOG_WARNING(Service_FS, "called on an NSP that is of type extracted.");
 
@@ -155,14 +182,14 @@ std::shared_ptr<NCA> NSP::GetNCA(u64 title_id, ContentRecordType type) const {
     if (title_id_iter == ncas.end())
         return nullptr;
 
-    const auto type_iter = title_id_iter->second.find(type);
+    const auto type_iter = title_id_iter->second.find({title_type, type});
     if (type_iter == title_id_iter->second.end())
         return nullptr;
 
     return type_iter->second;
 }
 
-VirtualFile NSP::GetNCAFile(u64 title_id, ContentRecordType type) const {
+VirtualFile NSP::GetNCAFile(u64 title_id, ContentRecordType type, TitleType title_type) const {
     if (extracted)
         LOG_WARNING(Service_FS, "called on an NSP that is of type extracted.");
     const auto nca = GetNCA(title_id, type);
@@ -221,7 +248,8 @@ void NSP::InitializeExeFSAndRomFS(const std::vector<VirtualFile>& files) {
 
 void NSP::ReadNCAs(const std::vector<VirtualFile>& files) {
     for (const auto& outer_file : files) {
-        if (outer_file->GetName().substr(outer_file->GetName().size() - 9) != ".cnmt.nca") {
+        if (outer_file->GetName().size() < 9 ||
+            outer_file->GetName().substr(outer_file->GetName().size() - 9) != ".cnmt.nca") {
             continue;
         }
 
@@ -234,31 +262,37 @@ void NSP::ReadNCAs(const std::vector<VirtualFile>& files) {
         const auto section0 = nca->GetSubdirectories()[0];
 
         for (const auto& inner_file : section0->GetFiles()) {
-            if (inner_file->GetExtension() != "cnmt")
+            if (inner_file->GetExtension() != "cnmt") {
                 continue;
+            }
 
             const CNMT cnmt(inner_file);
             auto& ncas_title = ncas[cnmt.GetTitleID()];
 
-            ncas_title[ContentRecordType::Meta] = nca;
+            ncas_title[{cnmt.GetType(), ContentRecordType::Meta}] = nca;
             for (const auto& rec : cnmt.GetContentRecords()) {
-                const auto id_string = Common::HexArrayToString(rec.nca_id, false);
-                const auto next_file = pfs->GetFile(fmt::format("{}.nca", id_string));
+                const auto id_string = Common::HexToString(rec.nca_id, false);
+                auto next_file = pfs->GetFile(fmt::format("{}.nca", id_string));
+
                 if (next_file == nullptr) {
-                    LOG_WARNING(Service_FS,
-                                "NCA with ID {}.nca is listed in content metadata, but cannot "
-                                "be found in PFS. NSP appears to be corrupted.",
-                                id_string);
+                    if (rec.type != ContentRecordType::DeltaFragment) {
+                        LOG_WARNING(Service_FS,
+                                    "NCA with ID {}.nca is listed in content metadata, but cannot "
+                                    "be found in PFS. NSP appears to be corrupted.",
+                                    id_string);
+                    }
+
                     continue;
                 }
 
-                auto next_nca = std::make_shared<NCA>(next_file, nullptr, 0, keys);
-                if (next_nca->GetType() == NCAContentType::Program)
+                auto next_nca = std::make_shared<NCA>(std::move(next_file), nullptr, 0, keys);
+                if (next_nca->GetType() == NCAContentType::Program) {
                     program_status[cnmt.GetTitleID()] = next_nca->GetStatus();
+                }
                 if (next_nca->GetStatus() == Loader::ResultStatus::Success ||
                     (next_nca->GetStatus() == Loader::ResultStatus::ErrorMissingBKTRBaseRomFS &&
                      (cnmt.GetTitleID() & 0x800) != 0)) {
-                    ncas_title[rec.type] = std::move(next_nca);
+                    ncas_title[{cnmt.GetType(), rec.type}] = std::move(next_nca);
                 }
             }
 

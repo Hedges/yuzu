@@ -26,12 +26,12 @@ Config::Config() {
 Config::~Config() = default;
 
 bool Config::LoadINI(const std::string& default_contents, bool retry) {
-    const char* location = this->sdl2_config_loc.c_str();
+    const std::string& location = this->sdl2_config_loc;
     if (sdl2_config->ParseError() < 0) {
         if (retry) {
             LOG_WARNING(Config, "Failed to load {}. Creating file from defaults...", location);
             FileUtil::CreateFullPath(location);
-            FileUtil::WriteStringToFile(true, default_contents, location);
+            FileUtil::WriteStringToFile(true, location, default_contents);
             sdl2_config = std::make_unique<INIReader>(location); // Reopen file
 
             return LoadINI(default_contents, false);
@@ -316,45 +316,79 @@ void Config::ReadValues() {
     FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir,
                           sdl2_config->Get("Data Storage", "sdmc_directory",
                                            FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir)));
+    FileUtil::GetUserPath(FileUtil::UserPath::LoadDir,
+                          sdl2_config->Get("Data Storage", "load_directory",
+                                           FileUtil::GetUserPath(FileUtil::UserPath::LoadDir)));
+    FileUtil::GetUserPath(FileUtil::UserPath::DumpDir,
+                          sdl2_config->Get("Data Storage", "dump_directory",
+                                           FileUtil::GetUserPath(FileUtil::UserPath::DumpDir)));
+    FileUtil::GetUserPath(FileUtil::UserPath::CacheDir,
+                          sdl2_config->Get("Data Storage", "cache_directory",
+                                           FileUtil::GetUserPath(FileUtil::UserPath::CacheDir)));
+    Settings::values.gamecard_inserted =
+        sdl2_config->GetBoolean("Data Storage", "gamecard_inserted", false);
+    Settings::values.gamecard_current_game =
+        sdl2_config->GetBoolean("Data Storage", "gamecard_current_game", false);
+    Settings::values.gamecard_path = sdl2_config->Get("Data Storage", "gamecard_path", "");
+    Settings::values.nand_total_size = static_cast<Settings::NANDTotalSize>(sdl2_config->GetInteger(
+        "Data Storage", "nand_total_size", static_cast<long>(Settings::NANDTotalSize::S29_1GB)));
+    Settings::values.nand_user_size = static_cast<Settings::NANDUserSize>(sdl2_config->GetInteger(
+        "Data Storage", "nand_user_size", static_cast<long>(Settings::NANDUserSize::S26GB)));
+    Settings::values.nand_system_size = static_cast<Settings::NANDSystemSize>(
+        sdl2_config->GetInteger("Data Storage", "nand_system_size",
+                                static_cast<long>(Settings::NANDSystemSize::S2_5GB)));
+    Settings::values.sdmc_size = static_cast<Settings::SDMCSize>(sdl2_config->GetInteger(
+        "Data Storage", "sdmc_size", static_cast<long>(Settings::SDMCSize::S16GB)));
 
     // System
     Settings::values.use_docked_mode = sdl2_config->GetBoolean("System", "use_docked_mode", false);
-    Settings::values.enable_nfc = sdl2_config->GetBoolean("System", "enable_nfc", true);
     const auto size = sdl2_config->GetInteger("System", "users_size", 0);
 
     Settings::values.current_user = std::clamp<int>(
         sdl2_config->GetInteger("System", "current_user", 0), 0, Service::Account::MAX_USERS - 1);
 
-    const auto enabled = sdl2_config->GetBoolean("System", "rng_seed_enabled", false);
-    if (enabled) {
+    const auto rng_seed_enabled = sdl2_config->GetBoolean("System", "rng_seed_enabled", false);
+    if (rng_seed_enabled) {
         Settings::values.rng_seed = sdl2_config->GetInteger("System", "rng_seed", 0);
     } else {
         Settings::values.rng_seed = std::nullopt;
     }
 
+    const auto custom_rtc_enabled = sdl2_config->GetBoolean("System", "custom_rtc_enabled", false);
+    if (custom_rtc_enabled) {
+        Settings::values.custom_rtc =
+            std::chrono::seconds(sdl2_config->GetInteger("System", "custom_rtc", 0));
+    } else {
+        Settings::values.custom_rtc = std::nullopt;
+    }
+
     // Core
-    Settings::values.use_cpu_jit = sdl2_config->GetBoolean("Core", "use_cpu_jit", true);
     Settings::values.use_multi_core = sdl2_config->GetBoolean("Core", "use_multi_core", false);
 
     // Renderer
     Settings::values.resolution_factor =
-        (float)sdl2_config->GetReal("Renderer", "resolution_factor", 1.0);
+        static_cast<float>(sdl2_config->GetReal("Renderer", "resolution_factor", 1.0));
     Settings::values.use_frame_limit = sdl2_config->GetBoolean("Renderer", "use_frame_limit", true);
     Settings::values.frame_limit =
         static_cast<u16>(sdl2_config->GetInteger("Renderer", "frame_limit", 100));
+    Settings::values.use_disk_shader_cache =
+        sdl2_config->GetBoolean("Renderer", "use_disk_shader_cache", false);
     Settings::values.use_accurate_gpu_emulation =
         sdl2_config->GetBoolean("Renderer", "use_accurate_gpu_emulation", false);
+    Settings::values.use_asynchronous_gpu_emulation =
+        sdl2_config->GetBoolean("Renderer", "use_asynchronous_gpu_emulation", false);
 
-    Settings::values.bg_red = (float)sdl2_config->GetReal("Renderer", "bg_red", 0.0);
-    Settings::values.bg_green = (float)sdl2_config->GetReal("Renderer", "bg_green", 0.0);
-    Settings::values.bg_blue = (float)sdl2_config->GetReal("Renderer", "bg_blue", 0.0);
+    Settings::values.bg_red = static_cast<float>(sdl2_config->GetReal("Renderer", "bg_red", 0.0));
+    Settings::values.bg_green =
+        static_cast<float>(sdl2_config->GetReal("Renderer", "bg_green", 0.0));
+    Settings::values.bg_blue = static_cast<float>(sdl2_config->GetReal("Renderer", "bg_blue", 0.0));
 
     // Audio
     Settings::values.sink_id = sdl2_config->Get("Audio", "output_engine", "auto");
     Settings::values.enable_audio_stretching =
         sdl2_config->GetBoolean("Audio", "enable_audio_stretching", true);
     Settings::values.audio_device_id = sdl2_config->Get("Audio", "output_device", "auto");
-    Settings::values.volume = sdl2_config->GetReal("Audio", "volume", 1);
+    Settings::values.volume = static_cast<float>(sdl2_config->GetReal("Audio", "volume", 1));
 
     Settings::values.language_index = sdl2_config->GetInteger("System", "language_index", 1);
 
@@ -363,12 +397,17 @@ void Config::ReadValues() {
     Settings::values.use_dev_keys = sdl2_config->GetBoolean("Miscellaneous", "use_dev_keys", false);
 
     // Debugging
+    Settings::values.record_frame_times =
+        sdl2_config->GetBoolean("Debugging", "record_frame_times", false);
     Settings::values.use_gdbstub = sdl2_config->GetBoolean("Debugging", "use_gdbstub", false);
     Settings::values.gdbstub_port =
         static_cast<u16>(sdl2_config->GetInteger("Debugging", "gdbstub_port", 24689));
     Settings::values.program_args = sdl2_config->Get("Debugging", "program_args", "");
     Settings::values.dump_exefs = sdl2_config->GetBoolean("Debugging", "dump_exefs", false);
     Settings::values.dump_nso = sdl2_config->GetBoolean("Debugging", "dump_nso", false);
+    Settings::values.reporting_services =
+        sdl2_config->GetBoolean("Debugging", "reporting_services", false);
+    Settings::values.quest_flag = sdl2_config->GetBoolean("Debugging", "quest_flag", false);
 
     const auto title_list = sdl2_config->Get("AddOns", "title_ids", "");
     std::stringstream ss(title_list);
@@ -394,6 +433,11 @@ void Config::ReadValues() {
         sdl2_config->Get("WebService", "web_api_url", "https://api.yuzu-emu.org");
     Settings::values.yuzu_username = sdl2_config->Get("WebService", "yuzu_username", "");
     Settings::values.yuzu_token = sdl2_config->Get("WebService", "yuzu_token", "");
+
+    // Services
+    Settings::values.bcat_backend = sdl2_config->Get("Services", "bcat_backend", "boxcat");
+    Settings::values.bcat_boxcat_local =
+        sdl2_config->GetBoolean("Services", "bcat_boxcat_local", false);
 }
 
 void Config::Reload() {

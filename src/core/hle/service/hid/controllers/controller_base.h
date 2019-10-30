@@ -7,10 +7,18 @@
 #include "common/common_types.h"
 #include "common/swap.h"
 
+namespace Core::Timing {
+class CoreTiming;
+}
+
+namespace Core {
+class System;
+}
+
 namespace Service::HID {
 class ControllerBase {
 public:
-    ControllerBase();
+    explicit ControllerBase(Core::System& system);
     virtual ~ControllerBase();
 
     // Called when the controller is initialized
@@ -20,7 +28,8 @@ public:
     virtual void OnRelease() = 0;
 
     // When the controller is requesting an update for the shared memory
-    virtual void OnUpdate(u8* data, std::size_t size) = 0;
+    virtual void OnUpdate(const Core::Timing::CoreTiming& core_timing, u8* data,
+                          std::size_t size) = 0;
 
     // Called when input devices should be loaded
     virtual void OnLoadInputDevices() = 0;
@@ -41,5 +50,7 @@ protected:
         s64_le entry_count;
     };
     static_assert(sizeof(CommonHeader) == 0x20, "CommonHeader is an invalid size");
+
+    Core::System& system;
 };
 } // namespace Service::HID

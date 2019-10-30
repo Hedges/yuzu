@@ -18,16 +18,10 @@
 #include "core/hle/kernel/readable_event.h"
 #include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/audio/audout_u.h"
+#include "core/hle/service/audio/errors.h"
 #include "core/memory.h"
 
 namespace Service::Audio {
-
-namespace ErrCodes {
-enum {
-    ErrorUnknown = 2,
-    BufferCountExceeded = 8,
-};
-}
 
 constexpr std::array<char, 10> DefaultDevice{{"DeviceOut"}};
 constexpr int DefaultSampleRate{48000};
@@ -46,11 +40,11 @@ enum class AudioState : u32 {
 
 class IAudioOut final : public ServiceFramework<IAudioOut> {
 public:
-    IAudioOut(AudoutParams audio_params, AudioCore::AudioOut& audio_core, std::string&& device_name,
-              std::string&& unique_name)
+    IAudioOut(Core::System& system, AudoutParams audio_params, AudioCore::AudioOut& audio_core,
+              std::string&& device_name, std::string&& unique_name)
         : ServiceFramework("IAudioOut"), audio_core(audio_core),
           device_name(std::move(device_name)), audio_params(audio_params) {
-
+        // clang-format off
         static const FunctionInfo functions[] = {
             {0, &IAudioOut::GetAudioOutState, "GetAudioOutState"},
             {1, &IAudioOut::StartAudioOut, "StartAudioOut"},
@@ -64,16 +58,18 @@ public:
             {9, &IAudioOut::GetAudioOutBufferCount, "GetAudioOutBufferCount"},
             {10, nullptr, "GetAudioOutPlayedSampleCount"},
             {11, nullptr, "FlushAudioOutBuffers"},
+            {12, &IAudioOut::SetAudioOutVolume, "SetAudioOutVolume"},
+            {13, &IAudioOut::GetAudioOutVolume, "GetAudioOutVolume"},
         };
+        // clang-format on
         RegisterHandlers(functions);
 
         // This is the event handle used to check if the audio buffer was released
-        auto& kernel = Core::System::GetInstance().Kernel();
-        buffer_event = Kernel::WritableEvent::CreateEventPair(kernel, Kernel::ResetType::Sticky,
-                                                              "IAudioOutBufferReleased");
+        buffer_event = Kernel::WritableEvent::CreateEventPair(
+            system.Kernel(), Kernel::ResetType::Manual, "IAudioOutBufferReleased");
 
-        stream = audio_core.OpenStream(audio_params.sample_rate, audio_params.channel_count,
-                                       std::move(unique_name),
+        stream = audio_core.OpenStream(system.CoreTiming(), audio_params.sample_rate,
+                                       audio_params.channel_count, std::move(unique_name),
                                        [=]() { buffer_event.writable->Signal(); });
     }
 
@@ -100,7 +96,7 @@ private:
 
         if (stream->IsPlaying()) {
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ResultCode(ErrorModule::Audio, ErrCodes::ErrorUnknown));
+            rb.Push(ERR_OPERATION_FAILED);
             return;
         }
 
@@ -113,7 +109,9 @@ private:
     void StopAudioOut(Kernel::HLERequestContext& ctx) {
         LOG_DEBUG(Service_Audio, "called");
 
-        audio_core.StopStream(stream);
+        if (stream->IsPlaying()) {
+            audio_core.StopStream(stream);
+        }
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
@@ -143,7 +141,8 @@ private:
 
         if (!audio_core.QueueBuffer(stream, tag, std::move(samples))) {
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ResultCode(ErrorModule::Audio, ErrCodes::BufferCountExceeded));
+            rb.Push(ERR_BUFFER_COUNT_EXCEEDED);
+            return;
         }
 
         IPC::ResponseBuilder rb{ctx, 2};
@@ -153,7 +152,6 @@ private:
     void GetReleasedAudioOutBufferImpl(Kernel::HLERequestContext& ctx) {
         LOG_DEBUG(Service_Audio, "called {}", ctx.Description());
 
-        IPC::RequestParser rp{ctx};
         const u64 max_count{ctx.GetWriteBufferSize() / sizeof(u64)};
         const auto released_buffers{audio_core.GetTagsAndReleaseBuffers(stream, max_count)};
 
@@ -184,25 +182,57 @@ private:
         rb.Push(static_cast<u32>(stream->GetQueueSize()));
     }
 
+    void SetAudioOutVolume(Kernel::HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const float volume = rp.Pop<float>();
+        LOG_DEBUG(Service_Audio, "called, volume={}", volume);
+
+        stream->SetVolume(volume);
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
+
+    void GetAudioOutVolume(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Audio, "called");
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(RESULT_SUCCESS);
+        rb.Push(stream->GetVolume());
+    }
+
     AudioCore::AudioOut& audio_core;
     AudioCore::StreamPtr stream;
     std::string device_name;
 
-    AudoutParams audio_params{};
+    [[maybe_unused]] AudoutParams audio_params {};
 
     /// This is the event handle used to check if the audio buffer was released
     Kernel::EventPair buffer_event;
 };
 
+AudOutU::AudOutU(Core::System& system_) : ServiceFramework("audout:u"), system{system_} {
+    // clang-format off
+    static const FunctionInfo functions[] = {
+        {0, &AudOutU::ListAudioOutsImpl, "ListAudioOuts"},
+        {1, &AudOutU::OpenAudioOutImpl, "OpenAudioOut"},
+        {2, &AudOutU::ListAudioOutsImpl, "ListAudioOutsAuto"},
+        {3, &AudOutU::OpenAudioOutImpl, "OpenAudioOutAuto"},
+    };
+    // clang-format on
+
+    RegisterHandlers(functions);
+    audio_core = std::make_unique<AudioCore::AudioOut>();
+}
+
+AudOutU::~AudOutU() = default;
+
 void AudOutU::ListAudioOutsImpl(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service_Audio, "called");
-
-    IPC::RequestParser rp{ctx};
 
     ctx.WriteBuffer(DefaultDevice);
 
     IPC::ResponseBuilder rb{ctx, 3};
-
     rb.Push(RESULT_SUCCESS);
     rb.Push<u32>(1); // Amount of audio devices
 }
@@ -233,7 +263,7 @@ void AudOutU::OpenAudioOutImpl(Kernel::HLERequestContext& ctx) {
 
     std::string unique_name{fmt::format("{}-{}", device_name, audio_out_interfaces.size())};
     auto audio_out_interface = std::make_shared<IAudioOut>(
-        params, *audio_core, std::move(device_name), std::move(unique_name));
+        system, params, *audio_core, std::move(device_name), std::move(unique_name));
 
     IPC::ResponseBuilder rb{ctx, 6, 0, 1};
     rb.Push(RESULT_SUCCESS);
@@ -241,20 +271,9 @@ void AudOutU::OpenAudioOutImpl(Kernel::HLERequestContext& ctx) {
     rb.Push<u32>(params.channel_count);
     rb.Push<u32>(static_cast<u32>(AudioCore::Codec::PcmFormat::Int16));
     rb.Push<u32>(static_cast<u32>(AudioState::Stopped));
-    rb.PushIpcInterface<Audio::IAudioOut>(audio_out_interface);
+    rb.PushIpcInterface<IAudioOut>(audio_out_interface);
 
     audio_out_interfaces.push_back(std::move(audio_out_interface));
 }
-
-AudOutU::AudOutU() : ServiceFramework("audout:u") {
-    static const FunctionInfo functions[] = {{0, &AudOutU::ListAudioOutsImpl, "ListAudioOuts"},
-                                             {1, &AudOutU::OpenAudioOutImpl, "OpenAudioOut"},
-                                             {2, &AudOutU::ListAudioOutsImpl, "ListAudioOutsAuto"},
-                                             {3, &AudOutU::OpenAudioOutImpl, "OpenAudioOutAuto"}};
-    RegisterHandlers(functions);
-    audio_core = std::make_unique<AudioCore::AudioOut>();
-}
-
-AudOutU::~AudOutU() = default;
 
 } // namespace Service::Audio

@@ -25,7 +25,7 @@ static QString GetKeyName(int key_code) {
     case Qt::Key_Alt:
         return QObject::tr("Alt");
     case Qt::Key_Meta:
-        return "";
+        return {};
     default:
         return QKeySequence(key_code).toString();
     }
@@ -34,24 +34,36 @@ static QString GetKeyName(int key_code) {
 static QString ButtonToText(const Common::ParamPackage& param) {
     if (!param.Has("engine")) {
         return QObject::tr("[not set]");
-    } else if (param.Get("engine", "") == "keyboard") {
-        return GetKeyName(param.Get("code", 0));
-    } else if (param.Get("engine", "") == "sdl") {
-        if (param.Has("hat")) {
-            return QString(QObject::tr("Hat %1 %2"))
-                .arg(param.Get("hat", "").c_str(), param.Get("direction", "").c_str());
-        }
-        if (param.Has("axis")) {
-            return QString(QObject::tr("Axis %1%2"))
-                .arg(param.Get("axis", "").c_str(), param.Get("direction", "").c_str());
-        }
-        if (param.Has("button")) {
-            return QString(QObject::tr("Button %1")).arg(param.Get("button", "").c_str());
-        }
-        return QString();
-    } else {
-        return QObject::tr("[unknown]");
     }
+
+    if (param.Get("engine", "") == "keyboard") {
+        return GetKeyName(param.Get("code", 0));
+    }
+
+    if (param.Get("engine", "") == "sdl") {
+        if (param.Has("hat")) {
+            const QString hat_str = QString::fromStdString(param.Get("hat", ""));
+            const QString direction_str = QString::fromStdString(param.Get("direction", ""));
+
+            return QObject::tr("Hat %1 %2").arg(hat_str, direction_str);
+        }
+
+        if (param.Has("axis")) {
+            const QString axis_str = QString::fromStdString(param.Get("axis", ""));
+            const QString direction_str = QString::fromStdString(param.Get("direction", ""));
+
+            return QObject::tr("Axis %1%2").arg(axis_str, direction_str);
+        }
+
+        if (param.Has("button")) {
+            const QString button_str = QString::fromStdString(param.Get("button", ""));
+
+            return QObject::tr("Button %1").arg(button_str);
+        }
+        return {};
+    }
+
+    return QObject::tr("[unknown]");
 }
 
 ConfigureMouseAdvanced::ConfigureMouseAdvanced(QWidget* parent)
@@ -65,93 +77,108 @@ ConfigureMouseAdvanced::ConfigureMouseAdvanced(QWidget* parent)
     };
 
     for (int button_id = 0; button_id < Settings::NativeMouseButton::NumMouseButtons; button_id++) {
-        if (!button_map[button_id])
+        auto* const button = button_map[button_id];
+        if (button == nullptr) {
             continue;
-        button_map[button_id]->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(button_map[button_id], &QPushButton::released, [=]() {
-            handleClick(
+        }
+
+        button->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(button, &QPushButton::clicked, [=] {
+            HandleClick(
                 button_map[button_id],
                 [=](const Common::ParamPackage& params) { buttons_param[button_id] = params; },
                 InputCommon::Polling::DeviceType::Button);
         });
-        connect(button_map[button_id], &QPushButton::customContextMenuRequested,
-                [=](const QPoint& menu_location) {
-                    QMenu context_menu;
-                    context_menu.addAction(tr("Clear"), [&] {
-                        buttons_param[button_id].Clear();
-                        button_map[button_id]->setText(tr("[not set]"));
-                    });
-                    context_menu.addAction(tr("Restore Default"), [&] {
-                        buttons_param[button_id] =
-                            Common::ParamPackage{InputCommon::GenerateKeyboardParam(
-                                Config::default_mouse_buttons[button_id])};
-                        button_map[button_id]->setText(ButtonToText(buttons_param[button_id]));
-                    });
-                    context_menu.exec(button_map[button_id]->mapToGlobal(menu_location));
-                });
+        connect(button, &QPushButton::customContextMenuRequested, [=](const QPoint& menu_location) {
+            QMenu context_menu;
+            context_menu.addAction(tr("Clear"), [&] {
+                buttons_param[button_id].Clear();
+                button_map[button_id]->setText(tr("[not set]"));
+            });
+            context_menu.addAction(tr("Restore Default"), [&] {
+                buttons_param[button_id] = Common::ParamPackage{
+                    InputCommon::GenerateKeyboardParam(Config::default_mouse_buttons[button_id])};
+                button_map[button_id]->setText(ButtonToText(buttons_param[button_id]));
+            });
+            context_menu.exec(button_map[button_id]->mapToGlobal(menu_location));
+        });
     }
 
-    connect(ui->buttonClearAll, &QPushButton::released, [this] { ClearAll(); });
-    connect(ui->buttonRestoreDefaults, &QPushButton::released, [this]() { restoreDefaults(); });
+    connect(ui->buttonClearAll, &QPushButton::clicked, [this] { ClearAll(); });
+    connect(ui->buttonRestoreDefaults, &QPushButton::clicked, [this] { RestoreDefaults(); });
 
     timeout_timer->setSingleShot(true);
-    connect(timeout_timer.get(), &QTimer::timeout, [this]() { setPollingResult({}, true); });
+    connect(timeout_timer.get(), &QTimer::timeout, [this] { SetPollingResult({}, true); });
 
-    connect(poll_timer.get(), &QTimer::timeout, [this]() {
+    connect(poll_timer.get(), &QTimer::timeout, [this] {
         Common::ParamPackage params;
         for (auto& poller : device_pollers) {
             params = poller->GetNextInput();
             if (params.Has("engine")) {
-                setPollingResult(params, false);
+                SetPollingResult(params, false);
                 return;
             }
         }
     });
 
-    loadConfiguration();
+    LoadConfiguration();
     resize(0, 0);
 }
 
 ConfigureMouseAdvanced::~ConfigureMouseAdvanced() = default;
 
-void ConfigureMouseAdvanced::applyConfiguration() {
+void ConfigureMouseAdvanced::ApplyConfiguration() {
     std::transform(buttons_param.begin(), buttons_param.end(),
                    Settings::values.mouse_buttons.begin(),
                    [](const Common::ParamPackage& param) { return param.Serialize(); });
 }
 
-void ConfigureMouseAdvanced::loadConfiguration() {
+void ConfigureMouseAdvanced::LoadConfiguration() {
     std::transform(Settings::values.mouse_buttons.begin(), Settings::values.mouse_buttons.end(),
                    buttons_param.begin(),
                    [](const std::string& str) { return Common::ParamPackage(str); });
-    updateButtonLabels();
+    UpdateButtonLabels();
 }
 
-void ConfigureMouseAdvanced::restoreDefaults() {
+void ConfigureMouseAdvanced::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::LanguageChange) {
+        RetranslateUI();
+    }
+
+    QDialog::changeEvent(event);
+}
+
+void ConfigureMouseAdvanced::RetranslateUI() {
+    ui->retranslateUi(this);
+}
+
+void ConfigureMouseAdvanced::RestoreDefaults() {
     for (int button_id = 0; button_id < Settings::NativeMouseButton::NumMouseButtons; button_id++) {
         buttons_param[button_id] = Common::ParamPackage{
             InputCommon::GenerateKeyboardParam(Config::default_mouse_buttons[button_id])};
     }
 
-    updateButtonLabels();
+    UpdateButtonLabels();
 }
 
 void ConfigureMouseAdvanced::ClearAll() {
     for (int i = 0; i < Settings::NativeMouseButton::NumMouseButtons; ++i) {
-        if (button_map[i] && button_map[i]->isEnabled())
+        const auto* const button = button_map[i];
+        if (button != nullptr && button->isEnabled()) {
             buttons_param[i].Clear();
+        }
     }
 
-    updateButtonLabels();
+    UpdateButtonLabels();
 }
 
-void ConfigureMouseAdvanced::updateButtonLabels() {
+void ConfigureMouseAdvanced::UpdateButtonLabels() {
     for (int button = 0; button < Settings::NativeMouseButton::NumMouseButtons; button++) {
         button_map[button]->setText(ButtonToText(buttons_param[button]));
     }
 }
 
-void ConfigureMouseAdvanced::handleClick(
+void ConfigureMouseAdvanced::HandleClick(
     QPushButton* button, std::function<void(const Common::ParamPackage&)> new_input_setter,
     InputCommon::Polling::DeviceType type) {
     button->setText(tr("[press key]"));
@@ -179,7 +206,7 @@ void ConfigureMouseAdvanced::handleClick(
     poll_timer->start(200);     // Check for new inputs every 200ms
 }
 
-void ConfigureMouseAdvanced::setPollingResult(const Common::ParamPackage& params, bool abort) {
+void ConfigureMouseAdvanced::SetPollingResult(const Common::ParamPackage& params, bool abort) {
     releaseKeyboard();
     releaseMouse();
     timeout_timer->stop();
@@ -192,22 +219,23 @@ void ConfigureMouseAdvanced::setPollingResult(const Common::ParamPackage& params
         (*input_setter)(params);
     }
 
-    updateButtonLabels();
+    UpdateButtonLabels();
     input_setter = std::nullopt;
 }
 
 void ConfigureMouseAdvanced::keyPressEvent(QKeyEvent* event) {
-    if (!input_setter || !event)
+    if (!input_setter || !event) {
         return;
+    }
 
     if (event->key() != Qt::Key_Escape) {
         if (want_keyboard_keys) {
-            setPollingResult(Common::ParamPackage{InputCommon::GenerateKeyboardParam(event->key())},
+            SetPollingResult(Common::ParamPackage{InputCommon::GenerateKeyboardParam(event->key())},
                              false);
         } else {
             // Escape key wasn't pressed and we don't want any keyboard keys, so don't stop polling
             return;
         }
     }
-    setPollingResult({}, true);
+    SetPollingResult({}, true);
 }

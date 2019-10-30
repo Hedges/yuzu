@@ -2,17 +2,15 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include "core/core.h"
-#include "core/memory.h"
+#include "common/assert.h"
+#include "common/logging/log.h"
 #include "video_core/engines/fermi_2d.h"
-#include "video_core/engines/maxwell_3d.h"
+#include "video_core/memory_manager.h"
 #include "video_core/rasterizer_interface.h"
-#include "video_core/textures/decoders.h"
 
 namespace Tegra::Engines {
 
-Fermi2D::Fermi2D(VideoCore::RasterizerInterface& rasterizer, MemoryManager& memory_manager)
-    : memory_manager(memory_manager), rasterizer{rasterizer} {}
+Fermi2D::Fermi2D(VideoCore::RasterizerInterface& rasterizer) : rasterizer{rasterizer} {}
 
 void Fermi2D::CallMethod(const GPU::MethodCall& method_call) {
     ASSERT_MSG(method_call.method < Regs::NUM_REGS,
@@ -21,7 +19,9 @@ void Fermi2D::CallMethod(const GPU::MethodCall& method_call) {
     regs.reg_array[method_call.method] = method_call.argument;
 
     switch (method_call.method) {
-    case FERMI2D_REG_INDEX(trigger): {
+    // Trigger the surface copy on the last register write. This is blit_src_y, but this is 64-bit,
+    // so trigger on the second 32-bit write.
+    case FERMI2D_REG_INDEX(blit_src_y) + 1: {
         HandleSurfaceCopy();
         break;
     }
@@ -29,58 +29,36 @@ void Fermi2D::CallMethod(const GPU::MethodCall& method_call) {
 }
 
 void Fermi2D::HandleSurfaceCopy() {
-    LOG_WARNING(HW_GPU, "Requested a surface copy with operation {}",
-                static_cast<u32>(regs.operation));
-
-    const GPUVAddr source = regs.src.Address();
-    const GPUVAddr dest = regs.dst.Address();
-
-    // TODO(Subv): Only same-format and same-size copies are allowed for now.
-    ASSERT(regs.src.format == regs.dst.format);
-    ASSERT(regs.src.width * regs.src.height == regs.dst.width * regs.dst.height);
+    LOG_DEBUG(HW_GPU, "Requested a surface copy with operation {}",
+              static_cast<u32>(regs.operation));
 
     // TODO(Subv): Only raw copies are implemented.
-    ASSERT(regs.operation == Regs::Operation::SrcCopy);
+    ASSERT(regs.operation == Operation::SrcCopy);
 
-    const VAddr source_cpu = *memory_manager.GpuToCpuAddress(source);
-    const VAddr dest_cpu = *memory_manager.GpuToCpuAddress(dest);
+    const u32 src_blit_x1{static_cast<u32>(regs.blit_src_x >> 32)};
+    const u32 src_blit_y1{static_cast<u32>(regs.blit_src_y >> 32)};
+    u32 src_blit_x2, src_blit_y2;
+    if (regs.blit_control.origin == Origin::Corner) {
+        src_blit_x2 =
+            static_cast<u32>((regs.blit_src_x + (regs.blit_du_dx * regs.blit_dst_width)) >> 32);
+        src_blit_y2 =
+            static_cast<u32>((regs.blit_src_y + (regs.blit_dv_dy * regs.blit_dst_height)) >> 32);
+    } else {
+        src_blit_x2 = static_cast<u32>((regs.blit_src_x >> 32) + regs.blit_dst_width);
+        src_blit_y2 = static_cast<u32>((regs.blit_src_y >> 32) + regs.blit_dst_height);
+    }
+    const Common::Rectangle<u32> src_rect{src_blit_x1, src_blit_y1, src_blit_x2, src_blit_y2};
+    const Common::Rectangle<u32> dst_rect{regs.blit_dst_x, regs.blit_dst_y,
+                                          regs.blit_dst_x + regs.blit_dst_width,
+                                          regs.blit_dst_y + regs.blit_dst_height};
+    Config copy_config;
+    copy_config.operation = regs.operation;
+    copy_config.filter = regs.blit_control.filter;
+    copy_config.src_rect = src_rect;
+    copy_config.dst_rect = dst_rect;
 
-    u32 src_bytes_per_pixel = RenderTargetBytesPerPixel(regs.src.format);
-    u32 dst_bytes_per_pixel = RenderTargetBytesPerPixel(regs.dst.format);
-
-    if (!rasterizer.AccelerateSurfaceCopy(regs.src, regs.dst)) {
-        // All copies here update the main memory, so mark all rasterizer states as invalid.
-        Core::System::GetInstance().GPU().Maxwell3D().dirty_flags.OnMemoryWrite();
-
-        rasterizer.FlushRegion(source_cpu, src_bytes_per_pixel * regs.src.width * regs.src.height);
-        // We have to invalidate the destination region to evict any outdated surfaces from the
-        // cache. We do this before actually writing the new data because the destination address
-        // might contain a dirty surface that will have to be written back to memory.
-        rasterizer.InvalidateRegion(dest_cpu,
-                                    dst_bytes_per_pixel * regs.dst.width * regs.dst.height);
-
-        if (regs.src.linear == regs.dst.linear) {
-            // If the input layout and the output layout are the same, just perform a raw copy.
-            ASSERT(regs.src.BlockHeight() == regs.dst.BlockHeight());
-            Memory::CopyBlock(dest_cpu, source_cpu,
-                              src_bytes_per_pixel * regs.dst.width * regs.dst.height);
-            return;
-        }
-        u8* src_buffer = Memory::GetPointer(source_cpu);
-        u8* dst_buffer = Memory::GetPointer(dest_cpu);
-        if (!regs.src.linear && regs.dst.linear) {
-            // If the input is tiled and the output is linear, deswizzle the input and copy it over.
-            Texture::CopySwizzledData(regs.src.width, regs.src.height, regs.src.depth,
-                                      src_bytes_per_pixel, dst_bytes_per_pixel, src_buffer,
-                                      dst_buffer, true, regs.src.BlockHeight(),
-                                      regs.src.BlockDepth(), 0);
-        } else {
-            // If the input is linear and the output is tiled, swizzle the input and copy it over.
-            Texture::CopySwizzledData(regs.src.width, regs.src.height, regs.src.depth,
-                                      src_bytes_per_pixel, dst_bytes_per_pixel, dst_buffer,
-                                      src_buffer, false, regs.dst.BlockHeight(),
-                                      regs.dst.BlockDepth(), 0);
-        }
+    if (!rasterizer.AccelerateSurfaceCopy(regs.src, regs.dst, copy_config)) {
+        UNIMPLEMENTED();
     }
 }
 

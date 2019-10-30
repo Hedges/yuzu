@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include <array>
 #include <bitset>
 #include <optional>
-#include <string>
 #include <tuple>
 #include <vector>
 
@@ -78,7 +78,7 @@ union Attribute {
     constexpr explicit Attribute(u64 value) : value(value) {}
 
     enum class Index : u64 {
-        PointSize = 6,
+        LayerViewportPointSize = 6,
         Position = 7,
         Attribute_0 = 8,
         Attribute_31 = 39,
@@ -99,6 +99,10 @@ union Attribute {
         BitField<22, 2, u64> element;
         BitField<24, 6, Index> index;
         BitField<47, 3, AttributeSize> size;
+
+        bool IsPhysical() const {
+            return element == 0 && static_cast<u64>(index.Value()) == 0;
+        }
     } fmt20;
 
     union {
@@ -121,6 +125,15 @@ union Sampler {
 
     BitField<36, 13, Index> index;
     u64 value{};
+};
+
+union Image {
+    Image() = default;
+
+    constexpr explicit Image(u64 value) : value{value} {}
+
+    BitField<36, 13, u64> index;
+    u64 value;
 };
 
 } // namespace Tegra::Shader
@@ -186,7 +199,7 @@ enum class SubOp : u64 {
 };
 
 enum class F2iRoundingOp : u64 {
-    None = 0,
+    RoundEven = 0,
     Floor = 1,
     Ceil = 2,
     Trunc = 3,
@@ -208,6 +221,8 @@ enum class UniformType : u64 {
     SignedShort = 3,
     Single = 4,
     Double = 5,
+    Quad = 6,
+    UnsignedQuad = 7,
 };
 
 enum class StoreType : u64 {
@@ -215,9 +230,9 @@ enum class StoreType : u64 {
     Signed8 = 1,
     Unsigned16 = 2,
     Signed16 = 3,
-    Bytes32 = 4,
-    Bytes64 = 5,
-    Bytes128 = 6,
+    Bits32 = 4,
+    Bits64 = 5,
+    Bits128 = 6,
 };
 
 enum class IMinMaxExchange : u64 {
@@ -323,11 +338,11 @@ enum class TextureQueryType : u64 {
 
 enum class TextureProcessMode : u64 {
     None = 0,
-    LZ = 1,  // Unknown, appears to be the same as none.
+    LZ = 1,  // Load LOD of zero.
     LB = 2,  // Load Bias.
-    LL = 3,  // Load LOD (LevelOfDetail)
-    LBA = 6, // Load Bias. The A is unknown, does not appear to differ with LB
-    LLA = 7  // Load LOD. The A is unknown, does not appear to differ with LL
+    LL = 3,  // Load LOD.
+    LBA = 6, // Load Bias. The A is unknown, does not appear to differ with LB.
+    LLA = 7  // Load LOD. The A is unknown, does not appear to differ with LL.
 };
 
 enum class TextureMiscMode : u64 {
@@ -337,6 +352,26 @@ enum class TextureMiscMode : u64 {
     NODEP,
     MZ,
     PTP,
+};
+
+enum class SurfaceDataMode : u64 {
+    P = 0,
+    D_BA = 1,
+};
+
+enum class OutOfBoundsStore : u64 {
+    Ignore = 0,
+    Clamp = 1,
+    Trap = 2,
+};
+
+enum class ImageType : u64 {
+    Texture1D = 0,
+    TextureBuffer = 1,
+    Texture1DArray = 2,
+    Texture2D = 3,
+    Texture2DArray = 4,
+    Texture3D = 5,
 };
 
 enum class IsberdMode : u64 {
@@ -374,9 +409,9 @@ enum class R2pMode : u64 {
 };
 
 enum class IpaInterpMode : u64 {
-    Linear = 0,
-    Perspective = 1,
-    Flat = 2,
+    Pass = 0,
+    Multiply = 1,
+    Constant = 2,
     Sc = 3,
 };
 
@@ -384,6 +419,20 @@ enum class IpaSampleMode : u64 {
     Default = 0,
     Centroid = 1,
     Offset = 2,
+};
+
+enum class LmemLoadCacheManagement : u64 {
+    Default = 0,
+    LU = 1,
+    CI = 2,
+    CV = 3,
+};
+
+enum class StoreCacheManagement : u64 {
+    Default = 0,
+    CG = 1,
+    CS = 2,
+    WT = 3,
 };
 
 struct IpaMode {
@@ -396,6 +445,10 @@ struct IpaMode {
     }
     bool operator!=(const IpaMode& a) const {
         return !operator==(a);
+    }
+    bool operator<(const IpaMode& a) const {
+        return std::tie(interpolation_mode, sampling_mode) <
+               std::tie(a.interpolation_mode, a.sampling_mode);
     }
 };
 
@@ -480,8 +533,48 @@ enum class SystemVariable : u64 {
     CircularQueueEntryAddressHigh = 0x63,
 };
 
+enum class PhysicalAttributeDirection : u64 {
+    Input = 0,
+    Output = 1,
+};
+
+enum class VoteOperation : u64 {
+    All = 0, // allThreadsNV
+    Any = 1, // anyThreadNV
+    Eq = 2,  // allThreadsEqualNV
+};
+
+enum class ImageAtomicOperationType : u64 {
+    U32 = 0,
+    S32 = 1,
+    U64 = 2,
+    F32 = 3,
+    S64 = 5,
+    SD32 = 6,
+    SD64 = 7,
+};
+
+enum class ImageAtomicOperation : u64 {
+    Add = 0,
+    Min = 1,
+    Max = 2,
+    Inc = 3,
+    Dec = 4,
+    And = 5,
+    Or = 6,
+    Xor = 7,
+    Exch = 8,
+};
+
+enum class ShuffleOperation : u64 {
+    Idx = 0,  // shuffleNV
+    Up = 1,   // shuffleUpNV
+    Down = 2, // shuffleDownNV
+    Bfly = 3, // shuffleXorNV
+};
+
 union Instruction {
-    Instruction& operator=(const Instruction& instr) {
+    constexpr Instruction& operator=(const Instruction& instr) {
         value = instr.value;
         return *this;
     }
@@ -500,6 +593,32 @@ union Instruction {
     BitField<28, 8, Register> gpr28;
     BitField<39, 8, Register> gpr39;
     BitField<48, 16, u64> opcode;
+
+    union {
+        BitField<8, 5, ConditionCode> cc;
+        BitField<13, 1, u64> trigger;
+    } nop;
+
+    union {
+        BitField<48, 2, VoteOperation> operation;
+        BitField<45, 3, u64> dest_pred;
+        BitField<39, 3, u64> value;
+        BitField<42, 1, u64> negate_value;
+    } vote;
+
+    union {
+        BitField<30, 2, ShuffleOperation> operation;
+        BitField<48, 3, u64> pred48;
+        BitField<28, 1, u64> is_index_imm;
+        BitField<29, 1, u64> is_mask_imm;
+        BitField<20, 5, u64> index_imm;
+        BitField<34, 13, u64> mask_imm;
+    } shfl;
+
+    union {
+        BitField<8, 8, Register> gpr;
+        BitField<20, 24, s64> offset;
+    } gmem;
 
     union {
         BitField<20, 16, u64> imm20_16;
@@ -568,6 +687,7 @@ union Instruction {
     } alu;
 
     union {
+        BitField<38, 1, u64> idx;
         BitField<51, 1, u64> saturate;
         BitField<52, 2, IpaSampleMode> sample_mode;
         BitField<54, 2, IpaInterpMode> interp_mode;
@@ -575,7 +695,7 @@ union Instruction {
 
     union {
         BitField<39, 2, u64> tab5cb8_2;
-        BitField<41, 3, u64> tab5c68_1;
+        BitField<41, 3, u64> postfactor;
         BitField<44, 2, u64> tab5c68_0;
         BitField<48, 1, u64> negate_b;
     } fmul;
@@ -591,6 +711,10 @@ union Instruction {
     union {
         BitField<48, 1, u64> is_signed;
     } shift;
+
+    union {
+        BitField<39, 1, u64> wrap;
+    } shr;
 
     union {
         BitField<39, 5, u64> shift_amount;
@@ -609,7 +733,7 @@ union Instruction {
 
         BitField<31, 1, u64> negate_b;
         BitField<30, 1, u64> abs_b;
-        BitField<47, 2, HalfType> type_b;
+        BitField<28, 2, HalfType> type_b;
 
         BitField<35, 2, HalfType> type_c;
     } alu_half;
@@ -644,6 +768,7 @@ union Instruction {
             BitField<37, 2, HalfPrecision> precision;
             BitField<32, 1, u64> saturate;
 
+            BitField<31, 1, u64> negate_b;
             BitField<30, 1, u64> negate_c;
             BitField<35, 2, HalfType> type_c;
         } rr;
@@ -776,12 +901,34 @@ union Instruction {
     } ld_l;
 
     union {
-        BitField<44, 2, u64> unknown;
+        BitField<44, 2, StoreCacheManagement> cache_management;
     } st_l;
+
+    union {
+        BitField<48, 3, UniformType> type;
+        BitField<46, 2, u64> cache_mode;
+    } ldg;
+
+    union {
+        BitField<48, 3, UniformType> type;
+        BitField<46, 2, u64> cache_mode;
+    } stg;
+
+    union {
+        BitField<32, 1, PhysicalAttributeDirection> direction;
+        BitField<47, 3, AttributeSize> size;
+        BitField<20, 11, u64> address;
+    } al2p;
+
+    union {
+        BitField<53, 3, UniformType> type;
+        BitField<52, 1, u64> extended;
+    } generic;
 
     union {
         BitField<0, 3, u64> pred0;
         BitField<3, 3, u64> pred3;
+        BitField<6, 1, u64> neg_b;
         BitField<7, 1, u64> abs_a;
         BitField<39, 3, u64> pred39;
         BitField<42, 1, u64> neg_pred;
@@ -801,6 +948,11 @@ union Instruction {
         BitField<48, 1, u64> is_signed;
         BitField<49, 3, PredCondition> cond;
     } isetp;
+
+    union {
+        BitField<48, 1, u64> is_signed;
+        BitField<49, 3, PredCondition> cond;
+    } icmp;
 
     union {
         BitField<0, 3, u64> pred0;
@@ -845,8 +997,6 @@ union Instruction {
     } csetp;
 
     union {
-        BitField<35, 4, PredCondition> cond;
-        BitField<49, 1, u64> h_and;
         BitField<6, 1, u64> ftz;
         BitField<45, 2, PredOperation> op;
         BitField<3, 3, u64> pred3;
@@ -854,9 +1004,21 @@ union Instruction {
         BitField<43, 1, u64> negate_a;
         BitField<44, 1, u64> abs_a;
         BitField<47, 2, HalfType> type_a;
-        BitField<31, 1, u64> negate_b;
-        BitField<30, 1, u64> abs_b;
-        BitField<28, 2, HalfType> type_b;
+        union {
+            BitField<35, 4, PredCondition> cond;
+            BitField<49, 1, u64> h_and;
+            BitField<31, 1, u64> negate_b;
+            BitField<30, 1, u64> abs_b;
+            BitField<28, 2, HalfType> type_b;
+        } reg;
+        union {
+            BitField<56, 1, u64> negate_b;
+            BitField<54, 1, u64> abs_b;
+        } cbuf;
+        union {
+            BitField<49, 4, PredCondition> cond;
+            BitField<53, 1, u64> h_and;
+        } cbuf_and_imm;
         BitField<42, 1, u64> neg_pred;
         BitField<39, 3, u64> pred39;
     } hsetp2;
@@ -905,21 +1067,38 @@ union Instruction {
     } iset;
 
     union {
-        BitField<8, 2, Register::Size> dest_size;
-        BitField<10, 2, Register::Size> src_size;
-        BitField<12, 1, u64> is_output_signed;
-        BitField<13, 1, u64> is_input_signed;
-        BitField<41, 2, u64> selector;
         BitField<45, 1, u64> negate_a;
         BitField<49, 1, u64> abs_a;
+        BitField<10, 2, Register::Size> src_size;
+        BitField<13, 1, u64> is_input_signed;
+        BitField<8, 2, Register::Size> dst_size;
+        BitField<12, 1, u64> is_output_signed;
+
+        union {
+            BitField<39, 2, u64> tab5cb8_2;
+        } i2f;
 
         union {
             BitField<39, 2, F2iRoundingOp> rounding;
         } f2i;
 
         union {
-            BitField<39, 4, F2fRoundingOp> rounding;
+            BitField<39, 4, u64> rounding;
+            // H0, H1 extract for F16 missing
+            BitField<41, 1, u64> selector; // Guessed as some games set it, TODO: reverse this value
+            F2fRoundingOp GetRoundingMode() const {
+                constexpr u64 rounding_mask = 0x0B;
+                return static_cast<F2fRoundingOp>(rounding.Value() & rounding_mask);
+            }
         } f2f;
+
+        union {
+            BitField<41, 2, u64> selector;
+        } int_src;
+
+        union {
+            BitField<41, 1, u64> selector;
+        } float_src;
     } conversion;
 
     union {
@@ -955,6 +1134,38 @@ union Instruction {
     } tex;
 
     union {
+        BitField<28, 1, u64> array;
+        BitField<29, 2, TextureType> texture_type;
+        BitField<31, 4, u64> component_mask;
+        BitField<49, 1, u64> nodep_flag;
+        BitField<50, 1, u64> dc_flag;
+        BitField<36, 1, u64> aoffi_flag;
+        BitField<37, 3, TextureProcessMode> process_mode;
+
+        bool IsComponentEnabled(std::size_t component) const {
+            return ((1ULL << component) & component_mask) != 0;
+        }
+
+        TextureProcessMode GetTextureProcessMode() const {
+            return process_mode;
+        }
+
+        bool UsesMiscMode(TextureMiscMode mode) const {
+            switch (mode) {
+            case TextureMiscMode::DC:
+                return dc_flag != 0;
+            case TextureMiscMode::NODEP:
+                return nodep_flag != 0;
+            case TextureMiscMode::AOFFI:
+                return aoffi_flag != 0;
+            default:
+                break;
+            }
+            return false;
+        }
+    } tex_b;
+
+    union {
         BitField<22, 6, TextureQueryType> query_type;
         BitField<31, 4, u64> component_mask;
         BitField<49, 1, u64> nodep_flag;
@@ -967,6 +1178,10 @@ union Instruction {
                 break;
             }
             return false;
+        }
+
+        bool IsComponentEnabled(std::size_t component) const {
+            return ((1ULL << component) & component_mask) != 0;
         }
     } txq;
 
@@ -1049,7 +1264,7 @@ union Instruction {
         BitField<49, 1, u64> nodep_flag;
         BitField<50, 3, u64> component_mask_selector;
         BitField<53, 4, u64> texture_info;
-        BitField<60, 1, u64> fp32_flag;
+        BitField<59, 1, u64> fp32_flag;
 
         TextureType GetTextureType() const {
             // The TEXS instruction has a weird encoding for the texture type.
@@ -1065,6 +1280,7 @@ union Instruction {
             LOG_CRITICAL(HW_GPU, "Unhandled texture_info: {}",
                          static_cast<u32>(texture_info.Value()));
             UNREACHABLE();
+            return TextureType::Texture1D;
         }
 
         TextureProcessMode GetTextureProcessMode() const {
@@ -1126,8 +1342,23 @@ union Instruction {
     } texs;
 
     union {
+        BitField<28, 1, u64> is_array;
+        BitField<29, 2, TextureType> texture_type;
+        BitField<35, 1, u64> aoffi;
+        BitField<49, 1, u64> nodep_flag;
+        BitField<50, 1, u64> ms; // Multisample?
+        BitField<54, 1, u64> cl;
+        BitField<55, 1, u64> process_mode;
+
+        TextureProcessMode GetTextureProcessMode() const {
+            return process_mode == 0 ? TextureProcessMode::LZ : TextureProcessMode::LL;
+        }
+    } tld;
+
+    union {
         BitField<49, 1, u64> nodep_flag;
         BitField<53, 4, u64> texture_info;
+        BitField<59, 1, u64> fp32_flag;
 
         TextureType GetTextureType() const {
             // The TLDS instruction has a weird encoding for the texture type.
@@ -1145,6 +1376,7 @@ union Instruction {
             LOG_CRITICAL(HW_GPU, "Unhandled texture_info: {}",
                          static_cast<u32>(texture_info.Value()));
             UNREACHABLE();
+            return TextureType::Texture1D;
         }
 
         TextureProcessMode GetTextureProcessMode() const {
@@ -1174,6 +1406,43 @@ union Instruction {
     } tlds;
 
     union {
+        BitField<24, 2, StoreCacheManagement> cache_management;
+        BitField<33, 3, ImageType> image_type;
+        BitField<49, 2, OutOfBoundsStore> out_of_bounds_store;
+        BitField<51, 1, u64> is_immediate;
+        BitField<52, 1, SurfaceDataMode> mode;
+
+        BitField<20, 3, StoreType> store_data_layout;
+        BitField<20, 4, u64> component_mask_selector;
+
+        bool IsComponentEnabled(std::size_t component) const {
+            ASSERT(mode == SurfaceDataMode::P);
+            constexpr u8 R = 0b0001;
+            constexpr u8 G = 0b0010;
+            constexpr u8 B = 0b0100;
+            constexpr u8 A = 0b1000;
+            constexpr std::array<u8, 16> mask = {
+                0,       (R),         (G),         (R | G),        (B),     (R | B),
+                (G | B), (R | G | B), (A),         (R | A),        (G | A), (R | G | A),
+                (B | A), (R | B | A), (G | B | A), (R | G | B | A)};
+            return std::bitset<4>{mask.at(component_mask_selector)}.test(component);
+        }
+
+        StoreType GetStoreDataLayout() const {
+            ASSERT(mode == SurfaceDataMode::D_BA);
+            return store_data_layout;
+        }
+    } suldst;
+
+    union {
+        BitField<28, 1, u64> is_ba;
+        BitField<51, 3, ImageAtomicOperationType> operation_type;
+        BitField<33, 3, ImageType> image_type;
+        BitField<29, 4, ImageAtomicOperation> operation;
+        BitField<49, 2, OutOfBoundsStore> out_of_bounds_store;
+    } suatom_d;
+
+    union {
         BitField<20, 24, u64> target;
         BitField<5, 1, u64> constant_buffer;
 
@@ -1186,6 +1455,20 @@ union Instruction {
             return static_cast<s32>((value ^ mask) - mask) / sizeof(Instruction) + 1;
         }
     } bra;
+
+    union {
+        BitField<20, 24, u64> target;
+        BitField<5, 1, u64> constant_buffer;
+
+        s32 GetBranchExtend() const {
+            // Sign extend the branch target offset
+            u32 mask = 1U << (24 - 1);
+            u32 value = static_cast<u32>(target);
+            // The branch offset is relative to the next instruction and is stored in bytes, so
+            // divide it by the size of an instruction and add 1 to it.
+            return static_cast<s32>((value ^ mask) - mask) / sizeof(Instruction) + 1;
+        }
+    } brx;
 
     union {
         BitField<39, 1, u64> emit; // EmitVertex
@@ -1220,24 +1503,35 @@ union Instruction {
 
     union {
         BitField<20, 16, u64> imm20_16;
+        BitField<35, 1, u64> high_b_rr; // used on RR
         BitField<36, 1, u64> product_shift_left;
         BitField<37, 1, u64> merge_37;
         BitField<48, 1, u64> sign_a;
         BitField<49, 1, u64> sign_b;
+        BitField<50, 2, XmadMode> mode_cbf; // used by CR, RC
         BitField<50, 3, XmadMode> mode;
         BitField<52, 1, u64> high_b;
         BitField<53, 1, u64> high_a;
+        BitField<55, 1, u64> product_shift_left_second; // used on CR
         BitField<56, 1, u64> merge_56;
     } xmad;
 
     union {
         BitField<20, 14, u64> offset;
         BitField<34, 5, u64> index;
+
+        u64 GetOffset() const {
+            return offset * 4;
+        }
     } cbuf34;
 
     union {
         BitField<20, 16, s64> offset;
         BitField<36, 5, u64> index;
+
+        s64 GetOffset() const {
+            return offset;
+        }
     } cbuf36;
 
     // Unsure about the size of this one.
@@ -1253,6 +1547,7 @@ union Instruction {
 
     Attribute attribute;
     Sampler sampler;
+    Image image;
 
     u64 value;
 };
@@ -1267,30 +1562,43 @@ public:
         SYNC,
         BRK,
         DEPBAR,
+        VOTE,
+        SHFL,
         BFE_C,
         BFE_R,
         BFE_IMM,
         BFI_IMM_R,
         BRA,
+        BRX,
         PBK,
         LD_A,
         LD_L,
         LD_S,
         LD_C,
+        LD,  // Load from generic memory
+        LDG, // Load from global memory
         ST_A,
         ST_L,
         ST_S,
-        LDG, // Load from global memory
-        STG, // Store in global memory
+        ST,   // Store in generic memory
+        STG,  // Store in global memory
+        AL2P, // Transforms attribute memory into physical memory
         TEX,
+        TEX_B,  // Texture Load Bindless
         TXQ,    // Texture Query
+        TXQ_B,  // Texture Query Bindless
         TEXS,   // Texture Fetch with scalar/non-vec4 source/destinations
+        TLD,    // Texture Load
         TLDS,   // Texture Load with scalar/non-vec4 source/destinations
         TLD4,   // Texture Load 4
         TLD4S,  // Texture Load 4 with scalar / non - vec4 source / destinations
         TMML_B, // Texture Mip Map Level
         TMML,   // Texture Mip Map Level
+        SUST,   // Surface Store
+        SULD,   // Surface Load
+        SUATOM, // Surface Atomic Operation
         EXIT,
+        NOP,
         IPA,
         OUT_R, // Emit vertex/primitive
         ISBERD,
@@ -1333,7 +1641,9 @@ public:
         HFMA2_RC,
         HFMA2_RR,
         HFMA2_IMM_R,
+        HSETP2_C,
         HSETP2_R,
+        HSETP2_IMM,
         HSET2_R,
         POPC_C,
         POPC_R,
@@ -1341,6 +1651,10 @@ public:
         SEL_C,
         SEL_R,
         SEL_IMM,
+        ICMP_RC,
+        ICMP_R,
+        ICMP_CR,
+        ICMP_IMM,
         MUFU,  // Multi-Function Operator
         RRO_C, // Range Reduction Operator
         RRO_R,
@@ -1418,7 +1732,10 @@ public:
         Hfma2,
         Flow,
         Synch,
+        Warp,
         Memory,
+        Texture,
+        Image,
         FloatSet,
         FloatSetPredicate,
         IntegerSet,
@@ -1429,6 +1746,7 @@ public:
         PredicateSetRegister,
         RegisterSetPredicate,
         Conversion,
+        Video,
         Xmad,
         Unknown,
     };
@@ -1442,22 +1760,22 @@ public:
 
     class Matcher {
     public:
-        Matcher(const char* const name, u16 mask, u16 expected, OpCode::Id id, OpCode::Type type)
+        constexpr Matcher(const char* const name, u16 mask, u16 expected, Id id, Type type)
             : name{name}, mask{mask}, expected{expected}, id{id}, type{type} {}
 
-        const char* GetName() const {
+        constexpr const char* GetName() const {
             return name;
         }
 
-        u16 GetMask() const {
+        constexpr u16 GetMask() const {
             return mask;
         }
 
-        Id GetId() const {
+        constexpr Id GetId() const {
             return id;
         }
 
-        Type GetType() const {
+        constexpr Type GetType() const {
             return type;
         }
 
@@ -1466,7 +1784,7 @@ public:
          * @param instruction The instruction to test
          * @returns true if the given instruction matches.
          */
-        bool Matches(u16 instruction) const {
+        constexpr bool Matches(u16 instruction) const {
             return (instruction & mask) == expected;
         }
 
@@ -1500,7 +1818,7 @@ private:
          * A '0' in a bitstring indicates that a zero must be present at that bit position.
          * A '1' in a bitstring indicates that a one must be present at that bit position.
          */
-        static auto GetMaskAndExpect(const char* const bitstring) {
+        static constexpr auto GetMaskAndExpect(const char* const bitstring) {
             u16 mask = 0, expect = 0;
             for (std::size_t i = 0; i < opcode_bitsize; i++) {
                 const std::size_t bit_position = opcode_bitsize - i - 1;
@@ -1517,15 +1835,15 @@ private:
                     break;
                 }
             }
-            return std::make_tuple(mask, expect);
+            return std::make_pair(mask, expect);
         }
 
     public:
         /// Creates a matcher that can match and parse instructions based on bitstring.
-        static auto GetMatcher(const char* const bitstring, OpCode::Id op, OpCode::Type type,
-                               const char* const name) {
-            const auto mask_expect = GetMaskAndExpect(bitstring);
-            return Matcher(name, std::get<0>(mask_expect), std::get<1>(mask_expect), op, type);
+        static constexpr auto GetMatcher(const char* const bitstring, Id op, Type type,
+                                         const char* const name) {
+            const auto [mask, expected] = GetMaskAndExpect(bitstring);
+            return Matcher(name, mask, expected, op, type);
         }
     };
 
@@ -1536,32 +1854,45 @@ private:
             INST("111000101001----", Id::SSY, Type::Flow, "SSY"),
             INST("111000101010----", Id::PBK, Type::Flow, "PBK"),
             INST("111000100100----", Id::BRA, Type::Flow, "BRA"),
+            INST("111000100101----", Id::BRX, Type::Flow, "BRX"),
             INST("1111000011111---", Id::SYNC, Type::Flow, "SYNC"),
             INST("111000110100---", Id::BRK, Type::Flow, "BRK"),
+            INST("111000110000----", Id::EXIT, Type::Flow, "EXIT"),
             INST("1111000011110---", Id::DEPBAR, Type::Synch, "DEPBAR"),
+            INST("0101000011011---", Id::VOTE, Type::Warp, "VOTE"),
+            INST("1110111100010---", Id::SHFL, Type::Warp, "SHFL"),
             INST("1110111111011---", Id::LD_A, Type::Memory, "LD_A"),
             INST("1110111101001---", Id::LD_S, Type::Memory, "LD_S"),
             INST("1110111101000---", Id::LD_L, Type::Memory, "LD_L"),
             INST("1110111110010---", Id::LD_C, Type::Memory, "LD_C"),
+            INST("100-------------", Id::LD, Type::Memory, "LD"),
+            INST("1110111011010---", Id::LDG, Type::Memory, "LDG"),
             INST("1110111111110---", Id::ST_A, Type::Memory, "ST_A"),
             INST("1110111101011---", Id::ST_S, Type::Memory, "ST_S"),
             INST("1110111101010---", Id::ST_L, Type::Memory, "ST_L"),
-            INST("1110111011010---", Id::LDG, Type::Memory, "LDG"),
+            INST("101-------------", Id::ST, Type::Memory, "ST"),
             INST("1110111011011---", Id::STG, Type::Memory, "STG"),
-            INST("110000----111---", Id::TEX, Type::Memory, "TEX"),
-            INST("1101111101001---", Id::TXQ, Type::Memory, "TXQ"),
-            INST("1101-00---------", Id::TEXS, Type::Memory, "TEXS"),
-            INST("1101101---------", Id::TLDS, Type::Memory, "TLDS"),
-            INST("110010----111---", Id::TLD4, Type::Memory, "TLD4"),
-            INST("1101111100------", Id::TLD4S, Type::Memory, "TLD4S"),
-            INST("110111110110----", Id::TMML_B, Type::Memory, "TMML_B"),
-            INST("1101111101011---", Id::TMML, Type::Memory, "TMML"),
-            INST("111000110000----", Id::EXIT, Type::Trivial, "EXIT"),
+            INST("1110111110100---", Id::AL2P, Type::Memory, "AL2P"),
+            INST("110000----111---", Id::TEX, Type::Texture, "TEX"),
+            INST("1101111010111---", Id::TEX_B, Type::Texture, "TEX_B"),
+            INST("1101111101001---", Id::TXQ, Type::Texture, "TXQ"),
+            INST("1101111101010---", Id::TXQ_B, Type::Texture, "TXQ_B"),
+            INST("1101-00---------", Id::TEXS, Type::Texture, "TEXS"),
+            INST("11011100--11----", Id::TLD, Type::Texture, "TLD"),
+            INST("1101-01---------", Id::TLDS, Type::Texture, "TLDS"),
+            INST("110010----111---", Id::TLD4, Type::Texture, "TLD4"),
+            INST("1101111100------", Id::TLD4S, Type::Texture, "TLD4S"),
+            INST("110111110110----", Id::TMML_B, Type::Texture, "TMML_B"),
+            INST("1101111101011---", Id::TMML, Type::Texture, "TMML"),
+            INST("11101011001-----", Id::SUST, Type::Image, "SUST"),
+            INST("11101011000-----", Id::SULD, Type::Image, "SULD"),
+            INST("1110101000------", Id::SUATOM, Type::Image, "SUATOM_D"),
+            INST("0101000010110---", Id::NOP, Type::Trivial, "NOP"),
             INST("11100000--------", Id::IPA, Type::Trivial, "IPA"),
             INST("1111101111100---", Id::OUT_R, Type::Trivial, "OUT_R"),
             INST("1110111111010---", Id::ISBERD, Type::Trivial, "ISBERD"),
-            INST("01011111--------", Id::VMAD, Type::Trivial, "VMAD"),
-            INST("0101000011110---", Id::VSETP, Type::Trivial, "VSETP"),
+            INST("01011111--------", Id::VMAD, Type::Video, "VMAD"),
+            INST("0101000011110---", Id::VSETP, Type::Video, "VSETP"),
             INST("0011001-1-------", Id::FFMA_IMM, Type::Ffma, "FFMA_IMM"),
             INST("010010011-------", Id::FFMA_CR, Type::Ffma, "FFMA_CR"),
             INST("010100011-------", Id::FFMA_RC, Type::Ffma, "FFMA_RC"),
@@ -1590,6 +1921,10 @@ private:
             INST("0100110010100---", Id::SEL_C, Type::ArithmeticInteger, "SEL_C"),
             INST("0101110010100---", Id::SEL_R, Type::ArithmeticInteger, "SEL_R"),
             INST("0011100-10100---", Id::SEL_IMM, Type::ArithmeticInteger, "SEL_IMM"),
+            INST("010100110100----", Id::ICMP_RC, Type::ArithmeticInteger, "ICMP_RC"),
+            INST("010110110100----", Id::ICMP_R, Type::ArithmeticInteger, "ICMP_R"),
+            INST("010010110100----", Id::ICMP_CR, Type::ArithmeticInteger, "ICMP_CR"),
+            INST("0011011-0100----", Id::ICMP_IMM, Type::ArithmeticInteger, "ICMP_IMM"),
             INST("0101101111011---", Id::LEA_R2, Type::ArithmeticInteger, "LEA_R2"),
             INST("0101101111010---", Id::LEA_R1, Type::ArithmeticInteger, "LEA_R1"),
             INST("001101101101----", Id::LEA_IMM, Type::ArithmeticInteger, "LEA_IMM"),
@@ -1605,7 +1940,9 @@ private:
             INST("01100---1-------", Id::HFMA2_RC, Type::Hfma2, "HFMA2_RC"),
             INST("0101110100000---", Id::HFMA2_RR, Type::Hfma2, "HFMA2_RR"),
             INST("01110---0-------", Id::HFMA2_IMM_R, Type::Hfma2, "HFMA2_R_IMM"),
-            INST("0101110100100---", Id::HSETP2_R, Type::HalfSetPredicate, "HSETP_R"),
+            INST("0111111-1-------", Id::HSETP2_C, Type::HalfSetPredicate, "HSETP2_C"),
+            INST("0101110100100---", Id::HSETP2_R, Type::HalfSetPredicate, "HSETP2_R"),
+            INST("0111111-0-------", Id::HSETP2_IMM, Type::HalfSetPredicate, "HSETP2_IMM"),
             INST("0101110100011---", Id::HSET2_R, Type::HalfSet, "HSET2_R"),
             INST("0101000010000---", Id::MUFU, Type::Arithmetic, "MUFU"),
             INST("0100110010010---", Id::RRO_C, Type::Arithmetic, "RRO_C"),
@@ -1634,7 +1971,7 @@ private:
             INST("0011011-11110---", Id::BFI_IMM_R, Type::Bfi, "BFI_IMM_R"),
             INST("0100110001000---", Id::LOP_C, Type::ArithmeticInteger, "LOP_C"),
             INST("0101110001000---", Id::LOP_R, Type::ArithmeticInteger, "LOP_R"),
-            INST("0011100001000---", Id::LOP_IMM, Type::ArithmeticInteger, "LOP_IMM"),
+            INST("0011100-01000---", Id::LOP_IMM, Type::ArithmeticInteger, "LOP_IMM"),
             INST("000001----------", Id::LOP32I, Type::ArithmeticIntegerImmediate, "LOP32I"),
             INST("0000001---------", Id::LOP3_C, Type::ArithmeticInteger, "LOP3_C"),
             INST("0101101111100---", Id::LOP3_R, Type::ArithmeticInteger, "LOP3_R"),
@@ -1647,7 +1984,7 @@ private:
             INST("0011100-00101---", Id::SHR_IMM, Type::Shift, "SHR_IMM"),
             INST("0100110011100---", Id::I2I_C, Type::Conversion, "I2I_C"),
             INST("0101110011100---", Id::I2I_R, Type::Conversion, "I2I_R"),
-            INST("01110001-1000---", Id::I2I_IMM, Type::Conversion, "I2I_IMM"),
+            INST("0011101-11100---", Id::I2I_IMM, Type::Conversion, "I2I_IMM"),
             INST("0100110010111---", Id::I2F_C, Type::Conversion, "I2F_C"),
             INST("0101110010111---", Id::I2F_R, Type::Conversion, "I2F_R"),
             INST("0011100-10111---", Id::I2F_IMM, Type::Conversion, "I2F_IMM"),

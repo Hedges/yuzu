@@ -10,6 +10,7 @@
 
 #include "common/common_types.h"
 #include "core/hle/kernel/object.h"
+#include "core/hle/kernel/physical_memory.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/result.h"
 
@@ -62,12 +63,10 @@ public:
      * block.
      * @param name Optional object name, used for debugging purposes.
      */
-    static SharedPtr<SharedMemory> CreateForApplet(KernelCore& kernel,
-                                                   std::shared_ptr<std::vector<u8>> heap_block,
-                                                   std::size_t offset, u64 size,
-                                                   MemoryPermission permissions,
-                                                   MemoryPermission other_permissions,
-                                                   std::string name = "Unknown Applet");
+    static SharedPtr<SharedMemory> CreateForApplet(
+        KernelCore& kernel, std::shared_ptr<Kernel::PhysicalMemory> heap_block, std::size_t offset,
+        u64 size, MemoryPermission permissions, MemoryPermission other_permissions,
+        std::string name = "Unknown Applet");
 
     std::string GetTypeName() const override {
         return "SharedMemory";
@@ -76,7 +75,7 @@ public:
         return name;
     }
 
-    static const HandleType HANDLE_TYPE = HandleType::SharedMemory;
+    static constexpr HandleType HANDLE_TYPE = HandleType::SharedMemory;
     HandleType GetHandleType() const override {
         return HANDLE_TYPE;
     }
@@ -104,11 +103,17 @@ public:
 
     /**
      * Unmaps a shared memory block from the specified address in system memory
+     *
      * @param target_process Process from which to unmap the memory block.
-     * @param address Address in system memory where the shared memory block is mapped
+     * @param address        Address in system memory where the shared memory block is mapped.
+     * @param unmap_size     The amount of bytes to unmap from this shared memory instance.
+     *
      * @return Result code of the unmap operation
+     *
+     * @pre The given size to unmap must be the same size as the amount of memory managed by
+     *      the SharedMemory instance itself, otherwise ERR_INVALID_SIZE will be returned.
      */
-    ResultCode Unmap(Process& target_process, VAddr address);
+    ResultCode Unmap(Process& target_process, VAddr address, u64 unmap_size);
 
     /**
      * Gets a pointer to the shared memory block
@@ -129,7 +134,7 @@ private:
     ~SharedMemory() override;
 
     /// Backing memory for this shared memory block.
-    std::shared_ptr<std::vector<u8>> backing_block;
+    std::shared_ptr<PhysicalMemory> backing_block;
     /// Offset into the backing block for this shared memory.
     std::size_t backing_block_offset = 0;
     /// Size of the memory block. Page-aligned.

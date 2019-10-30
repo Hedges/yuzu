@@ -2,37 +2,59 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include "core/core.h"
+#include "common/common_types.h"
+#include "video_core/engines/maxwell_3d.h"
 #include "video_core/renderer_opengl/gl_shader_manager.h"
 
 namespace OpenGL::GLShader {
 
-void MaxwellUniformData::SetFromRegs(const Maxwell3D::State::ShaderStageInfo& shader_stage) {
-    const auto& gpu = Core::System::GetInstance().GPU().Maxwell3D();
-    const auto& regs = gpu.regs;
-    const auto& state = gpu.state;
+using Tegra::Engines::Maxwell3D;
+
+ProgramManager::ProgramManager() {
+    pipeline.Create();
+}
+
+ProgramManager::~ProgramManager() = default;
+
+void ProgramManager::ApplyTo(OpenGLState& state) {
+    UpdatePipeline();
+    state.draw.shader_program = 0;
+    state.draw.program_pipeline = pipeline.handle;
+}
+
+void ProgramManager::UpdatePipeline() {
+    // Avoid updating the pipeline when values have no changed
+    if (old_state == current_state) {
+        return;
+    }
+
+    // Workaround for AMD bug
+    constexpr GLenum all_used_stages{GL_VERTEX_SHADER_BIT | GL_GEOMETRY_SHADER_BIT |
+                                     GL_FRAGMENT_SHADER_BIT};
+    glUseProgramStages(pipeline.handle, all_used_stages, 0);
+
+    glUseProgramStages(pipeline.handle, GL_VERTEX_SHADER_BIT, current_state.vertex_shader);
+    glUseProgramStages(pipeline.handle, GL_GEOMETRY_SHADER_BIT, current_state.geometry_shader);
+    glUseProgramStages(pipeline.handle, GL_FRAGMENT_SHADER_BIT, current_state.fragment_shader);
+
+    old_state = current_state;
+}
+
+void MaxwellUniformData::SetFromRegs(const Maxwell3D& maxwell, std::size_t shader_stage) {
+    const auto& regs = maxwell.regs;
+    const auto& state = maxwell.state;
 
     // TODO(bunnei): Support more than one viewport
     viewport_flip[0] = regs.viewport_transform[0].scale_x < 0.0 ? -1.0f : 1.0f;
     viewport_flip[1] = regs.viewport_transform[0].scale_y < 0.0 ? -1.0f : 1.0f;
 
-    u32 func = static_cast<u32>(regs.alpha_test_func);
-    // Normalize the gl variants of opCompare to be the same as the normal variants
-    u32 op_gl_variant_base = static_cast<u32>(Tegra::Engines::Maxwell3D::Regs::ComparisonOp::Never);
-    if (func >= op_gl_variant_base) {
-        func = func - op_gl_variant_base + 1U;
-    }
-
-    alpha_test.enabled = regs.alpha_test_enabled;
-    alpha_test.func = func;
-    alpha_test.ref = regs.alpha_test_ref;
-
     instance_id = state.current_instance;
 
     // Assign in which stage the position has to be flipped
     // (the last stage before the fragment shader).
-    if (gpu.regs.shader_config[static_cast<u32>(Maxwell3D::Regs::ShaderProgram::Geometry)].enable) {
-        flip_stage = static_cast<u32>(Maxwell3D::Regs::ShaderProgram::Geometry);
+    constexpr u32 geometry_index = static_cast<u32>(Maxwell3D::Regs::ShaderProgram::Geometry);
+    if (maxwell.regs.shader_config[geometry_index].enable) {
+        flip_stage = geometry_index;
     } else {
         flip_stage = static_cast<u32>(Maxwell3D::Regs::ShaderProgram::VertexB);
     }

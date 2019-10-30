@@ -3,12 +3,15 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <bitset>
 #include <memory>
 #include <random>
+#include "common/alignment.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "core/file_sys/program_metadata.h"
+#include "core/hle/kernel/code_set.h"
 #include "core/hle/kernel/errors.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/process.h"
@@ -20,21 +23,94 @@
 #include "core/settings.h"
 
 namespace Kernel {
+namespace {
+/**
+ * Sets up the primary application thread
+ *
+ * @param owner_process The parent process for the main thread
+ * @param kernel The kernel instance to create the main thread under.
+ * @param priority The priority to give the main thread
+ */
+void SetupMainThread(Process& owner_process, KernelCore& kernel, u32 priority) {
+    const auto& vm_manager = owner_process.VMManager();
+    const VAddr entry_point = vm_manager.GetCodeRegionBaseAddress();
+    const VAddr stack_top = vm_manager.GetTLSIORegionEndAddress();
+    auto thread_res = Thread::Create(kernel, "main", entry_point, priority, 0,
+                                     owner_process.GetIdealCore(), stack_top, owner_process);
 
-CodeSet::CodeSet() = default;
-CodeSet::~CodeSet() = default;
+    SharedPtr<Thread> thread = std::move(thread_res).Unwrap();
 
-SharedPtr<Process> Process::Create(KernelCore& kernel, std::string&& name) {
-    SharedPtr<Process> process(new Process(kernel));
+    // Register 1 must be a handle to the main thread
+    const Handle thread_handle = owner_process.GetHandleTable().Create(thread).Unwrap();
+    thread->GetContext().cpu_registers[1] = thread_handle;
 
+    // Threads by default are dormant, wake up the main thread so it runs when the scheduler fires
+    thread->ResumeFromWait();
+}
+} // Anonymous namespace
+
+// Represents a page used for thread-local storage.
+//
+// Each TLS page contains slots that may be used by processes and threads.
+// Every process and thread is created with a slot in some arbitrary page
+// (whichever page happens to have an available slot).
+class TLSPage {
+public:
+    static constexpr std::size_t num_slot_entries = Memory::PAGE_SIZE / Memory::TLS_ENTRY_SIZE;
+
+    explicit TLSPage(VAddr address) : base_address{address} {}
+
+    bool HasAvailableSlots() const {
+        return !is_slot_used.all();
+    }
+
+    VAddr GetBaseAddress() const {
+        return base_address;
+    }
+
+    std::optional<VAddr> ReserveSlot() {
+        for (std::size_t i = 0; i < is_slot_used.size(); i++) {
+            if (is_slot_used[i]) {
+                continue;
+            }
+
+            is_slot_used[i] = true;
+            return base_address + (i * Memory::TLS_ENTRY_SIZE);
+        }
+
+        return std::nullopt;
+    }
+
+    void ReleaseSlot(VAddr address) {
+        // Ensure that all given addresses are consistent with how TLS pages
+        // are intended to be used when releasing slots.
+        ASSERT(IsWithinPage(address));
+        ASSERT((address % Memory::TLS_ENTRY_SIZE) == 0);
+
+        const std::size_t index = (address - base_address) / Memory::TLS_ENTRY_SIZE;
+        is_slot_used[index] = false;
+    }
+
+private:
+    bool IsWithinPage(VAddr address) const {
+        return base_address <= address && address < base_address + Memory::PAGE_SIZE;
+    }
+
+    VAddr base_address;
+    std::bitset<num_slot_entries> is_slot_used;
+};
+
+SharedPtr<Process> Process::Create(Core::System& system, std::string name, ProcessType type) {
+    auto& kernel = system.Kernel();
+
+    SharedPtr<Process> process(new Process(system));
     process->name = std::move(name);
-    process->flags.raw = 0;
-    process->flags.memory_region.Assign(MemoryRegion::APPLICATION);
     process->resource_limit = kernel.GetSystemResourceLimit();
     process->status = ProcessStatus::Created;
     process->program_id = 0;
-    process->process_id = kernel.CreateNewProcessID();
-    process->svc_access_mask.set();
+    process->process_id = type == ProcessType::KernelInternal ? kernel.CreateNewKernelProcessID()
+                                                              : kernel.CreateNewUserProcessID();
+    process->capabilities.InitializeForMetadatalessProcess();
 
     std::mt19937 rng(Settings::values.rng_seed.value_or(0));
     std::uniform_int_distribution<u64> distribution;
@@ -47,6 +123,31 @@ SharedPtr<Process> Process::Create(KernelCore& kernel, std::string&& name) {
 
 SharedPtr<ResourceLimit> Process::GetResourceLimit() const {
     return resource_limit;
+}
+
+u64 Process::GetTotalPhysicalMemoryAvailable() const {
+    return vm_manager.GetTotalPhysicalMemoryAvailable();
+}
+
+u64 Process::GetTotalPhysicalMemoryAvailableWithoutSystemResource() const {
+    return GetTotalPhysicalMemoryAvailable() - GetSystemResourceSize();
+}
+
+u64 Process::GetTotalPhysicalMemoryUsed() const {
+    return vm_manager.GetCurrentHeapSize() + main_thread_stack_size + code_memory_size +
+           GetSystemResourceUsage();
+}
+
+u64 Process::GetTotalPhysicalMemoryUsedWithoutSystemResource() const {
+    return GetTotalPhysicalMemoryUsed() - GetSystemResourceUsage();
+}
+
+void Process::RegisterThread(const Thread* thread) {
+    thread_list.push_back(thread);
+}
+
+void Process::UnregisterThread(const Thread* thread) {
+    thread_list.remove(thread);
 }
 
 ResultCode Process::ClearSignalState() {
@@ -64,99 +165,33 @@ ResultCode Process::ClearSignalState() {
     return RESULT_SUCCESS;
 }
 
-void Process::LoadFromMetadata(const FileSys::ProgramMetadata& metadata) {
+ResultCode Process::LoadFromMetadata(const FileSys::ProgramMetadata& metadata) {
     program_id = metadata.GetTitleID();
-    ideal_processor = metadata.GetMainThreadCore();
+    ideal_core = metadata.GetMainThreadCore();
     is_64bit_process = metadata.Is64BitProgram();
+    system_resource_size = metadata.GetSystemResourceSize();
+
     vm_manager.Reset(metadata.GetAddressSpaceType());
-}
 
-void Process::ParseKernelCaps(const u32* kernel_caps, std::size_t len) {
-    for (std::size_t i = 0; i < len; ++i) {
-        u32 descriptor = kernel_caps[i];
-        u32 type = descriptor >> 20;
-
-        if (descriptor == 0xFFFFFFFF) {
-            // Unused descriptor entry
-            continue;
-        } else if ((type & 0xF00) == 0xE00) { // 0x0FFF
-            // Allowed interrupts list
-            LOG_WARNING(Loader, "ExHeader allowed interrupts list ignored");
-        } else if ((type & 0xF80) == 0xF00) { // 0x07FF
-            // Allowed syscalls mask
-            unsigned int index = ((descriptor >> 24) & 7) * 24;
-            u32 bits = descriptor & 0xFFFFFF;
-
-            while (bits && index < svc_access_mask.size()) {
-                svc_access_mask.set(index, bits & 1);
-                ++index;
-                bits >>= 1;
-            }
-        } else if ((type & 0xFF0) == 0xFE0) { // 0x00FF
-            // Handle table size
-            handle_table_size = descriptor & 0x3FF;
-        } else if ((type & 0xFF8) == 0xFF0) { // 0x007F
-            // Misc. flags
-            flags.raw = descriptor & 0xFFFF;
-        } else if ((type & 0xFFE) == 0xFF8) { // 0x001F
-            // Mapped memory range
-            if (i + 1 >= len || ((kernel_caps[i + 1] >> 20) & 0xFFE) != 0xFF8) {
-                LOG_WARNING(Loader, "Incomplete exheader memory range descriptor ignored.");
-                continue;
-            }
-            u32 end_desc = kernel_caps[i + 1];
-            ++i; // Skip over the second descriptor on the next iteration
-
-            AddressMapping mapping;
-            mapping.address = descriptor << 12;
-            VAddr end_address = end_desc << 12;
-
-            if (mapping.address < end_address) {
-                mapping.size = end_address - mapping.address;
-            } else {
-                mapping.size = 0;
-            }
-
-            mapping.read_only = (descriptor & (1 << 20)) != 0;
-            mapping.unk_flag = (end_desc & (1 << 20)) != 0;
-
-            address_mappings.push_back(mapping);
-        } else if ((type & 0xFFF) == 0xFFE) { // 0x000F
-            // Mapped memory page
-            AddressMapping mapping;
-            mapping.address = descriptor << 12;
-            mapping.size = Memory::PAGE_SIZE;
-            mapping.read_only = false;
-            mapping.unk_flag = false;
-
-            address_mappings.push_back(mapping);
-        } else if ((type & 0xFE0) == 0xFC0) { // 0x01FF
-            // Kernel version
-            kernel_version = descriptor & 0xFFFF;
-
-            int minor = kernel_version & 0xFF;
-            int major = (kernel_version >> 8) & 0xFF;
-            LOG_INFO(Loader, "ExHeader kernel version: {}.{}", major, minor);
-        } else {
-            LOG_ERROR(Loader, "Unhandled kernel caps descriptor: 0x{:08X}", descriptor);
-        }
+    const auto& caps = metadata.GetKernelCapabilities();
+    const auto capability_init_result =
+        capabilities.InitializeForUserProcess(caps.data(), caps.size(), vm_manager);
+    if (capability_init_result.IsError()) {
+        return capability_init_result;
     }
+
+    return handle_table.SetSize(capabilities.GetHandleTableSize());
 }
 
-void Process::Run(VAddr entry_point, s32 main_thread_priority, u32 stack_size) {
-    // Allocate and map the main thread stack
-    // TODO(bunnei): This is heap area that should be allocated by the kernel and not mapped as part
-    // of the user address space.
-    vm_manager
-        .MapMemoryBlock(vm_manager.GetTLSIORegionEndAddress() - stack_size,
-                        std::make_shared<std::vector<u8>>(stack_size, 0), 0, stack_size,
-                        MemoryState::Stack)
-        .Unwrap();
+void Process::Run(s32 main_thread_priority, u64 stack_size) {
+    AllocateMainThreadStack(stack_size);
+    tls_region_address = CreateTLSRegion();
 
     vm_manager.LogLayout();
+
     ChangeStatus(ProcessStatus::Running);
 
-    Kernel::SetupMainThread(kernel, entry_point, main_thread_priority, *this);
+    SetupMainThread(*this, kernel, main_thread_priority);
 }
 
 void Process::PrepareForTermination() {
@@ -167,131 +202,108 @@ void Process::PrepareForTermination() {
             if (thread->GetOwnerProcess() != this)
                 continue;
 
-            if (thread == GetCurrentThread())
+            if (thread == system.CurrentScheduler().GetCurrentThread())
                 continue;
 
             // TODO(Subv): When are the other running/ready threads terminated?
-            ASSERT_MSG(thread->GetStatus() == ThreadStatus::WaitSynchAny ||
-                           thread->GetStatus() == ThreadStatus::WaitSynchAll,
+            ASSERT_MSG(thread->GetStatus() == ThreadStatus::WaitSynch,
                        "Exiting processes with non-waiting threads is currently unimplemented");
 
             thread->Stop();
         }
     };
 
-    const auto& system = Core::System::GetInstance();
-    stop_threads(system.Scheduler(0).GetThreadList());
-    stop_threads(system.Scheduler(1).GetThreadList());
-    stop_threads(system.Scheduler(2).GetThreadList());
-    stop_threads(system.Scheduler(3).GetThreadList());
+    stop_threads(system.GlobalScheduler().GetThreadList());
+
+    FreeTLSRegion(tls_region_address);
+    tls_region_address = 0;
 
     ChangeStatus(ProcessStatus::Exited);
 }
 
 /**
- * Finds a free location for the TLS section of a thread.
- * @param tls_slots The TLS page array of the thread's owner process.
- * Returns a tuple of (page, slot, alloc_needed) where:
- * page: The index of the first allocated TLS page that has free slots.
- * slot: The index of the first free slot in the indicated page.
- * alloc_needed: Whether there's a need to allocate a new TLS page (All pages are full).
+ * Attempts to find a TLS page that contains a free slot for
+ * use by a thread.
+ *
+ * @returns If a page with an available slot is found, then an iterator
+ *          pointing to the page is returned. Otherwise the end iterator
+ *          is returned instead.
  */
-static std::tuple<std::size_t, std::size_t, bool> FindFreeThreadLocalSlot(
-    const std::vector<std::bitset<8>>& tls_slots) {
-    // Iterate over all the allocated pages, and try to find one where not all slots are used.
-    for (std::size_t page = 0; page < tls_slots.size(); ++page) {
-        const auto& page_tls_slots = tls_slots[page];
-        if (!page_tls_slots.all()) {
-            // We found a page with at least one free slot, find which slot it is
-            for (std::size_t slot = 0; slot < page_tls_slots.size(); ++slot) {
-                if (!page_tls_slots.test(slot)) {
-                    return std::make_tuple(page, slot, false);
-                }
-            }
-        }
-    }
-
-    return std::make_tuple(0, 0, true);
+static auto FindTLSPageWithAvailableSlots(std::vector<TLSPage>& tls_pages) {
+    return std::find_if(tls_pages.begin(), tls_pages.end(),
+                        [](const auto& page) { return page.HasAvailableSlots(); });
 }
 
-VAddr Process::MarkNextAvailableTLSSlotAsUsed(Thread& thread) {
-    auto [available_page, available_slot, needs_allocation] = FindFreeThreadLocalSlot(tls_slots);
-    const VAddr tls_begin = vm_manager.GetTLSIORegionBaseAddress();
+VAddr Process::CreateTLSRegion() {
+    auto tls_page_iter = FindTLSPageWithAvailableSlots(tls_pages);
 
-    if (needs_allocation) {
-        tls_slots.emplace_back(0); // The page is completely available at the start
-        available_page = tls_slots.size() - 1;
-        available_slot = 0; // Use the first slot in the new page
+    if (tls_page_iter == tls_pages.cend()) {
+        const auto region_address =
+            vm_manager.FindFreeRegion(vm_manager.GetTLSIORegionBaseAddress(),
+                                      vm_manager.GetTLSIORegionEndAddress(), Memory::PAGE_SIZE);
+        ASSERT(region_address.Succeeded());
 
-        // Allocate some memory from the end of the linear heap for this region.
-        auto& tls_memory = thread.GetTLSMemory();
-        tls_memory->insert(tls_memory->end(), Memory::PAGE_SIZE, 0);
+        const auto map_result = vm_manager.MapMemoryBlock(
+            *region_address, std::make_shared<PhysicalMemory>(Memory::PAGE_SIZE), 0,
+            Memory::PAGE_SIZE, MemoryState::ThreadLocal);
+        ASSERT(map_result.Succeeded());
 
-        vm_manager.RefreshMemoryBlockMappings(tls_memory.get());
+        tls_pages.emplace_back(*region_address);
 
-        vm_manager.MapMemoryBlock(tls_begin + available_page * Memory::PAGE_SIZE, tls_memory, 0,
-                                  Memory::PAGE_SIZE, MemoryState::ThreadLocal);
+        const auto reserve_result = tls_pages.back().ReserveSlot();
+        ASSERT(reserve_result.has_value());
+
+        return *reserve_result;
     }
 
-    tls_slots[available_page].set(available_slot);
-
-    return tls_begin + available_page * Memory::PAGE_SIZE + available_slot * Memory::TLS_ENTRY_SIZE;
+    return *tls_page_iter->ReserveSlot();
 }
 
-void Process::FreeTLSSlot(VAddr tls_address) {
-    const VAddr tls_base = tls_address - vm_manager.GetTLSIORegionBaseAddress();
-    const VAddr tls_page = tls_base / Memory::PAGE_SIZE;
-    const VAddr tls_slot = (tls_base % Memory::PAGE_SIZE) / Memory::TLS_ENTRY_SIZE;
+void Process::FreeTLSRegion(VAddr tls_address) {
+    const VAddr aligned_address = Common::AlignDown(tls_address, Memory::PAGE_SIZE);
+    auto iter =
+        std::find_if(tls_pages.begin(), tls_pages.end(), [aligned_address](const auto& page) {
+            return page.GetBaseAddress() == aligned_address;
+        });
 
-    tls_slots[tls_page].reset(tls_slot);
+    // Something has gone very wrong if we're freeing a region
+    // with no actual page available.
+    ASSERT(iter != tls_pages.cend());
+
+    iter->ReleaseSlot(tls_address);
 }
 
 void Process::LoadModule(CodeSet module_, VAddr base_addr) {
-    const auto MapSegment = [&](CodeSet::Segment& segment, VMAPermission permissions,
+    const auto memory = std::make_shared<PhysicalMemory>(std::move(module_.memory));
+
+    const auto MapSegment = [&](const CodeSet::Segment& segment, VMAPermission permissions,
                                 MemoryState memory_state) {
         const auto vma = vm_manager
-                             .MapMemoryBlock(segment.addr + base_addr, module_.memory,
-                                             segment.offset, segment.size, memory_state)
+                             .MapMemoryBlock(segment.addr + base_addr, memory, segment.offset,
+                                             segment.size, memory_state)
                              .Unwrap();
         vm_manager.Reprotect(vma, permissions);
     };
 
     // Map CodeSet segments
-    MapSegment(module_.CodeSegment(), VMAPermission::ReadExecute, MemoryState::CodeStatic);
-    MapSegment(module_.RODataSegment(), VMAPermission::Read, MemoryState::CodeMutable);
-    MapSegment(module_.DataSegment(), VMAPermission::ReadWrite, MemoryState::CodeMutable);
+    MapSegment(module_.CodeSegment(), VMAPermission::ReadExecute, MemoryState::Code);
+    MapSegment(module_.RODataSegment(), VMAPermission::Read, MemoryState::CodeData);
+    MapSegment(module_.DataSegment(), VMAPermission::ReadWrite, MemoryState::CodeData);
 
-    // Clear instruction cache in CPU JIT
-    Core::System::GetInstance().ArmInterface(0).ClearInstructionCache();
-    Core::System::GetInstance().ArmInterface(1).ClearInstructionCache();
-    Core::System::GetInstance().ArmInterface(2).ClearInstructionCache();
-    Core::System::GetInstance().ArmInterface(3).ClearInstructionCache();
+    code_memory_size += module_.memory.size();
 }
 
-ResultVal<VAddr> Process::HeapAllocate(VAddr target, u64 size, VMAPermission perms) {
-    return vm_manager.HeapAllocate(target, size, perms);
-}
+Process::Process(Core::System& system)
+    : WaitObject{system.Kernel()}, vm_manager{system},
+      address_arbiter{system}, mutex{system}, system{system} {}
 
-ResultCode Process::HeapFree(VAddr target, u32 size) {
-    return vm_manager.HeapFree(target, size);
-}
-
-ResultCode Process::MirrorMemory(VAddr dst_addr, VAddr src_addr, u64 size, MemoryState state) {
-    return vm_manager.MirrorMemory(dst_addr, src_addr, size, state);
-}
-
-ResultCode Process::UnmapMemory(VAddr dst_addr, VAddr /*src_addr*/, u64 size) {
-    return vm_manager.UnmapRange(dst_addr, size);
-}
-
-Kernel::Process::Process(KernelCore& kernel) : WaitObject{kernel} {}
-Kernel::Process::~Process() {}
+Process::~Process() = default;
 
 void Process::Acquire(Thread* thread) {
     ASSERT_MSG(!ShouldWait(thread), "Object unavailable!");
 }
 
-bool Process::ShouldWait(Thread* thread) const {
+bool Process::ShouldWait(const Thread* thread) const {
     return !is_signaled;
 }
 
@@ -303,6 +315,18 @@ void Process::ChangeStatus(ProcessStatus new_status) {
     status = new_status;
     is_signaled = true;
     WakeupAllWaitingThreads();
+}
+
+void Process::AllocateMainThreadStack(u64 stack_size) {
+    // The kernel always ensures that the given stack size is page aligned.
+    main_thread_stack_size = Common::AlignUp(stack_size, Memory::PAGE_SIZE);
+
+    // Allocate and map the main thread stack
+    const VAddr mapping_address = vm_manager.GetTLSIORegionEndAddress() - main_thread_stack_size;
+    vm_manager
+        .MapMemoryBlock(mapping_address, std::make_shared<PhysicalMemory>(main_thread_stack_size),
+                        0, main_thread_stack_size, MemoryState::Stack)
+        .Unwrap();
 }
 
 } // namespace Kernel

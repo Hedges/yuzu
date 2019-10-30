@@ -4,13 +4,18 @@
 
 #pragma once
 
-namespace Service::SM {
-class ServiceManager;
+namespace Core {
+class System;
 }
 
 namespace Service::PM {
-enum class SystemBootMode : u32 { Normal = 0, Maintenance = 1 };
+
+enum class SystemBootMode {
+    Normal,
+    Maintenance,
+};
+
 /// Registers all PM services with the specified service manager.
-void InstallInterfaces(SM::ServiceManager& service_manager);
+void InstallInterfaces(Core::System& system);
 
 } // namespace Service::PM

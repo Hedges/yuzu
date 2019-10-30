@@ -13,7 +13,6 @@
 #include "core/hle/kernel/readable_event.h"
 #include "core/hle/kernel/scheduler.h"
 #include "core/hle/kernel/thread.h"
-#include "core/hle/kernel/timer.h"
 #include "core/hle/kernel/wait_object.h"
 #include "core/memory.h"
 
@@ -67,10 +66,7 @@ std::vector<std::unique_ptr<WaitTreeThread>> WaitTreeItem::MakeThreadItemList() 
     };
 
     const auto& system = Core::System::GetInstance();
-    add_threads(system.Scheduler(0).GetThreadList());
-    add_threads(system.Scheduler(1).GetThreadList());
-    add_threads(system.Scheduler(2).GetThreadList());
-    add_threads(system.Scheduler(3).GetThreadList());
+    add_threads(system.GlobalScheduler().GetThreadList());
 
     return item_list;
 }
@@ -82,9 +78,8 @@ QString WaitTreeText::GetText() const {
     return text;
 }
 
-WaitTreeMutexInfo::WaitTreeMutexInfo(VAddr mutex_address) : mutex_address(mutex_address) {
-    const auto& handle_table = Core::CurrentProcess()->GetHandleTable();
-
+WaitTreeMutexInfo::WaitTreeMutexInfo(VAddr mutex_address, const Kernel::HandleTable& handle_table)
+    : mutex_address(mutex_address) {
     mutex_value = Memory::Read32(mutex_address);
     owner_handle = static_cast<Kernel::Handle>(mutex_value & Kernel::Mutex::MutexOwnerMask);
     owner = handle_table.Get<Kernel::Thread>(owner_handle);
@@ -93,19 +88,19 @@ WaitTreeMutexInfo::WaitTreeMutexInfo(VAddr mutex_address) : mutex_address(mutex_
 WaitTreeMutexInfo::~WaitTreeMutexInfo() = default;
 
 QString WaitTreeMutexInfo::GetText() const {
-    return tr("waiting for mutex 0x%1").arg(mutex_address, 16, 16, QLatin1Char('0'));
+    return tr("waiting for mutex 0x%1").arg(mutex_address, 16, 16, QLatin1Char{'0'});
 }
 
 std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeMutexInfo::GetChildren() const {
+    const bool has_waiters = (mutex_value & Kernel::Mutex::MutexHasWaitersFlag) != 0;
+
     std::vector<std::unique_ptr<WaitTreeItem>> list;
-
-    bool has_waiters = (mutex_value & Kernel::Mutex::MutexHasWaitersFlag) != 0;
-
     list.push_back(std::make_unique<WaitTreeText>(tr("has waiters: %1").arg(has_waiters)));
     list.push_back(std::make_unique<WaitTreeText>(
-        tr("owner handle: 0x%1").arg(owner_handle, 8, 16, QLatin1Char('0'))));
-    if (owner != nullptr)
+        tr("owner handle: 0x%1").arg(owner_handle, 8, 16, QLatin1Char{'0'})));
+    if (owner != nullptr) {
         list.push_back(std::make_unique<WaitTreeThread>(*owner));
+    }
     return list;
 }
 
@@ -123,11 +118,14 @@ std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeCallstack::GetChildren() cons
     u64 base_pointer = thread.GetContext().cpu_registers[BaseRegister];
 
     while (base_pointer != 0) {
-        u64 lr = Memory::Read64(base_pointer + sizeof(u64));
-        if (lr == 0)
+        const u64 lr = Memory::Read64(base_pointer + sizeof(u64));
+        if (lr == 0) {
             break;
-        list.push_back(
-            std::make_unique<WaitTreeText>(tr("0x%1").arg(lr - sizeof(u32), 16, 16, QChar('0'))));
+        }
+
+        list.push_back(std::make_unique<WaitTreeText>(
+            tr("0x%1").arg(lr - sizeof(u32), 16, 16, QLatin1Char{'0'})));
+
         base_pointer = Memory::Read64(base_pointer);
     }
 
@@ -155,8 +153,6 @@ std::unique_ptr<WaitTreeWaitObject> WaitTreeWaitObject::make(const Kernel::WaitO
     switch (object.GetHandleType()) {
     case Kernel::HandleType::ReadableEvent:
         return std::make_unique<WaitTreeEvent>(static_cast<const Kernel::ReadableEvent&>(object));
-    case Kernel::HandleType::Timer:
-        return std::make_unique<WaitTreeTimer>(static_cast<const Kernel::Timer&>(object));
     case Kernel::HandleType::Thread:
         return std::make_unique<WaitTreeThread>(static_cast<const Kernel::Thread&>(object));
     default:
@@ -178,12 +174,10 @@ std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeWaitObject::GetChildren() con
 
 QString WaitTreeWaitObject::GetResetTypeQString(Kernel::ResetType reset_type) {
     switch (reset_type) {
-    case Kernel::ResetType::OneShot:
-        return tr("one shot");
-    case Kernel::ResetType::Sticky:
-        return tr("sticky");
-    case Kernel::ResetType::Pulse:
-        return tr("pulse");
+    case Kernel::ResetType::Automatic:
+        return tr("automatic reset");
+    case Kernel::ResetType::Manual:
+        return tr("manual reset");
     }
     UNREACHABLE();
     return {};
@@ -221,6 +215,9 @@ QString WaitTreeThread::GetText() const {
     case Kernel::ThreadStatus::Ready:
         status = tr("ready");
         break;
+    case Kernel::ThreadStatus::Paused:
+        status = tr("paused");
+        break;
     case Kernel::ThreadStatus::WaitHLEEvent:
         status = tr("waiting for HLE return");
         break;
@@ -230,12 +227,14 @@ QString WaitTreeThread::GetText() const {
     case Kernel::ThreadStatus::WaitIPC:
         status = tr("waiting for IPC reply");
         break;
-    case Kernel::ThreadStatus::WaitSynchAll:
-    case Kernel::ThreadStatus::WaitSynchAny:
+    case Kernel::ThreadStatus::WaitSynch:
         status = tr("waiting for objects");
         break;
     case Kernel::ThreadStatus::WaitMutex:
         status = tr("waiting for mutex");
+        break;
+    case Kernel::ThreadStatus::WaitCondVar:
+        status = tr("waiting for condition variable");
         break;
     case Kernel::ThreadStatus::WaitArb:
         status = tr("waiting for address arbiter");
@@ -250,9 +249,9 @@ QString WaitTreeThread::GetText() const {
 
     const auto& context = thread.GetContext();
     const QString pc_info = tr(" PC = 0x%1 LR = 0x%2")
-                                .arg(context.pc, 8, 16, QLatin1Char('0'))
-                                .arg(context.cpu_registers[30], 8, 16, QLatin1Char('0'));
-    return WaitTreeWaitObject::GetText() + pc_info + " (" + status + ") ";
+                                .arg(context.pc, 8, 16, QLatin1Char{'0'})
+                                .arg(context.cpu_registers[30], 8, 16, QLatin1Char{'0'});
+    return QStringLiteral("%1%2 (%3) ").arg(WaitTreeWaitObject::GetText(), pc_info, status);
 }
 
 QColor WaitTreeThread::GetColor() const {
@@ -262,14 +261,16 @@ QColor WaitTreeThread::GetColor() const {
         return QColor(Qt::GlobalColor::darkGreen);
     case Kernel::ThreadStatus::Ready:
         return QColor(Qt::GlobalColor::darkBlue);
+    case Kernel::ThreadStatus::Paused:
+        return QColor(Qt::GlobalColor::lightGray);
     case Kernel::ThreadStatus::WaitHLEEvent:
     case Kernel::ThreadStatus::WaitIPC:
         return QColor(Qt::GlobalColor::darkRed);
     case Kernel::ThreadStatus::WaitSleep:
         return QColor(Qt::GlobalColor::darkYellow);
-    case Kernel::ThreadStatus::WaitSynchAll:
-    case Kernel::ThreadStatus::WaitSynchAny:
+    case Kernel::ThreadStatus::WaitSynch:
     case Kernel::ThreadStatus::WaitMutex:
+    case Kernel::ThreadStatus::WaitCondVar:
     case Kernel::ThreadStatus::WaitArb:
         return QColor(Qt::GlobalColor::red);
     case Kernel::ThreadStatus::Dormant:
@@ -288,8 +289,8 @@ std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeThread::GetChildren() const {
 
     QString processor;
     switch (thread.GetProcessorID()) {
-    case Kernel::ThreadProcessorId::THREADPROCESSORID_DEFAULT:
-        processor = tr("default");
+    case Kernel::ThreadProcessorId::THREADPROCESSORID_IDEAL:
+        processor = tr("ideal");
         break;
     case Kernel::ThreadProcessorId::THREADPROCESSORID_0:
     case Kernel::ThreadProcessorId::THREADPROCESSORID_1:
@@ -316,15 +317,15 @@ std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeThread::GetChildren() const {
 
     const VAddr mutex_wait_address = thread.GetMutexWaitAddress();
     if (mutex_wait_address != 0) {
-        list.push_back(std::make_unique<WaitTreeMutexInfo>(mutex_wait_address));
+        const auto& handle_table = thread.GetOwnerProcess()->GetHandleTable();
+        list.push_back(std::make_unique<WaitTreeMutexInfo>(mutex_wait_address, handle_table));
     } else {
         list.push_back(std::make_unique<WaitTreeText>(tr("not waiting for mutex")));
     }
 
-    if (thread.GetStatus() == Kernel::ThreadStatus::WaitSynchAny ||
-        thread.GetStatus() == Kernel::ThreadStatus::WaitSynchAll) {
+    if (thread.GetStatus() == Kernel::ThreadStatus::WaitSynch) {
         list.push_back(std::make_unique<WaitTreeObjectList>(thread.GetWaitObjects(),
-                                                            thread.IsSleepingOnWaitAll()));
+                                                            thread.IsSleepingOnWait()));
     }
 
     list.push_back(std::make_unique<WaitTreeCallstack>(thread));
@@ -342,23 +343,6 @@ std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeEvent::GetChildren() const {
         tr("reset type = %1")
             .arg(GetResetTypeQString(
                 static_cast<const Kernel::ReadableEvent&>(object).GetResetType()))));
-    return list;
-}
-
-WaitTreeTimer::WaitTreeTimer(const Kernel::Timer& object) : WaitTreeWaitObject(object) {}
-WaitTreeTimer::~WaitTreeTimer() = default;
-
-std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeTimer::GetChildren() const {
-    std::vector<std::unique_ptr<WaitTreeItem>> list(WaitTreeWaitObject::GetChildren());
-
-    const auto& timer = static_cast<const Kernel::Timer&>(object);
-
-    list.push_back(std::make_unique<WaitTreeText>(
-        tr("reset type = %1").arg(GetResetTypeQString(timer.GetResetType()))));
-    list.push_back(
-        std::make_unique<WaitTreeText>(tr("initial delay = %1").arg(timer.GetInitialDelay())));
-    list.push_back(
-        std::make_unique<WaitTreeText>(tr("interval delay = %1").arg(timer.GetIntervalDelay())));
     return list;
 }
 
@@ -440,7 +424,7 @@ void WaitTreeModel::InitItems() {
 }
 
 WaitTreeWidget::WaitTreeWidget(QWidget* parent) : QDockWidget(tr("Wait Tree"), parent) {
-    setObjectName("WaitTreeWidget");
+    setObjectName(QStringLiteral("WaitTreeWidget"));
     view = new QTreeView(this);
     view->setHeaderHidden(true);
     setWidget(view);

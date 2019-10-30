@@ -1,9 +1,18 @@
+if (YUZU_ENABLE_BOXCAT)
+    set(BCAT_BOXCAT_ADDITIONAL_SOURCES hle/service/bcat/backend/boxcat.cpp hle/service/bcat/backend/boxcat.h)
+else()
+    set(BCAT_BOXCAT_ADDITIONAL_SOURCES)
+endif()
+
 add_library(core STATIC
     arm/arm_interface.h
+    arm/arm_interface.cpp
     arm/exclusive_monitor.cpp
     arm/exclusive_monitor.h
     arm/unicorn/arm_unicorn.cpp
     arm/unicorn/arm_unicorn.h
+    constants.cpp
+    constants.h
     core.cpp
     core.h
     core_cpu.cpp
@@ -40,6 +49,8 @@ add_library(core STATIC
     file_sys/fsmitm_romfsbuild.h
     file_sys/ips_layer.cpp
     file_sys/ips_layer.h
+    file_sys/kernel_executable.cpp
+    file_sys/kernel_executable.h
     file_sys/mode.h
     file_sys/nca_metadata.cpp
     file_sys/nca_metadata.h
@@ -63,16 +74,36 @@ add_library(core STATIC
     file_sys/sdmc_factory.h
     file_sys/submission_package.cpp
     file_sys/submission_package.h
+    file_sys/system_archive/data/font_chinese_simplified.cpp
+    file_sys/system_archive/data/font_chinese_simplified.h
+    file_sys/system_archive/data/font_chinese_traditional.cpp
+    file_sys/system_archive/data/font_chinese_traditional.h
+    file_sys/system_archive/data/font_extended_chinese_simplified.cpp
+    file_sys/system_archive/data/font_extended_chinese_simplified.h
+    file_sys/system_archive/data/font_korean.cpp
+    file_sys/system_archive/data/font_korean.h
+    file_sys/system_archive/data/font_nintendo_extended.cpp
+    file_sys/system_archive/data/font_nintendo_extended.h
+    file_sys/system_archive/data/font_standard.cpp
+    file_sys/system_archive/data/font_standard.h
+    file_sys/system_archive/mii_model.cpp
+    file_sys/system_archive/mii_model.h
     file_sys/system_archive/ng_word.cpp
     file_sys/system_archive/ng_word.h
+    file_sys/system_archive/shared_font.cpp
+    file_sys/system_archive/shared_font.h
     file_sys/system_archive/system_archive.cpp
     file_sys/system_archive/system_archive.h
+    file_sys/system_archive/system_version.cpp
+    file_sys/system_archive/system_version.h
     file_sys/vfs.cpp
     file_sys/vfs.h
     file_sys/vfs_concat.cpp
     file_sys/vfs_concat.h
     file_sys/vfs_layered.cpp
     file_sys/vfs_layered.h
+    file_sys/vfs_libzip.cpp
+    file_sys/vfs_libzip.h
     file_sys/vfs_offset.cpp
     file_sys/vfs_offset.h
     file_sys/vfs_real.cpp
@@ -83,15 +114,27 @@ add_library(core STATIC
     file_sys/vfs_vector.h
     file_sys/xts_archive.cpp
     file_sys/xts_archive.h
+    frontend/applets/error.cpp
+    frontend/applets/error.h
+    frontend/applets/general_frontend.cpp
+    frontend/applets/general_frontend.h
+    frontend/applets/profile_select.cpp
+    frontend/applets/profile_select.h
     frontend/applets/software_keyboard.cpp
     frontend/applets/software_keyboard.h
+    frontend/applets/web_browser.cpp
+    frontend/applets/web_browser.h
     frontend/emu_window.cpp
     frontend/emu_window.h
     frontend/framebuffer_layout.cpp
     frontend/framebuffer_layout.h
     frontend/input.h
+    frontend/scope_acquire_window_context.cpp
+    frontend/scope_acquire_window_context.h
     gdbstub/gdbstub.cpp
     gdbstub/gdbstub.h
+    hardware_interrupt_manager.cpp
+    hardware_interrupt_manager.h
     hle/ipc.h
     hle/ipc_helpers.h
     hle/kernel/address_arbiter.cpp
@@ -100,6 +143,8 @@ add_library(core STATIC
     hle/kernel/client_port.h
     hle/kernel/client_session.cpp
     hle/kernel/client_session.h
+    hle/kernel/code_set.cpp
+    hle/kernel/code_set.h
     hle/kernel/errors.h
     hle/kernel/handle_table.cpp
     hle/kernel/handle_table.h
@@ -113,6 +158,8 @@ add_library(core STATIC
     hle/kernel/object.h
     hle/kernel/process.cpp
     hle/kernel/process.h
+    hle/kernel/process_capability.cpp
+    hle/kernel/process_capability.h
     hle/kernel/readable_event.cpp
     hle/kernel/readable_event.h
     hle/kernel/resource_limit.cpp
@@ -131,8 +178,8 @@ add_library(core STATIC
     hle/kernel/svc_wrap.h
     hle/kernel/thread.cpp
     hle/kernel/thread.h
-    hle/kernel/timer.cpp
-    hle/kernel/timer.h
+    hle/kernel/transfer_memory.cpp
+    hle/kernel/transfer_memory.h
     hle/kernel/vm_manager.cpp
     hle/kernel/vm_manager.h
     hle/kernel/wait_object.cpp
@@ -152,6 +199,7 @@ add_library(core STATIC
     hle/service/acc/acc_u0.h
     hle/service/acc/acc_u1.cpp
     hle/service/acc/acc_u1.h
+    hle/service/acc/errors.h
     hle/service/acc/profile_manager.cpp
     hle/service/acc/profile_manager.h
     hle/service/am/am.cpp
@@ -162,10 +210,16 @@ add_library(core STATIC
     hle/service/am/applet_oe.h
     hle/service/am/applets/applets.cpp
     hle/service/am/applets/applets.h
+    hle/service/am/applets/error.cpp
+    hle/service/am/applets/error.h
+    hle/service/am/applets/general_backend.cpp
+    hle/service/am/applets/general_backend.h
+    hle/service/am/applets/profile_select.cpp
+    hle/service/am/applets/profile_select.h
     hle/service/am/applets/software_keyboard.cpp
     hle/service/am/applets/software_keyboard.h
-    hle/service/am/applets/stub_applet.cpp
-    hle/service/am/applets/stub_applet.h
+    hle/service/am/applets/web_browser.cpp
+    hle/service/am/applets/web_browser.h
     hle/service/am/idle.cpp
     hle/service/am/idle.h
     hle/service/am/omm.cpp
@@ -178,10 +232,10 @@ add_library(core STATIC
     hle/service/aoc/aoc_u.h
     hle/service/apm/apm.cpp
     hle/service/apm/apm.h
+    hle/service/apm/controller.cpp
+    hle/service/apm/controller.h
     hle/service/apm/interface.cpp
     hle/service/apm/interface.h
-    hle/service/arp/arp.cpp
-    hle/service/arp/arp.h
     hle/service/audio/audctl.cpp
     hle/service/audio/audctl.h
     hle/service/audio/auddbg.cpp
@@ -206,8 +260,12 @@ add_library(core STATIC
     hle/service/audio/audren_u.h
     hle/service/audio/codecctl.cpp
     hle/service/audio/codecctl.h
+    hle/service/audio/errors.h
     hle/service/audio/hwopus.cpp
     hle/service/audio/hwopus.h
+    hle/service/bcat/backend/backend.cpp
+    hle/service/bcat/backend/backend.h
+    ${BCAT_BOXCAT_ADDITIONAL_SOURCES}
     hle/service/bcat/bcat.cpp
     hle/service/bcat/bcat.h
     hle/service/bcat/module.cpp
@@ -242,10 +300,20 @@ add_library(core STATIC
     hle/service/filesystem/fsp_srv.h
     hle/service/fgm/fgm.cpp
     hle/service/fgm/fgm.h
+    hle/service/friend/errors.h
     hle/service/friend/friend.cpp
     hle/service/friend/friend.h
     hle/service/friend/interface.cpp
     hle/service/friend/interface.h
+    hle/service/glue/arp.cpp
+    hle/service/glue/arp.h
+    hle/service/glue/bgtc.cpp
+    hle/service/glue/bgtc.h
+    hle/service/glue/errors.h
+    hle/service/glue/glue.cpp
+    hle/service/glue/glue.h
+    hle/service/glue/manager.cpp
+    hle/service/glue/manager.h
     hle/service/grc/grc.cpp
     hle/service/grc/grc.h
     hle/service/hid/hid.cpp
@@ -254,6 +322,7 @@ add_library(core STATIC
     hle/service/hid/irs.h
     hle/service/hid/xcd.cpp
     hle/service/hid/xcd.h
+    hle/service/hid/errors.h
     hle/service/hid/controllers/controller_base.cpp
     hle/service/hid/controllers/controller_base.h
     hle/service/hid/controllers/debug_pad.cpp
@@ -280,10 +349,14 @@ add_library(core STATIC
     hle/service/ldr/ldr.h
     hle/service/lm/lm.cpp
     hle/service/lm/lm.h
+    hle/service/lm/manager.cpp
+    hle/service/lm/manager.h
     hle/service/mig/mig.cpp
     hle/service/mig/mig.h
     hle/service/mii/mii.cpp
     hle/service/mii/mii.h
+    hle/service/mii/mii_manager.cpp
+    hle/service/mii/mii_manager.h
     hle/service/mm/mm_u.cpp
     hle/service/mm/mm_u.h
     hle/service/ncm/ncm.cpp
@@ -300,6 +373,9 @@ add_library(core STATIC
     hle/service/nim/nim.h
     hle/service/npns/npns.cpp
     hle/service/npns/npns.h
+    hle/service/ns/errors.h
+    hle/service/ns/language.cpp
+    hle/service/ns/language.h
     hle/service/ns/ns.cpp
     hle/service/ns/ns.h
     hle/service/ns/pl_u.cpp
@@ -325,6 +401,7 @@ add_library(core STATIC
     hle/service/nvdrv/devices/nvmap.h
     hle/service/nvdrv/interface.cpp
     hle/service/nvdrv/interface.h
+    hle/service/nvdrv/nvdata.h
     hle/service/nvdrv/nvdrv.cpp
     hle/service/nvdrv/nvdrv.h
     hle/service/nvdrv/nvmemp.cpp
@@ -387,8 +464,14 @@ add_library(core STATIC
     hle/service/time/interface.h
     hle/service/time/time.cpp
     hle/service/time/time.h
+    hle/service/time/time_sharedmemory.cpp
+    hle/service/time/time_sharedmemory.h
     hle/service/usb/usb.cpp
     hle/service/usb/usb.h
+    hle/service/vi/display/vi_display.cpp
+    hle/service/vi/display/vi_display.h
+    hle/service/vi/layer/vi_layer.cpp
+    hle/service/vi/layer/vi_layer.h
     hle/service/vi/vi.cpp
     hle/service/vi/vi.h
     hle/service/vi/vi_m.cpp
@@ -403,8 +486,8 @@ add_library(core STATIC
     loader/deconstructed_rom_directory.h
     loader/elf.cpp
     loader/elf.h
-    loader/linker.cpp
-    loader/linker.h
+    loader/kip.cpp
+    loader/kip.h
     loader/loader.cpp
     loader/loader.h
     loader/nax.cpp
@@ -419,26 +502,39 @@ add_library(core STATIC
     loader/nsp.h
     loader/xci.cpp
     loader/xci.h
+    memory/cheat_engine.cpp
+    memory/cheat_engine.h
+    memory/dmnt_cheat_types.h
+    memory/dmnt_cheat_vm.cpp
+    memory/dmnt_cheat_vm.h
     memory.cpp
     memory.h
-    memory_hook.cpp
-    memory_hook.h
     memory_setup.h
     perf_stats.cpp
     perf_stats.h
+    reporter.cpp
+    reporter.h
     settings.cpp
     settings.h
     telemetry_session.cpp
     telemetry_session.h
-    tracer/citrace.h
-    tracer/recorder.cpp
-    tracer/recorder.h
+    tools/freezer.cpp
+    tools/freezer.h
 )
 
 create_target_directory_groups(core)
 
 target_link_libraries(core PUBLIC common PRIVATE audio_core video_core)
-target_link_libraries(core PUBLIC Boost::boost PRIVATE fmt lz4_static mbedtls opus unicorn open_source_archives)
+target_link_libraries(core PUBLIC Boost::boost PRIVATE fmt json-headers mbedtls opus unicorn)
+
+if (YUZU_ENABLE_BOXCAT)
+    get_directory_property(OPENSSL_LIBS
+        DIRECTORY ${PROJECT_SOURCE_DIR}/externals/libressl
+        DEFINITION OPENSSL_LIBS)
+    target_compile_definitions(core PRIVATE -DCPPHTTPLIB_OPENSSL_SUPPORT -DYUZU_ENABLE_BOXCAT)
+    target_link_libraries(core PRIVATE httplib json-headers ${OPENSSL_LIBS} zip)
+endif()
+
 if (ENABLE_WEB_SERVICE)
     target_compile_definitions(core PRIVATE -DENABLE_WEB_SERVICE)
     target_link_libraries(core PRIVATE web_service)

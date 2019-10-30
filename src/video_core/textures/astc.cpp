@@ -23,28 +23,12 @@
 
 #include "video_core/textures/astc.h"
 
-class BitStream {
+class InputBitStream {
 public:
-    explicit BitStream(unsigned char* ptr, int nBits = 0, int start_offset = 0)
-        : m_NumBits(nBits), m_CurByte(ptr), m_NextBit(start_offset % 8) {}
+    explicit InputBitStream(const unsigned char* ptr, int start_offset = 0)
+        : m_CurByte(ptr), m_NextBit(start_offset % 8) {}
 
-    ~BitStream() = default;
-
-    int GetBitsWritten() const {
-        return m_BitsWritten;
-    }
-
-    void WriteBitsR(unsigned int val, unsigned int nBits) {
-        for (unsigned int i = 0; i < nBits; i++) {
-            WriteBit((val >> (nBits - i - 1)) & 1);
-        }
-    }
-
-    void WriteBits(unsigned int val, unsigned int nBits) {
-        for (unsigned int i = 0; i < nBits; i++) {
-            WriteBit((val >> i) & 1);
-        }
-    }
+    ~InputBitStream() = default;
 
     int GetBitsRead() const {
         return m_BitsRead;
@@ -68,6 +52,35 @@ public:
             ret |= (ReadBit() & 1) << i;
         }
         return ret;
+    }
+
+private:
+    const unsigned char* m_CurByte;
+    int m_NextBit = 0;
+    int m_BitsRead = 0;
+};
+
+class OutputBitStream {
+public:
+    explicit OutputBitStream(unsigned char* ptr, int nBits = 0, int start_offset = 0)
+        : m_NumBits(nBits), m_CurByte(ptr), m_NextBit(start_offset % 8) {}
+
+    ~OutputBitStream() = default;
+
+    int GetBitsWritten() const {
+        return m_BitsWritten;
+    }
+
+    void WriteBitsR(unsigned int val, unsigned int nBits) {
+        for (unsigned int i = 0; i < nBits; i++) {
+            WriteBit((val >> (nBits - i - 1)) & 1);
+        }
+    }
+
+    void WriteBits(unsigned int val, unsigned int nBits) {
+        for (unsigned int i = 0; i < nBits; i++) {
+            WriteBit((val >> i) & 1);
+        }
     }
 
 private:
@@ -98,7 +111,6 @@ private:
     const int m_NumBits;
     unsigned char* m_CurByte;
     int m_NextBit = 0;
-    int m_BitsRead = 0;
 
     bool done = false;
 };
@@ -238,8 +250,8 @@ public:
     // Fills result with the values that are encoded in the given
     // bitstream. We must know beforehand what the maximum possible
     // value is, and how many values we're decoding.
-    static void DecodeIntegerSequence(std::vector<IntegerEncodedValue>& result, BitStream& bits,
-                                      uint32_t maxRange, uint32_t nValues) {
+    static void DecodeIntegerSequence(std::vector<IntegerEncodedValue>& result,
+                                      InputBitStream& bits, uint32_t maxRange, uint32_t nValues) {
         // Determine encoding parameters
         IntegerEncodedValue val = IntegerEncodedValue::CreateEncoding(maxRange);
 
@@ -267,7 +279,7 @@ public:
     }
 
 private:
-    static void DecodeTritBlock(BitStream& bits, std::vector<IntegerEncodedValue>& result,
+    static void DecodeTritBlock(InputBitStream& bits, std::vector<IntegerEncodedValue>& result,
                                 uint32_t nBitsPerValue) {
         // Implement the algorithm in section C.2.12
         uint32_t m[5];
@@ -327,7 +339,7 @@ private:
         }
     }
 
-    static void DecodeQuintBlock(BitStream& bits, std::vector<IntegerEncodedValue>& result,
+    static void DecodeQuintBlock(InputBitStream& bits, std::vector<IntegerEncodedValue>& result,
                                  uint32_t nBitsPerValue) {
         // Implement the algorithm in section C.2.12
         uint32_t m[3];
@@ -406,11 +418,11 @@ struct TexelWeightParams {
     }
 };
 
-static TexelWeightParams DecodeBlockInfo(BitStream& strm) {
+static TexelWeightParams DecodeBlockInfo(InputBitStream& strm) {
     TexelWeightParams params;
 
     // Read the entire block mode all at once
-    uint16_t modeBits = strm.ReadBits(11);
+    uint16_t modeBits = static_cast<uint16_t>(strm.ReadBits(11));
 
     // Does this match the void extent block mode?
     if ((modeBits & 0x01FF) == 0x1FC) {
@@ -605,7 +617,7 @@ static TexelWeightParams DecodeBlockInfo(BitStream& strm) {
     return params;
 }
 
-static void FillVoidExtentLDR(BitStream& strm, uint32_t* const outBuf, uint32_t blockWidth,
+static void FillVoidExtentLDR(InputBitStream& strm, uint32_t* const outBuf, uint32_t blockWidth,
                               uint32_t blockHeight) {
     // Don't actually care about the void extent, just read the bits...
     for (int i = 0; i < 4; ++i) {
@@ -613,10 +625,10 @@ static void FillVoidExtentLDR(BitStream& strm, uint32_t* const outBuf, uint32_t 
     }
 
     // Decode the RGBA components and renormalize them to the range [0, 255]
-    uint16_t r = strm.ReadBits(16);
-    uint16_t g = strm.ReadBits(16);
-    uint16_t b = strm.ReadBits(16);
-    uint16_t a = strm.ReadBits(16);
+    uint16_t r = static_cast<uint16_t>(strm.ReadBits(16));
+    uint16_t g = static_cast<uint16_t>(strm.ReadBits(16));
+    uint16_t b = static_cast<uint16_t>(strm.ReadBits(16));
+    uint16_t a = static_cast<uint16_t>(strm.ReadBits(16));
 
     uint32_t rgba = (r >> 8) | (g & 0xFF00) | (static_cast<uint32_t>(b) & 0xFF00) << 8 |
                     (static_cast<uint32_t>(a) & 0xFF00) << 16;
@@ -669,9 +681,10 @@ protected:
 
 public:
     Pixel() = default;
-    Pixel(ChannelType a, ChannelType r, ChannelType g, ChannelType b, unsigned bitDepth = 8)
+    Pixel(uint32_t a, uint32_t r, uint32_t g, uint32_t b, unsigned bitDepth = 8)
         : m_BitDepth{uint8_t(bitDepth), uint8_t(bitDepth), uint8_t(bitDepth), uint8_t(bitDepth)},
-          color{a, r, g, b} {}
+          color{static_cast<ChannelType>(a), static_cast<ChannelType>(r),
+                static_cast<ChannelType>(g), static_cast<ChannelType>(b)} {}
 
     // Changes the depth of each pixel. This scales the values to
     // the appropriate bit depth by either truncating the least
@@ -821,7 +834,7 @@ static void DecodeColorValues(uint32_t* out, uint8_t* data, const uint32_t* mode
 
     // We now have enough to decode our integer sequence.
     std::vector<IntegerEncodedValue> decodedColorValues;
-    BitStream colorStream(data);
+    InputBitStream colorStream(data);
     IntegerEncodedValue::DecodeIntegerSequence(decodedColorValues, colorStream, range, nValues);
 
     // Once we have the decoded values, we need to dequantize them to the 0-255 range
@@ -1365,9 +1378,9 @@ static void ComputeEndpoints(Pixel& ep1, Pixel& ep2, const uint32_t*& colorValue
 #undef READ_INT_VALUES
 }
 
-static void DecompressBlock(uint8_t inBuf[16], const uint32_t blockWidth,
+static void DecompressBlock(const uint8_t inBuf[16], const uint32_t blockWidth,
                             const uint32_t blockHeight, uint32_t* outBuf) {
-    BitStream strm(inBuf);
+    InputBitStream strm(inBuf);
     TexelWeightParams weightParams = DecodeBlockInfo(strm);
 
     // Was there an error?
@@ -1421,7 +1434,7 @@ static void DecompressBlock(uint8_t inBuf[16], const uint32_t blockWidth,
     // Define color data.
     uint8_t colorEndpointData[16];
     memset(colorEndpointData, 0, sizeof(colorEndpointData));
-    BitStream colorEndpointStream(colorEndpointData, 16 * 8, 0);
+    OutputBitStream colorEndpointStream(colorEndpointData, 16 * 8, 0);
 
     // Read extra config data...
     uint32_t baseCEM = 0;
@@ -1549,7 +1562,7 @@ static void DecompressBlock(uint8_t inBuf[16], const uint32_t blockWidth,
     memset(texelWeightData + clearByteStart, 0, 16 - clearByteStart);
 
     std::vector<IntegerEncodedValue> texelWeightValues;
-    BitStream weightStream(texelWeightData);
+    InputBitStream weightStream(texelWeightData);
 
     IntegerEncodedValue::DecodeIntegerSequence(texelWeightValues, weightStream,
                                                weightParams.m_MaxWeight,
@@ -1597,15 +1610,16 @@ static void DecompressBlock(uint8_t inBuf[16], const uint32_t blockWidth,
 
 namespace Tegra::Texture::ASTC {
 
-std::vector<uint8_t> Decompress(std::vector<uint8_t>& data, uint32_t width, uint32_t height,
+std::vector<uint8_t> Decompress(const uint8_t* data, uint32_t width, uint32_t height,
                                 uint32_t depth, uint32_t block_width, uint32_t block_height) {
     uint32_t blockIdx = 0;
+    std::size_t depth_offset = 0;
     std::vector<uint8_t> outData(height * width * depth * 4);
     for (uint32_t k = 0; k < depth; k++) {
         for (uint32_t j = 0; j < height; j += block_height) {
             for (uint32_t i = 0; i < width; i += block_width) {
 
-                uint8_t* blockPtr = data.data() + blockIdx * 16;
+                const uint8_t* blockPtr = data + blockIdx * 16;
 
                 // Blocks can be at most 12x12
                 uint32_t uncompData[144];
@@ -1614,7 +1628,7 @@ std::vector<uint8_t> Decompress(std::vector<uint8_t>& data, uint32_t width, uint
                 uint32_t decompWidth = std::min(block_width, width - i);
                 uint32_t decompHeight = std::min(block_height, height - j);
 
-                uint8_t* outRow = outData.data() + (j * width + i) * 4;
+                uint8_t* outRow = depth_offset + outData.data() + (j * width + i) * 4;
                 for (uint32_t jj = 0; jj < decompHeight; jj++) {
                     memcpy(outRow + jj * width * 4, uncompData + jj * block_width, decompWidth * 4);
                 }
@@ -1622,6 +1636,7 @@ std::vector<uint8_t> Decompress(std::vector<uint8_t>& data, uint32_t width, uint
                 blockIdx++;
             }
         }
+        depth_offset += height * width * 4;
     }
 
     return outData;

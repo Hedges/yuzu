@@ -3,7 +3,6 @@
 // Refer to the license.txt file included.
 
 #include <cstddef>
-#include <cstring>
 #include <vector>
 
 #include "common/logging/log.h"
@@ -17,30 +16,54 @@ ProgramMetadata::ProgramMetadata() = default;
 ProgramMetadata::~ProgramMetadata() = default;
 
 Loader::ResultStatus ProgramMetadata::Load(VirtualFile file) {
-    std::size_t total_size = static_cast<std::size_t>(file->GetSize());
-    if (total_size < sizeof(Header))
+    const std::size_t total_size = file->GetSize();
+    if (total_size < sizeof(Header)) {
         return Loader::ResultStatus::ErrorBadNPDMHeader;
+    }
 
-    // TODO(DarkLordZach): Use ReadObject when Header/AcidHeader becomes trivially copyable.
-    std::vector<u8> npdm_header_data = file->ReadBytes(sizeof(Header));
-    if (sizeof(Header) != npdm_header_data.size())
+    if (sizeof(Header) != file->ReadObject(&npdm_header)) {
         return Loader::ResultStatus::ErrorBadNPDMHeader;
-    std::memcpy(&npdm_header, npdm_header_data.data(), sizeof(Header));
+    }
 
-    std::vector<u8> acid_header_data = file->ReadBytes(sizeof(AcidHeader), npdm_header.acid_offset);
-    if (sizeof(AcidHeader) != acid_header_data.size())
+    if (sizeof(AcidHeader) != file->ReadObject(&acid_header, npdm_header.acid_offset)) {
         return Loader::ResultStatus::ErrorBadACIDHeader;
-    std::memcpy(&acid_header, acid_header_data.data(), sizeof(AcidHeader));
+    }
 
-    if (sizeof(AciHeader) != file->ReadObject(&aci_header, npdm_header.aci_offset))
+    if (sizeof(AciHeader) != file->ReadObject(&aci_header, npdm_header.aci_offset)) {
         return Loader::ResultStatus::ErrorBadACIHeader;
+    }
 
-    if (sizeof(FileAccessControl) != file->ReadObject(&acid_file_access, acid_header.fac_offset))
+    if (sizeof(FileAccessControl) != file->ReadObject(&acid_file_access, acid_header.fac_offset)) {
         return Loader::ResultStatus::ErrorBadFileAccessControl;
-    if (sizeof(FileAccessHeader) != file->ReadObject(&aci_file_access, aci_header.fah_offset))
+    }
+
+    if (sizeof(FileAccessHeader) != file->ReadObject(&aci_file_access, aci_header.fah_offset)) {
         return Loader::ResultStatus::ErrorBadFileAccessHeader;
+    }
+
+    aci_kernel_capabilities.resize(aci_header.kac_size / sizeof(u32));
+    const u64 read_size = aci_header.kac_size;
+    const u64 read_offset = npdm_header.aci_offset + aci_header.kac_offset;
+    if (file->ReadBytes(aci_kernel_capabilities.data(), read_size, read_offset) != read_size) {
+        return Loader::ResultStatus::ErrorBadKernelCapabilityDescriptors;
+    }
 
     return Loader::ResultStatus::Success;
+}
+
+void ProgramMetadata::LoadManual(bool is_64_bit, ProgramAddressSpaceType address_space,
+                                 u8 main_thread_prio, u8 main_thread_core,
+                                 u32 main_thread_stack_size, u64 title_id,
+                                 u64 filesystem_permissions,
+                                 KernelCapabilityDescriptors capabilities) {
+    npdm_header.has_64_bit_instructions.Assign(is_64_bit);
+    npdm_header.address_space_type.Assign(address_space);
+    npdm_header.main_thread_priority = main_thread_prio;
+    npdm_header.main_thread_cpu = main_thread_core;
+    npdm_header.main_stack_size = main_thread_stack_size;
+    aci_header.title_id = title_id;
+    aci_file_access.permissions = filesystem_permissions;
+    aci_kernel_capabilities = std ::move(capabilities);
 }
 
 bool ProgramMetadata::Is64BitProgram() const {
@@ -71,6 +94,14 @@ u64 ProgramMetadata::GetFilesystemPermissions() const {
     return aci_file_access.permissions;
 }
 
+u32 ProgramMetadata::GetSystemResourceSize() const {
+    return npdm_header.system_resource_size;
+}
+
+const ProgramMetadata::KernelCapabilityDescriptors& ProgramMetadata::GetKernelCapabilities() const {
+    return aci_kernel_capabilities;
+}
+
 void ProgramMetadata::Print() const {
     LOG_DEBUG(Service_FS, "Magic:                  {:.4}", npdm_header.magic.data());
     LOG_DEBUG(Service_FS, "Main thread priority:   0x{:02X}", npdm_header.main_thread_priority);
@@ -81,15 +112,19 @@ void ProgramMetadata::Print() const {
     LOG_DEBUG(Service_FS, " > 64-bit instructions: {}",
               npdm_header.has_64_bit_instructions ? "YES" : "NO");
 
-    auto address_space = "Unknown";
+    const char* address_space = "Unknown";
     switch (npdm_header.address_space_type) {
     case ProgramAddressSpaceType::Is36Bit:
+        address_space = "64-bit (36-bit address space)";
+        break;
     case ProgramAddressSpaceType::Is39Bit:
-        address_space = "64-bit";
+        address_space = "64-bit (39-bit address space)";
         break;
     case ProgramAddressSpaceType::Is32Bit:
-    case ProgramAddressSpaceType::Is32BitNoMap:
         address_space = "32-bit";
+        break;
+    case ProgramAddressSpaceType::Is32BitNoMap:
+        address_space = "32-bit (no map region)";
         break;
     }
 

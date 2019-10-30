@@ -6,11 +6,18 @@
 
 #include <map>
 #include <memory>
+#include <tuple>
 #include <vector>
 #include "common/common_types.h"
+#include "common/memory_hook.h"
+#include "common/page_table.h"
+#include "core/hle/kernel/physical_memory.h"
 #include "core/hle/result.h"
 #include "core/memory.h"
-#include "core/memory_hook.h"
+
+namespace Core {
+class System;
+}
 
 namespace FileSys {
 enum class ProgramAddressSpaceType : u8;
@@ -41,7 +48,92 @@ enum class VMAPermission : u8 {
     ReadExecute = Read | Execute,
     WriteExecute = Write | Execute,
     ReadWriteExecute = Read | Write | Execute,
+
+    // Used as a wildcard when checking permissions across memory ranges
+    All = 0xFF,
 };
+
+constexpr VMAPermission operator|(VMAPermission lhs, VMAPermission rhs) {
+    return static_cast<VMAPermission>(u32(lhs) | u32(rhs));
+}
+
+constexpr VMAPermission operator&(VMAPermission lhs, VMAPermission rhs) {
+    return static_cast<VMAPermission>(u32(lhs) & u32(rhs));
+}
+
+constexpr VMAPermission operator^(VMAPermission lhs, VMAPermission rhs) {
+    return static_cast<VMAPermission>(u32(lhs) ^ u32(rhs));
+}
+
+constexpr VMAPermission operator~(VMAPermission permission) {
+    return static_cast<VMAPermission>(~u32(permission));
+}
+
+constexpr VMAPermission& operator|=(VMAPermission& lhs, VMAPermission rhs) {
+    lhs = lhs | rhs;
+    return lhs;
+}
+
+constexpr VMAPermission& operator&=(VMAPermission& lhs, VMAPermission rhs) {
+    lhs = lhs & rhs;
+    return lhs;
+}
+
+constexpr VMAPermission& operator^=(VMAPermission& lhs, VMAPermission rhs) {
+    lhs = lhs ^ rhs;
+    return lhs;
+}
+
+/// Attribute flags that can be applied to a VMA
+enum class MemoryAttribute : u32 {
+    Mask = 0xFF,
+
+    /// No particular qualities
+    None = 0,
+    /// Memory locked/borrowed for use. e.g. This would be used by transfer memory.
+    Locked = 1,
+    /// Memory locked for use by IPC-related internals.
+    LockedForIPC = 2,
+    /// Mapped as part of the device address space.
+    DeviceMapped = 4,
+    /// Uncached memory
+    Uncached = 8,
+};
+
+constexpr MemoryAttribute operator|(MemoryAttribute lhs, MemoryAttribute rhs) {
+    return static_cast<MemoryAttribute>(u32(lhs) | u32(rhs));
+}
+
+constexpr MemoryAttribute operator&(MemoryAttribute lhs, MemoryAttribute rhs) {
+    return static_cast<MemoryAttribute>(u32(lhs) & u32(rhs));
+}
+
+constexpr MemoryAttribute operator^(MemoryAttribute lhs, MemoryAttribute rhs) {
+    return static_cast<MemoryAttribute>(u32(lhs) ^ u32(rhs));
+}
+
+constexpr MemoryAttribute operator~(MemoryAttribute attribute) {
+    return static_cast<MemoryAttribute>(~u32(attribute));
+}
+
+constexpr MemoryAttribute& operator|=(MemoryAttribute& lhs, MemoryAttribute rhs) {
+    lhs = lhs | rhs;
+    return lhs;
+}
+
+constexpr MemoryAttribute& operator&=(MemoryAttribute& lhs, MemoryAttribute rhs) {
+    lhs = lhs & rhs;
+    return lhs;
+}
+
+constexpr MemoryAttribute& operator^=(MemoryAttribute& lhs, MemoryAttribute rhs) {
+    lhs = lhs ^ rhs;
+    return lhs;
+}
+
+constexpr u32 ToSvcMemoryAttribute(MemoryAttribute attribute) {
+    return static_cast<u32>(attribute & MemoryAttribute::Mask);
+}
 
 // clang-format off
 /// Represents memory states and any relevant flags, as used by the kernel.
@@ -68,6 +160,9 @@ enum class MemoryState : u32 {
     FlagUncached                    = 1U << 24,
     FlagCodeMemory                  = 1U << 25,
 
+    // Wildcard used in range checking to indicate all states.
+    All                             = 0xFFFFFFFF,
+
     // Convenience flag sets to reduce repetition
     IPCFlags = FlagIPC0 | FlagIPC3 | FlagIPC1,
 
@@ -81,12 +176,12 @@ enum class MemoryState : u32 {
     Unmapped               = 0x00,
     Io                     = 0x01 | FlagMapped,
     Normal                 = 0x02 | FlagMapped | FlagQueryPhysicalAddressAllowed,
-    CodeStatic             = 0x03 | CodeFlags  | FlagMapProcess,
-    CodeMutable            = 0x04 | CodeFlags  | FlagMapProcess | FlagCodeMemory,
+    Code                   = 0x03 | CodeFlags  | FlagMapProcess,
+    CodeData               = 0x04 | DataFlags  | FlagMapProcess | FlagCodeMemory,
     Heap                   = 0x05 | DataFlags  | FlagCodeMemory,
     Shared                 = 0x06 | FlagMapped | FlagMemoryPoolAllocated,
-    ModuleCodeStatic       = 0x08 | CodeFlags  | FlagModule | FlagMapProcess,
-    ModuleCodeMutable      = 0x09 | DataFlags  | FlagModule | FlagMapProcess | FlagCodeMemory,
+    ModuleCode             = 0x08 | CodeFlags  | FlagModule | FlagMapProcess,
+    ModuleCodeData         = 0x09 | DataFlags  | FlagModule | FlagMapProcess | FlagCodeMemory,
 
     IpcBuffer0             = 0x0A | FlagMapped | FlagQueryPhysicalAddressAllowed | FlagMemoryPoolAllocated |
                                     IPCFlags | FlagSharedDevice | FlagSharedDeviceAligned,
@@ -174,6 +269,16 @@ struct PageInfo {
  * also backed by a single host memory allocation.
  */
 struct VirtualMemoryArea {
+    /// Gets the starting (base) address of this VMA.
+    VAddr StartAddress() const {
+        return base;
+    }
+
+    /// Gets the ending address of this VMA.
+    VAddr EndAddress() const {
+        return base + size - 1;
+    }
+
     /// Virtual base address of the region.
     VAddr base = 0;
     /// Size of the region.
@@ -181,12 +286,12 @@ struct VirtualMemoryArea {
 
     VMAType type = VMAType::Free;
     VMAPermission permissions = VMAPermission::None;
-    /// Tag returned by svcQueryMemory. Not otherwise used.
-    MemoryState meminfo_state = MemoryState::Unmapped;
+    MemoryState state = MemoryState::Unmapped;
+    MemoryAttribute attribute = MemoryAttribute::None;
 
     // Settings for type = AllocatedMemoryBlock
     /// Memory block backing this VMA.
-    std::shared_ptr<std::vector<u8>> backing_block = nullptr;
+    std::shared_ptr<PhysicalMemory> backing_block = nullptr;
     /// Offset into the backing_memory the mapping starts from.
     std::size_t offset = 0;
 
@@ -197,7 +302,7 @@ struct VirtualMemoryArea {
     // Settings for type = MMIO
     /// Physical address of the register area this VMA maps to.
     PAddr paddr = 0;
-    Memory::MemoryHookPointer mmio_handler = nullptr;
+    Common::MemoryHookPointer mmio_handler = nullptr;
 
     /// Tests if this area can be merged to the right with `next`.
     bool CanBeMergedWith(const VirtualMemoryArea& next) const;
@@ -221,7 +326,7 @@ class VMManager final {
 public:
     using VMAHandle = VMAMap::const_iterator;
 
-    VMManager();
+    explicit VMManager(Core::System& system);
     ~VMManager();
 
     /// Clears the address space map, re-initializing with a single free area.
@@ -244,8 +349,9 @@ public:
      * @param size Size of the mapping.
      * @param state MemoryState tag to attach to the VMA.
      */
-    ResultVal<VMAHandle> MapMemoryBlock(VAddr target, std::shared_ptr<std::vector<u8>> block,
-                                        std::size_t offset, u64 size, MemoryState state);
+    ResultVal<VMAHandle> MapMemoryBlock(VAddr target, std::shared_ptr<PhysicalMemory> block,
+                                        std::size_t offset, u64 size, MemoryState state,
+                                        VMAPermission perm = VMAPermission::ReadWrite);
 
     /**
      * Maps an unmanaged host memory pointer at a given address.
@@ -258,12 +364,37 @@ public:
     ResultVal<VMAHandle> MapBackingMemory(VAddr target, u8* memory, u64 size, MemoryState state);
 
     /**
-     * Finds the first free address that can hold a region of the desired size.
+     * Finds the first free memory region of the given size within
+     * the user-addressable ASLR memory region.
      *
-     * @param size Size of the desired region.
-     * @return The found free address.
+     * @param size The size of the desired region in bytes.
+     *
+     * @returns If successful, the base address of the free region with
+     *          the given size.
      */
     ResultVal<VAddr> FindFreeRegion(u64 size) const;
+
+    /**
+     * Finds the first free address range that can hold a region of the desired size
+     *
+     * @param begin The starting address of the range.
+     *              This is treated as an inclusive beginning address.
+     *
+     * @param end   The ending address of the range.
+     *              This is treated as an exclusive ending address.
+     *
+     * @param size  The size of the free region to attempt to locate,
+     *              in bytes.
+     *
+     * @returns If successful, the base address of the free region with
+     *          the given size.
+     *
+     * @returns If unsuccessful, a result containing an error code.
+     *
+     * @pre The starting address must be less than the ending address.
+     * @pre The size must not exceed the address range itself.
+     */
+    ResultVal<VAddr> FindFreeRegion(VAddr begin, VAddr end, u64 size) const;
 
     /**
      * Maps a memory-mapped IO region at a given address.
@@ -275,7 +406,7 @@ public:
      * @param mmio_handler The handler that will implement read and write for this MMIO region.
      */
     ResultVal<VMAHandle> MapMMIO(VAddr target, PAddr paddr, u64 size, MemoryState state,
-                                 Memory::MemoryHookPointer mmio_handler);
+                                 Common::MemoryHookPointer mmio_handler);
 
     /// Unmaps a range of addresses, splitting VMAs as necessary.
     ResultCode UnmapRange(VAddr target, u64 size);
@@ -286,10 +417,111 @@ public:
     /// Changes the permissions of a range of addresses, splitting VMAs as necessary.
     ResultCode ReprotectRange(VAddr target, u64 size, VMAPermission new_perms);
 
-    ResultVal<VAddr> HeapAllocate(VAddr target, u64 size, VMAPermission perms);
-    ResultCode HeapFree(VAddr target, u64 size);
-
     ResultCode MirrorMemory(VAddr dst_addr, VAddr src_addr, u64 size, MemoryState state);
+
+    /// Attempts to allocate a heap with the given size.
+    ///
+    /// @param size The size of the heap to allocate in bytes.
+    ///
+    /// @note If a heap is currently allocated, and this is called
+    ///       with a size that is equal to the size of the current heap,
+    ///       then this function will do nothing and return the current
+    ///       heap's starting address, as there's no need to perform
+    ///       any additional heap allocation work.
+    ///
+    /// @note If a heap is currently allocated, and this is called
+    ///       with a size less than the current heap's size, then
+    ///       this function will attempt to shrink the heap.
+    ///
+    /// @note If a heap is currently allocated, and this is called
+    ///       with a size larger than the current heap's size, then
+    ///       this function will attempt to extend the size of the heap.
+    ///
+    /// @returns A result indicating either success or failure.
+    ///          <p>
+    ///          If successful, this function will return a result
+    ///          containing the starting address to the allocated heap.
+    ///          <p>
+    ///          If unsuccessful, this function will return a result
+    ///          containing an error code.
+    ///
+    /// @pre The given size must lie within the allowable heap
+    ///      memory region managed by this VMManager instance.
+    ///      Failure to abide by this will result in ERR_OUT_OF_MEMORY
+    ///      being returned as the result.
+    ///
+    ResultVal<VAddr> SetHeapSize(u64 size);
+
+    /// Maps memory at a given address.
+    ///
+    /// @param target The virtual address to map memory at.
+    /// @param size   The amount of memory to map.
+    ///
+    /// @note The destination address must lie within the Map region.
+    ///
+    /// @note This function requires that SystemResourceSize be non-zero,
+    ///       however, this is just because if it were not then the
+    ///       resulting page tables could be exploited on hardware by
+    ///       a malicious program. SystemResource usage does not need
+    ///       to be explicitly checked or updated here.
+    ResultCode MapPhysicalMemory(VAddr target, u64 size);
+
+    /// Unmaps memory at a given address.
+    ///
+    /// @param target The virtual address to unmap memory at.
+    /// @param size   The amount of memory to unmap.
+    ///
+    /// @note The destination address must lie within the Map region.
+    ///
+    /// @note This function requires that SystemResourceSize be non-zero,
+    ///       however, this is just because if it were not then the
+    ///       resulting page tables could be exploited on hardware by
+    ///       a malicious program. SystemResource usage does not need
+    ///       to be explicitly checked or updated here.
+    ResultCode UnmapPhysicalMemory(VAddr target, u64 size);
+
+    /// Maps a region of memory as code memory.
+    ///
+    /// @param dst_address The base address of the region to create the aliasing memory region.
+    /// @param src_address The base address of the region to be aliased.
+    /// @param size        The total amount of memory to map in bytes.
+    ///
+    /// @pre Both memory regions lie within the actual addressable address space.
+    ///
+    /// @post After this function finishes execution, assuming success, then the address range
+    ///       [dst_address, dst_address+size) will alias the memory region,
+    ///       [src_address, src_address+size).
+    ///       <p>
+    ///       What this also entails is as follows:
+    ///          1. The aliased region gains the Locked memory attribute.
+    ///          2. The aliased region becomes read-only.
+    ///          3. The aliasing region becomes read-only.
+    ///          4. The aliasing region is created with a memory state of MemoryState::CodeModule.
+    ///
+    ResultCode MapCodeMemory(VAddr dst_address, VAddr src_address, u64 size);
+
+    /// Unmaps a region of memory designated as code module memory.
+    ///
+    /// @param dst_address The base address of the memory region aliasing the source memory region.
+    /// @param src_address The base address of the memory region being aliased.
+    /// @param size        The size of the memory region to unmap in bytes.
+    ///
+    /// @pre Both memory ranges lie within the actual addressable address space.
+    ///
+    /// @pre The memory region being unmapped has been previously been mapped
+    ///      by a call to MapCodeMemory.
+    ///
+    /// @post After execution of the function, if successful. the aliasing memory region
+    ///       will be unmapped and the aliased region will have various traits about it
+    ///       restored to what they were prior to the original mapping call preceding
+    ///       this function call.
+    ///       <p>
+    ///       What this also entails is as follows:
+    ///           1. The state of the memory region will now indicate a general heap region.
+    ///           2. All memory attributes for the memory region are cleared.
+    ///           3. Memory permissions for the region are restored to user read/write.
+    ///
+    ResultCode UnmapCodeMemory(VAddr dst_address, VAddr src_address, u64 size);
 
     /// Queries the memory manager for information about the given address.
     ///
@@ -299,20 +531,30 @@ public:
     ///
     MemoryInfo QueryMemory(VAddr address) const;
 
+    /// Sets an attribute across the given address range.
+    ///
+    /// @param address   The starting address
+    /// @param size      The size of the range to set the attribute on.
+    /// @param mask      The attribute mask
+    /// @param attribute The attribute to set across the given address range
+    ///
+    /// @returns RESULT_SUCCESS if successful
+    /// @returns ERR_INVALID_ADDRESS_STATE if the attribute could not be set.
+    ///
+    ResultCode SetMemoryAttribute(VAddr address, u64 size, MemoryAttribute mask,
+                                  MemoryAttribute attribute);
+
     /**
      * Scans all VMAs and updates the page table range of any that use the given vector as backing
      * memory. This should be called after any operation that causes reallocation of the vector.
      */
-    void RefreshMemoryBlockMappings(const std::vector<u8>* block);
+    void RefreshMemoryBlockMappings(const PhysicalMemory* block);
 
     /// Dumps the address space layout to the log, for debugging
     void LogLayout() const;
 
     /// Gets the total memory usage, used by svcGetInfo
-    u64 GetTotalMemoryUsage() const;
-
-    /// Gets the total heap usage, used by svcGetInfo
-    u64 GetTotalHeapUsage() const;
+    u64 GetTotalPhysicalMemoryAvailable() const;
 
     /// Gets the address space base address
     VAddr GetAddressSpaceBaseAddress() const;
@@ -326,17 +568,20 @@ public:
     /// Gets the address space width in bits.
     u64 GetAddressSpaceWidth() const;
 
+    /// Determines whether or not the given address range lies within the address space.
+    bool IsWithinAddressSpace(VAddr address, u64 size) const;
+
     /// Gets the base address of the ASLR region.
     VAddr GetASLRRegionBaseAddress() const;
 
     /// Gets the end address of the ASLR region.
     VAddr GetASLRRegionEndAddress() const;
 
-    /// Determines whether or not the specified address range is within the ASLR region.
-    bool IsWithinASLRRegion(VAddr address, u64 size) const;
-
     /// Gets the size of the ASLR region
     u64 GetASLRRegionSize() const;
+
+    /// Determines whether or not the specified address range is within the ASLR region.
+    bool IsWithinASLRRegion(VAddr address, u64 size) const;
 
     /// Gets the base address of the code region.
     VAddr GetCodeRegionBaseAddress() const;
@@ -347,6 +592,9 @@ public:
     /// Gets the total size of the code region in bytes.
     u64 GetCodeRegionSize() const;
 
+    /// Determines whether or not the specified range is within the code region.
+    bool IsWithinCodeRegion(VAddr address, u64 size) const;
+
     /// Gets the base address of the heap region.
     VAddr GetHeapRegionBaseAddress() const;
 
@@ -355,6 +603,16 @@ public:
 
     /// Gets the total size of the heap region in bytes.
     u64 GetHeapRegionSize() const;
+
+    /// Gets the total size of the current heap in bytes.
+    ///
+    /// @note This is the current allocated heap size, not the size
+    ///       of the region it's allowed to exist within.
+    ///
+    u64 GetCurrentHeapSize() const;
+
+    /// Determines whether or not the specified range is within the heap region.
+    bool IsWithinHeapRegion(VAddr address, u64 size) const;
 
     /// Gets the base address of the map region.
     VAddr GetMapRegionBaseAddress() const;
@@ -365,14 +623,20 @@ public:
     /// Gets the total size of the map region in bytes.
     u64 GetMapRegionSize() const;
 
-    /// Gets the base address of the new map region.
-    VAddr GetNewMapRegionBaseAddress() const;
+    /// Determines whether or not the specified range is within the map region.
+    bool IsWithinMapRegion(VAddr address, u64 size) const;
 
-    /// Gets the end address of the new map region.
-    VAddr GetNewMapRegionEndAddress() const;
+    /// Gets the base address of the stack region.
+    VAddr GetStackRegionBaseAddress() const;
 
-    /// Gets the total size of the new map region in bytes.
-    u64 GetNewMapRegionSize() const;
+    /// Gets the end address of the stack region.
+    VAddr GetStackRegionEndAddress() const;
+
+    /// Gets the total size of the stack region in bytes.
+    u64 GetStackRegionSize() const;
+
+    /// Determines whether or not the given address range is within the stack region
+    bool IsWithinStackRegion(VAddr address, u64 size) const;
 
     /// Gets the base address of the TLS IO region.
     VAddr GetTLSIORegionBaseAddress() const;
@@ -383,9 +647,12 @@ public:
     /// Gets the total size of the TLS IO region in bytes.
     u64 GetTLSIORegionSize() const;
 
+    /// Determines if the given address range is within the TLS IO region.
+    bool IsWithinTLSIORegion(VAddr address, u64 size) const;
+
     /// Each VMManager has its own page table, which is set as the main one when the owning process
     /// is scheduled.
-    Memory::PageTable page_table;
+    Common::PageTable page_table{Memory::PAGE_BITS};
 
 private:
     using VMAIter = VMAMap::iterator;
@@ -420,6 +687,11 @@ private:
      */
     VMAIter MergeAdjacent(VMAIter vma);
 
+    /**
+     * Merges two adjacent VMAs.
+     */
+    void MergeAdjacentVMA(VirtualMemoryArea& left, const VirtualMemoryArea& right);
+
     /// Updates the pages corresponding to this VMA so they match the VMA's attributes.
     void UpdatePageTableForVMA(const VirtualMemoryArea& vma);
 
@@ -434,6 +706,42 @@ private:
 
     /// Clears out the page table
     void ClearPageTable();
+
+    using CheckResults = ResultVal<std::tuple<MemoryState, VMAPermission, MemoryAttribute>>;
+
+    /// Checks if an address range adheres to the specified states provided.
+    ///
+    /// @param address         The starting address of the address range.
+    /// @param size            The size of the address range.
+    /// @param state_mask      The memory state mask.
+    /// @param state           The state to compare the individual VMA states against,
+    ///                        which is done in the form of: (vma.state & state_mask) != state.
+    /// @param permission_mask The memory permissions mask.
+    /// @param permissions     The permission to compare the individual VMA permissions against,
+    ///                        which is done in the form of:
+    ///                        (vma.permission & permission_mask) != permission.
+    /// @param attribute_mask  The memory attribute mask.
+    /// @param attribute       The memory attributes to compare the individual VMA attributes
+    ///                        against, which is done in the form of:
+    ///                        (vma.attributes & attribute_mask) != attribute.
+    /// @param ignore_mask     The memory attributes to ignore during the check.
+    ///
+    /// @returns If successful, returns a tuple containing the memory attributes
+    ///          (with ignored bits specified by ignore_mask unset), memory permissions, and
+    ///          memory state across the memory range.
+    /// @returns If not successful, returns ERR_INVALID_ADDRESS_STATE.
+    ///
+    CheckResults CheckRangeState(VAddr address, u64 size, MemoryState state_mask, MemoryState state,
+                                 VMAPermission permission_mask, VMAPermission permissions,
+                                 MemoryAttribute attribute_mask, MemoryAttribute attribute,
+                                 MemoryAttribute ignore_mask) const;
+
+    /// Gets the amount of memory currently mapped (state != Unmapped) in a range.
+    ResultVal<std::size_t> SizeOfAllocatedVMAsInRange(VAddr address, std::size_t size) const;
+
+    /// Gets the amount of memory unmappable by UnmapPhysicalMemory in a range.
+    ResultVal<std::size_t> SizeOfUnmappablePhysicalMemoryInRange(VAddr address,
+                                                                 std::size_t size) const;
 
     /**
      * A map covering the entirety of the managed address space, keyed by the `base` field of each
@@ -460,8 +768,8 @@ private:
     VAddr map_region_base = 0;
     VAddr map_region_end = 0;
 
-    VAddr new_map_region_base = 0;
-    VAddr new_map_region_end = 0;
+    VAddr stack_region_base = 0;
+    VAddr stack_region_end = 0;
 
     VAddr tls_io_region_base = 0;
     VAddr tls_io_region_end = 0;
@@ -470,10 +778,17 @@ private:
     // the entire virtual address space extents that bound the allocations, including any holes.
     // This makes deallocation and reallocation of holes fast and keeps process memory contiguous
     // in the emulator address space, allowing Memory::GetPointer to be reasonably safe.
-    std::shared_ptr<std::vector<u8>> heap_memory;
-    // The left/right bounds of the address space covered by heap_memory.
-    VAddr heap_start = 0;
+    std::shared_ptr<PhysicalMemory> heap_memory;
+
+    // The end of the currently allocated heap. This is not an inclusive
+    // end of the range. This is essentially 'base_address + current_size'.
     VAddr heap_end = 0;
-    u64 heap_used = 0;
+
+    // The current amount of memory mapped via MapPhysicalMemory.
+    // This is used here (and in Nintendo's kernel) only for debugging, and does not impact
+    // any behavior.
+    u64 physical_memory_mapped = 0;
+
+    Core::System& system;
 };
 } // namespace Kernel

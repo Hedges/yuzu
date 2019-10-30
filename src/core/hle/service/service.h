@@ -14,6 +14,10 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Namespace Service
 
+namespace Core {
+class System;
+}
+
 namespace Kernel {
 class ClientPort;
 class ServerPort;
@@ -21,11 +25,11 @@ class ServerSession;
 class HLERequestContext;
 } // namespace Kernel
 
-namespace FileSys {
-class VfsFilesystem;
-}
-
 namespace Service {
+
+namespace FileSystem {
+class FileSystemController;
+} // namespace FileSystem
 
 namespace SM {
 class ServiceManager;
@@ -86,7 +90,7 @@ private:
                            Kernel::HLERequestContext& ctx);
 
     ServiceFrameworkBase(const char* service_name, u32 max_sessions, InvokerFn* handler_invoker);
-    ~ServiceFrameworkBase();
+    ~ServiceFrameworkBase() override;
 
     void RegisterHandlersBase(const FunctionInfoBase* functions, std::size_t n);
     void ReportUnimplementedFunction(Kernel::HLERequestContext& ctx, const FunctionInfoBase* info);
@@ -178,7 +182,7 @@ private:
 };
 
 /// Initialize ServiceManager
-void Init(std::shared_ptr<SM::ServiceManager>& sm, FileSys::VfsFilesystem& vfs);
+void Init(std::shared_ptr<SM::ServiceManager>& sm, Core::System& system);
 
 /// Shutdown ServiceManager
 void Shutdown();

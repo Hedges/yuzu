@@ -28,18 +28,17 @@ u32 Stream::GetNumChannels() const {
     case Format::Multi51Channel16:
         return 6;
     }
-    LOG_CRITICAL(Audio, "Unimplemented format={}", static_cast<u32>(format));
-    UNREACHABLE();
+    UNIMPLEMENTED_MSG("Unimplemented format={}", static_cast<u32>(format));
     return {};
 }
 
-Stream::Stream(u32 sample_rate, Format format, ReleaseCallback&& release_callback,
-               SinkStream& sink_stream, std::string&& name_)
+Stream::Stream(Core::Timing::CoreTiming& core_timing, u32 sample_rate, Format format,
+               ReleaseCallback&& release_callback, SinkStream& sink_stream, std::string&& name_)
     : sample_rate{sample_rate}, format{format}, release_callback{std::move(release_callback)},
-      sink_stream{sink_stream}, name{std::move(name_)} {
+      sink_stream{sink_stream}, core_timing{core_timing}, name{std::move(name_)} {
 
-    release_event = CoreTiming::RegisterEvent(
-        name, [this](u64 userdata, int cycles_late) { ReleaseActiveBuffer(); });
+    release_event = core_timing.RegisterEvent(
+        name, [this](u64 userdata, s64 cycles_late) { ReleaseActiveBuffer(); });
 }
 
 void Stream::Play() {
@@ -49,7 +48,11 @@ void Stream::Play() {
 
 void Stream::Stop() {
     state = State::Stopped;
-    //ASSERT_MSG(false, "Unimplemented");
+    UNIMPLEMENTED();
+}
+
+void Stream::SetVolume(float volume) {
+    game_volume = volume;
 }
 
 Stream::State Stream::GetState() const {
@@ -58,18 +61,20 @@ Stream::State Stream::GetState() const {
 
 s64 Stream::GetBufferReleaseCycles(const Buffer& buffer) const {
     const std::size_t num_samples{buffer.GetSamples().size() / GetNumChannels()};
-    return CoreTiming::usToCycles((static_cast<u64>(num_samples) * 1000000) / sample_rate);
+    const auto us =
+        std::chrono::microseconds((static_cast<u64>(num_samples) * 1000000) / sample_rate);
+    return Core::Timing::usToCycles(us);
 }
 
-static void VolumeAdjustSamples(std::vector<s16>& samples) {
-    const float volume{std::clamp(Settings::values.volume, 0.0f, 1.0f)};
+static void VolumeAdjustSamples(std::vector<s16>& samples, float game_volume) {
+    const float volume{std::clamp(Settings::values.volume - (1.0f - game_volume), 0.0f, 1.0f)};
 
     if (volume == 1.0f) {
         return;
     }
 
     // Implementation of a volume slider with a dynamic range of 60 dB
-    const float volume_scale_factor{std::exp(6.90775f * volume) * 0.001f};
+    const float volume_scale_factor = volume == 0 ? 0 : std::exp(6.90775f * volume) * 0.001f;
     for (auto& sample : samples) {
         sample = static_cast<s16>(sample * volume_scale_factor);
     }
@@ -96,11 +101,11 @@ void Stream::PlayNextBuffer() {
     active_buffer = queued_buffers.front();
     queued_buffers.pop();
 
-    VolumeAdjustSamples(active_buffer->Samples());
+    VolumeAdjustSamples(active_buffer->GetSamples(), game_volume);
 
     sink_stream.EnqueueSamples(GetNumChannels(), active_buffer->GetSamples());
 
-    CoreTiming::ScheduleEventThreadsafe(GetBufferReleaseCycles(*active_buffer), release_event, {});
+    core_timing.ScheduleEvent(GetBufferReleaseCycles(*active_buffer), release_event, {});
 }
 
 void Stream::ReleaseActiveBuffer() {
@@ -120,7 +125,7 @@ bool Stream::QueueBuffer(BufferPtr&& buffer) {
 }
 
 bool Stream::ContainsBuffer(Buffer::Tag tag) const {
-    ASSERT_MSG(false, "Unimplemented");
+    UNIMPLEMENTED();
     return {};
 }
 

@@ -4,66 +4,63 @@
 
 #pragma once
 
-#include <cstddef>
 #include <memory>
-#include <tuple>
 
 #include "common/common_types.h"
+#include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/rasterizer_cache.h"
 #include "video_core/renderer_opengl/gl_resource_manager.h"
 #include "video_core/renderer_opengl/gl_stream_buffer.h"
 
+namespace Core {
+class System;
+}
+
 namespace OpenGL {
 
+class OGLStreamBuffer;
 class RasterizerOpenGL;
 
-struct CachedBufferEntry final : public RasterizerCacheObject {
-    VAddr GetAddr() const override {
-        return addr;
-    }
+class CachedBufferBlock;
 
-    std::size_t GetSizeInBytes() const override {
-        return size;
-    }
+using Buffer = std::shared_ptr<CachedBufferBlock>;
 
-    // We do not have to flush this cache as things in it are never modified by us.
-    void Flush() override {}
-
-    VAddr addr;
-    std::size_t size;
-    GLintptr offset;
-    std::size_t alignment;
-};
-
-class OGLBufferCache final : public RasterizerCache<std::shared_ptr<CachedBufferEntry>> {
+class CachedBufferBlock : public VideoCommon::BufferBlock {
 public:
-    explicit OGLBufferCache(RasterizerOpenGL& rasterizer, std::size_t size);
+    explicit CachedBufferBlock(CacheAddr cache_addr, const std::size_t size);
+    ~CachedBufferBlock();
 
-    /// Uploads data from a guest GPU address. Returns host's buffer offset where it's been
-    /// allocated.
-    GLintptr UploadMemory(Tegra::GPUVAddr gpu_addr, std::size_t size, std::size_t alignment = 4,
-                          bool cache = true);
-
-    /// Uploads from a host memory. Returns host's buffer offset where it's been allocated.
-    GLintptr UploadHostMemory(const void* raw_pointer, std::size_t size, std::size_t alignment = 4);
-
-    /// Reserves memory to be used by host's CPU. Returns mapped address and offset.
-    std::tuple<u8*, GLintptr> ReserveMemory(std::size_t size, std::size_t alignment = 4);
-
-    bool Map(std::size_t max_size);
-    void Unmap();
-
-    GLuint GetHandle() const;
-
-protected:
-    void AlignBuffer(std::size_t alignment);
+    const GLuint* GetHandle() const {
+        return &gl_buffer.handle;
+    }
 
 private:
-    OGLStreamBuffer stream_buffer;
+    OGLBuffer gl_buffer{};
+};
 
-    u8* buffer_ptr = nullptr;
-    GLintptr buffer_offset = 0;
-    GLintptr buffer_offset_base = 0;
+class OGLBufferCache final : public VideoCommon::BufferCache<Buffer, GLuint, OGLStreamBuffer> {
+public:
+    explicit OGLBufferCache(RasterizerOpenGL& rasterizer, Core::System& system,
+                            std::size_t stream_size);
+    ~OGLBufferCache();
+
+    const GLuint* GetEmptyBuffer(std::size_t) override;
+
+protected:
+    Buffer CreateBlock(CacheAddr cache_addr, std::size_t size) override;
+
+    void WriteBarrier() override;
+
+    const GLuint* ToHandle(const Buffer& buffer) override;
+
+    void UploadBlockData(const Buffer& buffer, std::size_t offset, std::size_t size,
+                         const u8* data) override;
+
+    void DownloadBlockData(const Buffer& buffer, std::size_t offset, std::size_t size,
+                           u8* data) override;
+
+    void CopyBlock(const Buffer& src, const Buffer& dst, std::size_t src_offset,
+                   std::size_t dst_offset, std::size_t size) override;
 };
 
 } // namespace OpenGL

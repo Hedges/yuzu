@@ -1,49 +1,109 @@
-# Generate cpp with Git revision from template
-# Also if this is a CI build, add the build name (ie: Nightly, Canary) to the scm_rev file as well
-set(REPO_NAME "")
-set(BUILD_VERSION "0")
-if ($ENV{CI})
-  if ($ENV{TRAVIS})
+# Add a custom command to generate a new shader_cache_version hash when any of the following files change
+# NOTE: This is an approximation of what files affect shader generation, its possible something else
+# could affect the result, but much more unlikely than the following files. Keeping a list of files
+# like this allows for much better caching since it doesn't force the user to recompile binary shaders every update
+set(VIDEO_CORE "${CMAKE_SOURCE_DIR}/src/video_core")
+if (DEFINED ENV{CI})
+  if (DEFINED ENV{TRAVIS})
     set(BUILD_REPOSITORY $ENV{TRAVIS_REPO_SLUG})
     set(BUILD_TAG $ENV{TRAVIS_TAG})
-  elseif($ENV{APPVEYOR})
+  elseif(DEFINED ENV{APPVEYOR})
     set(BUILD_REPOSITORY $ENV{APPVEYOR_REPO_NAME})
     set(BUILD_TAG $ENV{APPVEYOR_REPO_TAG_NAME})
-  endif()
-  # regex capture the string nightly or canary into CMAKE_MATCH_1
-  string(REGEX MATCH "yuzu-emu/yuzu-?(.*)" OUTVAR ${BUILD_REPOSITORY})
-  if (${CMAKE_MATCH_COUNT} GREATER 0)
-    # capitalize the first letter of each word in the repo name.
-    string(REPLACE "-" ";" REPO_NAME_LIST ${CMAKE_MATCH_1})
-    foreach(WORD ${REPO_NAME_LIST})
-      string(SUBSTRING ${WORD} 0 1 FIRST_LETTER)
-      string(SUBSTRING ${WORD} 1 -1 REMAINDER)
-      string(TOUPPER ${FIRST_LETTER} FIRST_LETTER)
-      set(REPO_NAME "${REPO_NAME}${FIRST_LETTER}${REMAINDER}")
-    endforeach()
-    if (BUILD_TAG)
-      string(REGEX MATCH "${CMAKE_MATCH_1}-([0-9]+)" OUTVAR ${BUILD_TAG})
-      if (${CMAKE_MATCH_COUNT} GREATER 0)
-        set(BUILD_VERSION ${CMAKE_MATCH_1})
-      endif()
-      if (BUILD_VERSION)
-        # This leaves a trailing space on the last word, but we actually want that
-        # because of how it's styled in the title bar.
-        set(BUILD_FULLNAME "${REPO_NAME} ${BUILD_VERSION} ")
-      else()
-        set(BUILD_FULLNAME "")
-      endif()
-    endif()
+  elseif(DEFINED ENV{AZURE})
+    set(BUILD_REPOSITORY $ENV{AZURE_REPO_NAME})
+    set(BUILD_TAG $ENV{AZURE_REPO_TAG})
   endif()
 endif()
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/scm_rev.cpp.in" "${CMAKE_CURRENT_SOURCE_DIR}/scm_rev.cpp" @ONLY)
+if (DEFINED ENV{TITLEBARFORMATIDLE})
+  set(TITLE_BAR_FORMAT_IDLE $ENV{TITLEBARFORMATIDLE})
+endif ()
+if (DEFINED ENV{TITLEBARFORMATRUNNING})
+  set(TITLE_BAR_FORMAT_RUNNING $ENV{TITLEBARFORMATRUNNING})
+endif ()
+if (DEFINED ENV{DISPLAYVERSION})
+  set(DISPLAY_VERSION $ENV{DISPLAYVERSION})
+endif ()
+add_custom_command(OUTPUT scm_rev.cpp
+    COMMAND ${CMAKE_COMMAND}
+      -DSRC_DIR="${CMAKE_SOURCE_DIR}"
+      -DBUILD_REPOSITORY="${BUILD_REPOSITORY}"
+      -DTITLE_BAR_FORMAT_IDLE="${TITLE_BAR_FORMAT_IDLE}"
+      -DTITLE_BAR_FORMAT_RUNNING="${TITLE_BAR_FORMAT_RUNNING}"
+      -DBUILD_TAG="${BUILD_TAG}"
+      -DBUILD_ID="${DISPLAY_VERSION}"
+      -P "${CMAKE_SOURCE_DIR}/CMakeModules/GenerateSCMRev.cmake"
+    DEPENDS
+      # WARNING! It was too much work to try and make a common location for this list,
+      # so if you need to change it, please update CMakeModules/GenerateSCMRev.cmake as well
+      "${VIDEO_CORE}/renderer_opengl/gl_shader_cache.cpp"
+      "${VIDEO_CORE}/renderer_opengl/gl_shader_cache.h"
+      "${VIDEO_CORE}/renderer_opengl/gl_shader_decompiler.cpp"
+      "${VIDEO_CORE}/renderer_opengl/gl_shader_decompiler.h"
+      "${VIDEO_CORE}/renderer_opengl/gl_shader_disk_cache.cpp"
+      "${VIDEO_CORE}/renderer_opengl/gl_shader_disk_cache.h"
+      "${VIDEO_CORE}/renderer_opengl/gl_shader_gen.cpp"
+      "${VIDEO_CORE}/renderer_opengl/gl_shader_gen.h"
+      "${VIDEO_CORE}/shader/decode/arithmetic.cpp"
+      "${VIDEO_CORE}/shader/decode/arithmetic_half.cpp"
+      "${VIDEO_CORE}/shader/decode/arithmetic_half_immediate.cpp"
+      "${VIDEO_CORE}/shader/decode/arithmetic_immediate.cpp"
+      "${VIDEO_CORE}/shader/decode/arithmetic_integer.cpp"
+      "${VIDEO_CORE}/shader/decode/arithmetic_integer_immediate.cpp"
+      "${VIDEO_CORE}/shader/decode/bfe.cpp"
+      "${VIDEO_CORE}/shader/decode/bfi.cpp"
+      "${VIDEO_CORE}/shader/decode/conversion.cpp"
+      "${VIDEO_CORE}/shader/decode/ffma.cpp"
+      "${VIDEO_CORE}/shader/decode/float_set.cpp"
+      "${VIDEO_CORE}/shader/decode/float_set_predicate.cpp"
+      "${VIDEO_CORE}/shader/decode/half_set.cpp"
+      "${VIDEO_CORE}/shader/decode/half_set_predicate.cpp"
+      "${VIDEO_CORE}/shader/decode/hfma2.cpp"
+      "${VIDEO_CORE}/shader/decode/image.cpp"
+      "${VIDEO_CORE}/shader/decode/integer_set.cpp"
+      "${VIDEO_CORE}/shader/decode/integer_set_predicate.cpp"
+      "${VIDEO_CORE}/shader/decode/memory.cpp"
+      "${VIDEO_CORE}/shader/decode/texture.cpp"
+      "${VIDEO_CORE}/shader/decode/other.cpp"
+      "${VIDEO_CORE}/shader/decode/predicate_set_predicate.cpp"
+      "${VIDEO_CORE}/shader/decode/predicate_set_register.cpp"
+      "${VIDEO_CORE}/shader/decode/register_set_predicate.cpp"
+      "${VIDEO_CORE}/shader/decode/shift.cpp"
+      "${VIDEO_CORE}/shader/decode/video.cpp"
+      "${VIDEO_CORE}/shader/decode/warp.cpp"
+      "${VIDEO_CORE}/shader/decode/xmad.cpp"
+      "${VIDEO_CORE}/shader/ast.cpp"
+      "${VIDEO_CORE}/shader/ast.h"
+      "${VIDEO_CORE}/shader/compiler_settings.cpp"
+      "${VIDEO_CORE}/shader/compiler_settings.h"
+      "${VIDEO_CORE}/shader/const_buffer_locker.cpp"
+      "${VIDEO_CORE}/shader/const_buffer_locker.h"
+      "${VIDEO_CORE}/shader/control_flow.cpp"
+      "${VIDEO_CORE}/shader/control_flow.h"
+      "${VIDEO_CORE}/shader/decode.cpp"
+      "${VIDEO_CORE}/shader/expr.cpp"
+      "${VIDEO_CORE}/shader/expr.h"
+      "${VIDEO_CORE}/shader/node.h"
+      "${VIDEO_CORE}/shader/node_helper.cpp"
+      "${VIDEO_CORE}/shader/node_helper.h"
+      "${VIDEO_CORE}/shader/shader_ir.cpp"
+      "${VIDEO_CORE}/shader/shader_ir.h"
+      "${VIDEO_CORE}/shader/track.cpp"
+      # and also check that the scm_rev files haven't changed
+      "${CMAKE_CURRENT_SOURCE_DIR}/scm_rev.cpp.in"
+      "${CMAKE_CURRENT_SOURCE_DIR}/scm_rev.h"
+      # technically we should regenerate if the git version changed, but its not worth the effort imo
+      "${CMAKE_SOURCE_DIR}/CMakeModules/GenerateSCMRev.cmake"
+)
 
 add_library(common STATIC
+    algorithm.h
     alignment.h
     assert.h
     detached_tasks.cpp
     detached_tasks.h
     bit_field.h
+    bit_util.h
     cityhash.cpp
     cityhash.h
     color.h
@@ -62,11 +122,18 @@ add_library(common STATIC
     logging/log.h
     logging/text_formatter.cpp
     logging/text_formatter.h
+    lz4_compression.cpp
+    lz4_compression.h
     math_util.h
+    memory_hook.cpp
+    memory_hook.h
     microprofile.cpp
     microprofile.h
     microprofileui.h
     misc.cpp
+    multi_level_queue.h
+    page_table.cpp
+    page_table.h
     param_package.cpp
     param_package.h
     quaternion.h
@@ -85,8 +152,14 @@ add_library(common STATIC
     threadsafe_queue.h
     timer.cpp
     timer.h
+    uint128.cpp
+    uint128.h
+    uuid.cpp
+    uuid.h
     vector_math.h
     web_result.h
+    zstd_compression.cpp
+    zstd_compression.h
 )
 
 if(ARCHITECTURE_x86_64)
@@ -100,3 +173,4 @@ endif()
 create_target_directory_groups(common)
 
 target_link_libraries(common PUBLIC Boost::boost fmt microprofile)
+target_link_libraries(common PRIVATE lz4_static libzstd_static)

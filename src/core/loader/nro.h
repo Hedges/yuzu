@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 #include "common/common_types.h"
-#include "core/loader/linker.h"
 #include "core/loader/loader.h"
 
 namespace FileSys {
@@ -21,7 +21,7 @@ class Process;
 namespace Loader {
 
 /// Loads an NRO file
-class AppLoader_NRO final : public AppLoader, Linker {
+class AppLoader_NRO final : public AppLoader {
 public:
     explicit AppLoader_NRO(FileSys::VirtualFile file);
     ~AppLoader_NRO() override;
@@ -37,12 +37,13 @@ public:
         return IdentifyType(file);
     }
 
-    ResultStatus Load(Kernel::Process& process) override;
+    LoadResult Load(Kernel::Process& process) override;
 
     ResultStatus ReadIcon(std::vector<u8>& buffer) override;
     ResultStatus ReadProgramId(u64& out_program_id) override;
     ResultStatus ReadRomFS(FileSys::VirtualFile& dir) override;
     ResultStatus ReadTitle(std::string& title) override;
+    ResultStatus ReadControlData(FileSys::NACP& control) override;
     bool IsRomFSUpdatable() const override;
 
 private:

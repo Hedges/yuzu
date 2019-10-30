@@ -51,44 +51,68 @@ Resolution FromResolutionFactor(float factor) {
 
 ConfigureGraphics::ConfigureGraphics(QWidget* parent)
     : QWidget(parent), ui(new Ui::ConfigureGraphics) {
-
     ui->setupUi(this);
-    this->setConfiguration();
 
-    ui->frame_limit->setEnabled(Settings::values.use_frame_limit);
-    connect(ui->toggle_frame_limit, &QCheckBox::stateChanged, ui->frame_limit,
-            &QSpinBox::setEnabled);
+    SetConfiguration();
+
     connect(ui->bg_button, &QPushButton::clicked, this, [this] {
         const QColor new_bg_color = QColorDialog::getColor(bg_color);
-        if (!new_bg_color.isValid())
+        if (!new_bg_color.isValid()) {
             return;
-        bg_color = new_bg_color;
-        ui->bg_button->setStyleSheet(
-            QString("QPushButton { background-color: %1 }").arg(bg_color.name()));
+        }
+        UpdateBackgroundColorButton(new_bg_color);
     });
 }
 
 ConfigureGraphics::~ConfigureGraphics() = default;
 
-void ConfigureGraphics::setConfiguration() {
+void ConfigureGraphics::SetConfiguration() {
+    const bool runtime_lock = !Core::System::GetInstance().IsPoweredOn();
+
     ui->resolution_factor_combobox->setCurrentIndex(
         static_cast<int>(FromResolutionFactor(Settings::values.resolution_factor)));
-    ui->toggle_frame_limit->setChecked(Settings::values.use_frame_limit);
-    ui->frame_limit->setValue(Settings::values.frame_limit);
+    ui->use_disk_shader_cache->setEnabled(runtime_lock);
+    ui->use_disk_shader_cache->setChecked(Settings::values.use_disk_shader_cache);
     ui->use_accurate_gpu_emulation->setChecked(Settings::values.use_accurate_gpu_emulation);
-    bg_color = QColor::fromRgbF(Settings::values.bg_red, Settings::values.bg_green,
-                                Settings::values.bg_blue);
-    ui->bg_button->setStyleSheet(
-        QString("QPushButton { background-color: %1 }").arg(bg_color.name()));
+    ui->use_asynchronous_gpu_emulation->setEnabled(runtime_lock);
+    ui->use_asynchronous_gpu_emulation->setChecked(Settings::values.use_asynchronous_gpu_emulation);
+    ui->force_30fps_mode->setEnabled(runtime_lock);
+    ui->force_30fps_mode->setChecked(Settings::values.force_30fps_mode);
+    UpdateBackgroundColorButton(QColor::fromRgbF(Settings::values.bg_red, Settings::values.bg_green,
+                                                 Settings::values.bg_blue));
 }
 
-void ConfigureGraphics::applyConfiguration() {
+void ConfigureGraphics::ApplyConfiguration() {
     Settings::values.resolution_factor =
         ToResolutionFactor(static_cast<Resolution>(ui->resolution_factor_combobox->currentIndex()));
-    Settings::values.use_frame_limit = ui->toggle_frame_limit->isChecked();
-    Settings::values.frame_limit = ui->frame_limit->value();
+    Settings::values.use_disk_shader_cache = ui->use_disk_shader_cache->isChecked();
     Settings::values.use_accurate_gpu_emulation = ui->use_accurate_gpu_emulation->isChecked();
+    Settings::values.use_asynchronous_gpu_emulation =
+        ui->use_asynchronous_gpu_emulation->isChecked();
+    Settings::values.force_30fps_mode = ui->force_30fps_mode->isChecked();
     Settings::values.bg_red = static_cast<float>(bg_color.redF());
     Settings::values.bg_green = static_cast<float>(bg_color.greenF());
     Settings::values.bg_blue = static_cast<float>(bg_color.blueF());
+}
+
+void ConfigureGraphics::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::LanguageChange) {
+        RetranslateUI();
+    }
+
+    QWidget::changeEvent(event);
+}
+
+void ConfigureGraphics::RetranslateUI() {
+    ui->retranslateUi(this);
+}
+
+void ConfigureGraphics::UpdateBackgroundColorButton(QColor color) {
+    bg_color = color;
+
+    QPixmap pixmap(ui->bg_button->size());
+    pixmap.fill(bg_color);
+
+    const QIcon color_icon(pixmap);
+    ui->bg_button->setIcon(color_icon);
 }

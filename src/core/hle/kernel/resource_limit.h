@@ -31,19 +31,17 @@ constexpr bool IsValidResourceType(ResourceType type) {
 
 class ResourceLimit final : public Object {
 public:
-    /**
-     * Creates a resource limit object.
-     */
-    static SharedPtr<ResourceLimit> Create(KernelCore& kernel, std::string name = "Unknown");
+    /// Creates a resource limit object.
+    static SharedPtr<ResourceLimit> Create(KernelCore& kernel);
 
     std::string GetTypeName() const override {
         return "ResourceLimit";
     }
     std::string GetName() const override {
-        return name;
+        return GetTypeName();
     }
 
-    static const HandleType HANDLE_TYPE = HandleType::ResourceLimit;
+    static constexpr HandleType HANDLE_TYPE = HandleType::ResourceLimit;
     HandleType GetHandleType() const override {
         return HANDLE_TYPE;
     }
@@ -95,9 +93,6 @@ private:
     ResourceArray limits{};
     /// Current resource limit values.
     ResourceArray values{};
-
-    /// Name of resource limit object.
-    std::string name;
 };
 
 } // namespace Kernel

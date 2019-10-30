@@ -12,7 +12,7 @@
 namespace Service::HID {
 class Controller_XPad final : public ControllerBase {
 public:
-    Controller_XPad();
+    explicit Controller_XPad(Core::System& system);
     ~Controller_XPad() override;
 
     // Called when the controller is initialized
@@ -22,7 +22,7 @@ public:
     void OnRelease() override;
 
     // When the controller is requesting an update for the shared memory
-    void OnUpdate(u8* data, std::size_t size) override;
+    void OnUpdate(const Core::Timing::CoreTiming& core_timing, u8* data, std::size_t size) override;
 
     // Called when input devices should be loaded
     void OnLoadInputDevices() override;

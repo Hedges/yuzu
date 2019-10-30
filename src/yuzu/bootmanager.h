@@ -7,9 +7,9 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
-#include <QGLWidget>
+#include <QImage>
 #include <QThread>
-#include "common/thread.h"
+#include <QWidget>
 #include "core/core.h"
 #include "core/frontend/emu_window.h"
 
@@ -20,12 +20,19 @@ class QTouchEvent;
 class GGLWidgetInternal;
 class GMainWindow;
 class GRenderWindow;
+class QSurface;
+class QOpenGLContext;
 
-class EmuThread : public QThread {
+namespace VideoCore {
+enum class LoadCallbackStage;
+}
+
+class EmuThread final : public QThread {
     Q_OBJECT
 
 public:
     explicit EmuThread(GRenderWindow* render_window);
+    ~EmuThread() override;
 
     /**
      * Start emulation (on new thread)
@@ -48,7 +55,7 @@ public:
      * @note This function is thread-safe
      */
     void SetRunning(bool running) {
-        std::unique_lock<std::mutex> lock(running_mutex);
+        std::unique_lock lock{running_mutex};
         this->running = running;
         lock.unlock();
         running_cv.notify_all();
@@ -74,7 +81,7 @@ public:
 private:
     bool exec_step = false;
     bool running = false;
-    std::atomic<bool> stop_run{false};
+    std::atomic_bool stop_run{false};
     std::mutex running_mutex;
     std::condition_variable running_cv;
 
@@ -100,13 +107,15 @@ signals:
     void DebugModeLeft();
 
     void ErrorThrown(Core::System::ResultStatus, std::string);
+
+    void LoadProgress(VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total);
 };
 
 class GRenderWindow : public QWidget, public Core::Frontend::EmuWindow {
     Q_OBJECT
 
 public:
-    GRenderWindow(QWidget* parent, EmuThread* emu_thread);
+    GRenderWindow(GMainWindow* parent, EmuThread* emu_thread);
     ~GRenderWindow() override;
 
     // EmuWindow implementation
@@ -114,30 +123,28 @@ public:
     void MakeCurrent() override;
     void DoneCurrent() override;
     void PollEvents() override;
+    std::unique_ptr<Core::Frontend::GraphicsContext> CreateSharedContext() const override;
+
+    void ForwardKeyPressEvent(QKeyEvent* event);
+    void ForwardKeyReleaseEvent(QKeyEvent* event);
 
     void BackupGeometry();
     void RestoreGeometry();
     void restoreGeometry(const QByteArray& geometry); // overridden
     QByteArray saveGeometry();                        // overridden
 
-    qreal windowPixelRatio() const;
+    qreal GetWindowPixelRatio() const;
+    std::pair<u32, u32> ScaleTouch(QPointF pos) const;
 
     void closeEvent(QCloseEvent* event) override;
-
-    void keyPressEvent(QKeyEvent* event) override;
-    void keyReleaseEvent(QKeyEvent* event) override;
-
-    void mousePressEvent(QMouseEvent* event) override;
-    void mouseMoveEvent(QMouseEvent* event) override;
-    void mouseReleaseEvent(QMouseEvent* event) override;
-
     bool event(QEvent* event) override;
-
     void focusOutEvent(QFocusEvent* event) override;
 
-    void OnClientAreaResized(unsigned width, unsigned height);
+    void OnClientAreaResized(u32 width, u32 height);
 
     void InitRenderTarget();
+
+    void CaptureScreenshot(u32 res_scale, const QString& screenshot_path);
 
 public slots:
     void moveContext(); // overridden
@@ -149,21 +156,31 @@ public slots:
 signals:
     /// Emitted when the window is closed
     void Closed();
+    void FirstFrameDisplayed();
 
 private:
-    std::pair<unsigned, unsigned> ScaleTouch(const QPointF pos) const;
     void TouchBeginEvent(const QTouchEvent* event);
     void TouchUpdateEvent(const QTouchEvent* event);
     void TouchEndEvent();
 
-    void OnMinimalClientAreaChangeRequest(
-        const std::pair<unsigned, unsigned>& minimal_size) override;
+    void OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) override;
 
-    GGLWidgetInternal* child;
+    QWidget* container = nullptr;
+    GGLWidgetInternal* child = nullptr;
 
     QByteArray geometry;
 
     EmuThread* emu_thread;
+    // Context that backs the GGLWidgetInternal (and will be used by core to render)
+    std::unique_ptr<QOpenGLContext> context;
+    // Context that will be shared between all newly created contexts. This should never be made
+    // current
+    std::unique_ptr<QOpenGLContext> shared_context;
+
+    /// Temporary storage of the screenshot taken
+    QImage screenshot_image;
+
+    bool first_frame = false;
 
 protected:
     void showEvent(QShowEvent* event) override;

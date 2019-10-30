@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "common/page_table.h"
 #include "core/core.h"
 #include "core/hle/kernel/process.h"
 #include "core/memory.h"
@@ -13,21 +14,21 @@
 namespace ArmTests {
 
 TestEnvironment::TestEnvironment(bool mutable_memory_)
-    : mutable_memory(mutable_memory_), test_memory(std::make_shared<TestMemory>(this)) {
-
-    auto process = Kernel::Process::Create(kernel, "");
-    kernel.MakeCurrentProcess(process.get());
-    page_table = &Core::CurrentProcess()->VMManager().page_table;
+    : mutable_memory(mutable_memory_),
+      test_memory(std::make_shared<TestMemory>(this)), kernel{Core::System::GetInstance()} {
+    auto process = Kernel::Process::Create(Core::System::GetInstance(), "",
+                                           Kernel::Process::ProcessType::Userland);
+    page_table = &process->VMManager().page_table;
 
     std::fill(page_table->pointers.begin(), page_table->pointers.end(), nullptr);
     page_table->special_regions.clear();
     std::fill(page_table->attributes.begin(), page_table->attributes.end(),
-              Memory::PageType::Unmapped);
+              Common::PageType::Unmapped);
 
     Memory::MapIoRegion(*page_table, 0x00000000, 0x80000000, test_memory);
     Memory::MapIoRegion(*page_table, 0x80000000, 0x80000000, test_memory);
 
-    Memory::SetCurrentPageTable(page_table);
+    kernel.MakeCurrentProcess(process.get());
 }
 
 TestEnvironment::~TestEnvironment() {

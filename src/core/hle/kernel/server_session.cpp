@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "common/assert.h"
+#include "common/common_types.h"
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
@@ -27,11 +28,9 @@ ServerSession::~ServerSession() {
     // the emulated application.
 
     // Decrease the port's connection count.
-    if (parent->port)
+    if (parent->port) {
         parent->port->ConnectionClosed();
-
-    // TODO(Subv): Wake up all the ClientSession's waiting threads and set
-    // the SendSyncRequest result to 0xC920181A.
+    }
 
     parent->server = nullptr;
 }
@@ -45,7 +44,7 @@ ResultVal<SharedPtr<ServerSession>> ServerSession::Create(KernelCore& kernel, st
     return MakeResult(std::move(server_session));
 }
 
-bool ServerSession::ShouldWait(Thread* thread) const {
+bool ServerSession::ShouldWait(const Thread* thread) const {
     // Closed sessions should never wait, an error will be returned from svcReplyAndReceive.
     if (parent->client == nullptr)
         return false;
@@ -62,42 +61,68 @@ void ServerSession::Acquire(Thread* thread) {
     pending_requesting_threads.pop_back();
 }
 
-ResultCode ServerSession::HandleDomainSyncRequest(Kernel::HLERequestContext& context) {
-    auto* const domain_message_header = context.GetDomainMessageHeader();
-    if (domain_message_header) {
-        // Set domain handlers in HLE context, used for domain objects (IPC interfaces) as inputs
-        context.SetDomainRequestHandlers(domain_request_handlers);
-
-        // If there is a DomainMessageHeader, then this is CommandType "Request"
-        const u32 object_id{context.GetDomainMessageHeader()->object_id};
-        switch (domain_message_header->command) {
-        case IPC::DomainMessageHeader::CommandType::SendMessage:
-            if (object_id > domain_request_handlers.size()) {
-                LOG_CRITICAL(IPC,
-                             "object_id {} is too big! This probably means a recent service call "
-                             "to {} needed to return a new interface!",
-                             object_id, name);
-                UNREACHABLE();
-                return RESULT_SUCCESS; // Ignore error if asserts are off
-            }
-            return domain_request_handlers[object_id - 1]->HandleSyncRequest(context);
-
-        case IPC::DomainMessageHeader::CommandType::CloseVirtualHandle: {
-            LOG_DEBUG(IPC, "CloseVirtualHandle, object_id=0x{:08X}", object_id);
-
-            domain_request_handlers[object_id - 1] = nullptr;
-
-            IPC::ResponseBuilder rb{context, 2};
-            rb.Push(RESULT_SUCCESS);
-            return RESULT_SUCCESS;
-        }
-        }
-
-        LOG_CRITICAL(IPC, "Unknown domain command={}",
-                     static_cast<int>(domain_message_header->command.Value()));
-        ASSERT(false);
+void ServerSession::ClientDisconnected() {
+    // We keep a shared pointer to the hle handler to keep it alive throughout
+    // the call to ClientDisconnected, as ClientDisconnected invalidates the
+    // hle_handler member itself during the course of the function executing.
+    std::shared_ptr<SessionRequestHandler> handler = hle_handler;
+    if (handler) {
+        // Note that after this returns, this server session's hle_handler is
+        // invalidated (set to null).
+        handler->ClientDisconnected(this);
     }
 
+    // Clean up the list of client threads with pending requests, they are unneeded now that the
+    // client endpoint is closed.
+    pending_requesting_threads.clear();
+    currently_handling = nullptr;
+}
+
+void ServerSession::AppendDomainRequestHandler(std::shared_ptr<SessionRequestHandler> handler) {
+    domain_request_handlers.push_back(std::move(handler));
+}
+
+std::size_t ServerSession::NumDomainRequestHandlers() const {
+    return domain_request_handlers.size();
+}
+
+ResultCode ServerSession::HandleDomainSyncRequest(Kernel::HLERequestContext& context) {
+    if (!context.HasDomainMessageHeader()) {
+        return RESULT_SUCCESS;
+    }
+
+    // Set domain handlers in HLE context, used for domain objects (IPC interfaces) as inputs
+    context.SetDomainRequestHandlers(domain_request_handlers);
+
+    // If there is a DomainMessageHeader, then this is CommandType "Request"
+    const auto& domain_message_header = context.GetDomainMessageHeader();
+    const u32 object_id{domain_message_header.object_id};
+    switch (domain_message_header.command) {
+    case IPC::DomainMessageHeader::CommandType::SendMessage:
+        if (object_id > domain_request_handlers.size()) {
+            LOG_CRITICAL(IPC,
+                         "object_id {} is too big! This probably means a recent service call "
+                         "to {} needed to return a new interface!",
+                         object_id, name);
+            UNREACHABLE();
+            return RESULT_SUCCESS; // Ignore error if asserts are off
+        }
+        return domain_request_handlers[object_id - 1]->HandleSyncRequest(context);
+
+    case IPC::DomainMessageHeader::CommandType::CloseVirtualHandle: {
+        LOG_DEBUG(IPC, "CloseVirtualHandle, object_id=0x{:08X}", object_id);
+
+        domain_request_handlers[object_id - 1] = nullptr;
+
+        IPC::ResponseBuilder rb{context, 2};
+        rb.Push(RESULT_SUCCESS);
+        return RESULT_SUCCESS;
+    }
+    }
+
+    LOG_CRITICAL(IPC, "Unknown domain command={}",
+                 static_cast<int>(domain_message_header.command.Value()));
+    ASSERT(false);
     return RESULT_SUCCESS;
 }
 
@@ -105,7 +130,7 @@ ResultCode ServerSession::HandleSyncRequest(SharedPtr<Thread> thread) {
     // The ServerSession received a sync request, this means that there's new data available
     // from its ClientSession, so wake up any threads that may be waiting on a svcReplyAndReceive or
     // similar.
-    Kernel::HLERequestContext context(this);
+    Kernel::HLERequestContext context(this, thread);
     u32* cmd_buf = (u32*)Memory::GetPointer(thread->GetTLSAddress());
     context.PopulateFromIncomingCommandBuffer(kernel.CurrentProcess()->GetHandleTable(), cmd_buf);
 
@@ -174,6 +199,6 @@ ServerSession::SessionPair ServerSession::CreateSessionPair(KernelCore& kernel,
     client_session->parent = parent;
     server_session->parent = parent;
 
-    return std::make_tuple(std::move(server_session), std::move(client_session));
+    return std::make_pair(std::move(server_session), std::move(client_session));
 }
 } // namespace Kernel

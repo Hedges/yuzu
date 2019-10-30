@@ -287,7 +287,6 @@ void IPSwitchCompiler::Parse() {
                 } else {
                     // hex replacement
                     const auto value = patch_line.substr(9);
-                    replace.reserve(value.size() / 2);
                     replace = Common::HexStringToVector(value, is_little_endian);
                 }
 
@@ -295,7 +294,7 @@ void IPSwitchCompiler::Parse() {
                     LOG_INFO(Loader,
                              "[IPSwitchCompiler ('{}')]     - Patching value at offset 0x{:08X} "
                              "with byte string '{}'",
-                             patch_text->GetName(), offset, Common::HexVectorToString(replace));
+                             patch_text->GetName(), offset, Common::HexToString(replace));
                 }
 
                 patch.records.insert_or_assign(offset, std::move(replace));

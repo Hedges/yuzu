@@ -24,13 +24,26 @@ namespace FileSys {
 
 union NCASectionHeader;
 
+/// Describes the type of content within an NCA archive.
 enum class NCAContentType : u8 {
+    /// Executable-related data
     Program = 0,
+
+    /// Metadata.
     Meta = 1,
+
+    /// Access control data.
     Control = 2,
+
+    /// Information related to the game manual
+    /// e.g. Legal information, etc.
     Manual = 3,
+
+    /// System data.
     Data = 4,
-    Data_Unknown5 = 5, ///< Seems to be used on some system archives
+
+    /// Data that can be accessed by applications.
+    PublicData = 5,
 };
 
 enum class NCASectionCryptoType : u8 {
@@ -74,6 +87,13 @@ inline bool IsDirectoryExeFS(const std::shared_ptr<VfsDirectory>& pfs) {
     return pfs->GetFile("main") != nullptr && pfs->GetFile("main.npdm") != nullptr;
 }
 
+inline bool IsDirectoryLogoPartition(const VirtualDir& pfs) {
+    // NintendoLogo is the static image in the top left corner while StartupMovie is the animation
+    // in the bottom right corner.
+    return pfs->GetFile("NintendoLogo.png") != nullptr &&
+           pfs->GetFile("StartupMovie.gif") != nullptr;
+}
+
 // An implementation of VfsDirectory that represents a Nintendo Content Archive (NCA) conatiner.
 // After construction, use GetStatus to determine if the file is valid and ready to be used.
 class NCA : public ReadOnlyVfsDirectory {
@@ -92,6 +112,8 @@ public:
 
     NCAContentType GetType() const;
     u64 GetTitleId() const;
+    std::array<u8, 0x10> GetRightsId() const;
+    u32 GetSDKVersion() const;
     bool IsUpdate() const;
 
     VirtualFile GetRomFS() const;
@@ -101,6 +123,8 @@ public:
 
     // Returns the base ivfc offset used in BKTR patching.
     u64 GetBaseIVFCOffset() const;
+
+    VirtualDir GetLogoPartition() const;
 
 private:
     bool CheckSupportedNCA(const NCAHeader& header);
@@ -122,6 +146,7 @@ private:
 
     VirtualFile romfs = nullptr;
     VirtualDir exefs = nullptr;
+    VirtualDir logo = nullptr;
     VirtualFile file;
     VirtualFile bktr_base_romfs;
     u64 ivfc_offset = 0;

@@ -16,7 +16,6 @@ bool Object::IsWaitable() const {
     case HandleType::ReadableEvent:
     case HandleType::Thread:
     case HandleType::Process:
-    case HandleType::Timer:
     case HandleType::ServerPort:
     case HandleType::ServerSession:
         return true;
@@ -24,7 +23,7 @@ bool Object::IsWaitable() const {
     case HandleType::Unknown:
     case HandleType::WritableEvent:
     case HandleType::SharedMemory:
-    case HandleType::AddressArbiter:
+    case HandleType::TransferMemory:
     case HandleType::ResourceLimit:
     case HandleType::ClientPort:
     case HandleType::ClientSession:
@@ -32,6 +31,7 @@ bool Object::IsWaitable() const {
     }
 
     UNREACHABLE();
+    return false;
 }
 
 } // namespace Kernel

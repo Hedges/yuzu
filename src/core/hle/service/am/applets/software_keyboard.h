@@ -9,9 +9,16 @@
 #include <vector>
 
 #include "common/common_funcs.h"
+#include "common/common_types.h"
 #include "common/swap.h"
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/am/applets/applets.h"
+
+union ResultCode;
+
+namespace Core {
+class System;
+}
 
 namespace Service::AM::Applets {
 
@@ -52,7 +59,8 @@ static_assert(sizeof(KeyboardConfig) == 0x3E0, "KeyboardConfig has incorrect siz
 
 class SoftwareKeyboard final : public Applet {
 public:
-    SoftwareKeyboard();
+    explicit SoftwareKeyboard(Core::System& system_,
+                              const Core::Frontend::SoftwareKeyboardApplet& frontend_);
     ~SoftwareKeyboard() override;
 
     void Initialize() override;
@@ -65,6 +73,8 @@ public:
     void WriteText(std::optional<std::u16string> text);
 
 private:
+    const Core::Frontend::SoftwareKeyboardApplet& frontend;
+
     KeyboardConfig config;
     std::u16string initial_text;
     bool complete = false;

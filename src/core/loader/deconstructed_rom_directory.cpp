@@ -7,6 +7,7 @@
 #include "common/common_funcs.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
+#include "core/core.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
@@ -86,25 +87,29 @@ FileType AppLoader_DeconstructedRomDirectory::IdentifyType(const FileSys::Virtua
     return FileType::Error;
 }
 
-ResultStatus AppLoader_DeconstructedRomDirectory::Load(Kernel::Process& process) {
+AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirectory::Load(
+    Kernel::Process& process) {
     if (is_loaded) {
-        return ResultStatus::ErrorAlreadyLoaded;
+        return {ResultStatus::ErrorAlreadyLoaded, {}};
     }
 
     if (dir == nullptr) {
-        if (file == nullptr)
-            return ResultStatus::ErrorNullFile;
+        if (file == nullptr) {
+            return {ResultStatus::ErrorNullFile, {}};
+        }
+
         dir = file->GetContainingDirectory();
     }
 
     // Read meta to determine title ID
     FileSys::VirtualFile npdm = dir->GetFile("main.npdm");
-    if (npdm == nullptr)
-        return ResultStatus::ErrorMissingNPDM;
+    if (npdm == nullptr) {
+        return {ResultStatus::ErrorMissingNPDM, {}};
+    }
 
-    ResultStatus result = metadata.Load(npdm);
+    const ResultStatus result = metadata.Load(npdm);
     if (result != ResultStatus::Success) {
-        return result;
+        return {result, {}};
     }
 
     if (override_update) {
@@ -114,25 +119,30 @@ ResultStatus AppLoader_DeconstructedRomDirectory::Load(Kernel::Process& process)
 
     // Reread in case PatchExeFS affected the main.npdm
     npdm = dir->GetFile("main.npdm");
-    if (npdm == nullptr)
-        return ResultStatus::ErrorMissingNPDM;
+    if (npdm == nullptr) {
+        return {ResultStatus::ErrorMissingNPDM, {}};
+    }
 
-    ResultStatus result2 = metadata.Load(npdm);
+    const ResultStatus result2 = metadata.Load(npdm);
     if (result2 != ResultStatus::Success) {
-        return result2;
+        return {result2, {}};
     }
     metadata.Print();
 
     const FileSys::ProgramAddressSpaceType arch_bits{metadata.GetAddressSpaceType()};
     if (arch_bits == FileSys::ProgramAddressSpaceType::Is32Bit ||
         arch_bits == FileSys::ProgramAddressSpaceType::Is32BitNoMap) {
-        return ResultStatus::Error32BitISA;
+        return {ResultStatus::Error32BitISA, {}};
     }
 
-    process.LoadFromMetadata(metadata);
+    if (process.LoadFromMetadata(metadata).IsError()) {
+        return {ResultStatus::ErrorUnableToParseKernelMetadata, {}};
+    }
+
     const FileSys::PatchManager pm(metadata.GetTitleID());
 
     // Load NSO modules
+    modules.clear();
     const VAddr base_address = process.VMManager().GetCodeRegionBaseAddress();
     VAddr next_load_addr = base_address;
     for (const auto& module : {"rtld", "main", "subsdk0", "subsdk1", "subsdk2", "subsdk3",
@@ -147,16 +157,15 @@ ResultStatus AppLoader_DeconstructedRomDirectory::Load(Kernel::Process& process)
         const auto tentative_next_load_addr =
             AppLoader_NSO::LoadModule(process, *module_file, load_addr, should_pass_arguments, pm);
         if (!tentative_next_load_addr) {
-            return ResultStatus::ErrorLoadingNSO;
+            return {ResultStatus::ErrorLoadingNSO, {}};
         }
 
         next_load_addr = *tentative_next_load_addr;
+        modules.insert_or_assign(load_addr, module);
         LOG_DEBUG(Loader, "loaded module {} @ 0x{:X}", module, load_addr);
         // Register module with GDBStub
         GDBStub::RegisterModule(module, load_addr, next_load_addr - 1, false);
     }
-
-    process.Run(base_address, metadata.GetMainThreadPriority(), metadata.GetMainThreadStackSize());
 
     // Find the RomFS by searching for a ".romfs" file in this directory
     const auto& files = dir->GetFiles();
@@ -168,11 +177,13 @@ ResultStatus AppLoader_DeconstructedRomDirectory::Load(Kernel::Process& process)
     // Register the RomFS if a ".romfs" file was found
     if (romfs_iter != files.end() && *romfs_iter != nullptr) {
         romfs = *romfs_iter;
-        Service::FileSystem::RegisterRomFS(std::make_unique<FileSys::RomFSFactory>(*this));
+        Core::System::GetInstance().GetFileSystemController().RegisterRomFS(
+            std::make_unique<FileSys::RomFSFactory>(*this));
     }
 
     is_loaded = true;
-    return ResultStatus::Success;
+    return {ResultStatus::Success,
+            LoadParameters{metadata.GetMainThreadPriority(), metadata.GetMainThreadStackSize()}};
 }
 
 ResultStatus AppLoader_DeconstructedRomDirectory::ReadRomFS(FileSys::VirtualFile& dir) {
@@ -203,6 +214,15 @@ ResultStatus AppLoader_DeconstructedRomDirectory::ReadTitle(std::string& title) 
 
 bool AppLoader_DeconstructedRomDirectory::IsRomFSUpdatable() const {
     return false;
+}
+
+ResultStatus AppLoader_DeconstructedRomDirectory::ReadNSOModules(Modules& modules) {
+    if (!is_loaded) {
+        return ResultStatus::ErrorNotInitialized;
+    }
+
+    modules = this->modules;
+    return ResultStatus::Success;
 }
 
 } // namespace Loader

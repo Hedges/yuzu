@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <type_traits>
 
-namespace MathUtil {
+namespace Common {
 
 constexpr float PI = 3.14159265f;
 
@@ -41,4 +41,7 @@ struct Rectangle {
     }
 };
 
-} // namespace MathUtil
+template <typename T>
+Rectangle(T, T, T, T)->Rectangle<T>;
+
+} // namespace Common

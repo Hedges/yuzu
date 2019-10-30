@@ -14,7 +14,7 @@
 namespace Service::HID {
 class Controller_Touchscreen final : public ControllerBase {
 public:
-    Controller_Touchscreen();
+    explicit Controller_Touchscreen(Core::System& system);
     ~Controller_Touchscreen() override;
 
     // Called when the controller is initialized
@@ -24,7 +24,7 @@ public:
     void OnRelease() override;
 
     // When the controller is requesting an update for the shared memory
-    void OnUpdate(u8* data, std::size_t size) override;
+    void OnUpdate(const Core::Timing::CoreTiming& core_timing, u8* data, std::size_t size) override;
 
     // Called when input devices should be loaded
     void OnLoadInputDevices() override;
@@ -33,8 +33,8 @@ private:
     struct Attributes {
         union {
             u32 raw{};
-            BitField<0, 1, u32_le> start_touch;
-            BitField<1, 1, u32_le> end_touch;
+            BitField<0, 1, u32> start_touch;
+            BitField<1, 1, u32> end_touch;
         };
     };
     static_assert(sizeof(Attributes) == 0x4, "Attributes is an invalid size");

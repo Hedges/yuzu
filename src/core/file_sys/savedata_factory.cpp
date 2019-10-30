@@ -13,20 +13,11 @@
 
 namespace FileSys {
 
-std::string SaveDataDescriptor::DebugInfo() const {
-    return fmt::format("[type={:02X}, title_id={:016X}, user_id={:016X}{:016X}, save_id={:016X}]",
-                       static_cast<u8>(type), title_id, user_id[1], user_id[0], save_id);
-}
+constexpr char SAVE_DATA_SIZE_FILENAME[] = ".yuzu_save_size";
 
-SaveDataFactory::SaveDataFactory(VirtualDir save_directory) : dir(std::move(save_directory)) {
-    // Delete all temporary storages
-    // On hardware, it is expected that temporary storage be empty at first use.
-    dir->DeleteSubdirectoryRecursive("temp");
-}
+namespace {
 
-SaveDataFactory::~SaveDataFactory() = default;
-
-ResultVal<VirtualDir> SaveDataFactory::Open(SaveDataSpaceId space, SaveDataDescriptor meta) {
+void PrintSaveDataDescriptorWarnings(SaveDataDescriptor meta) {
     if (meta.type == SaveDataType::SystemSaveData || meta.type == SaveDataType::SaveData) {
         if (meta.zero_1 != 0) {
             LOG_WARNING(Service_FS,
@@ -61,21 +52,60 @@ ResultVal<VirtualDir> SaveDataFactory::Open(SaveDataSpaceId space, SaveDataDescr
                     "non-zero ({:016X}{:016X})",
                     meta.user_id[1], meta.user_id[0]);
     }
+}
 
-    std::string save_directory =
+bool ShouldSaveDataBeAutomaticallyCreated(SaveDataSpaceId space, const SaveDataDescriptor& desc) {
+    return desc.type == SaveDataType::CacheStorage || desc.type == SaveDataType::TemporaryStorage ||
+           (space == SaveDataSpaceId::NandUser && ///< Normal Save Data -- Current Title & User
+            desc.type == SaveDataType::SaveData && desc.title_id == 0 && desc.save_id == 0);
+}
+
+} // Anonymous namespace
+
+std::string SaveDataDescriptor::DebugInfo() const {
+    return fmt::format("[type={:02X}, title_id={:016X}, user_id={:016X}{:016X}, "
+                       "save_id={:016X}, "
+                       "rank={}, index={}]",
+                       static_cast<u8>(type), title_id, user_id[1], user_id[0], save_id,
+                       static_cast<u8>(rank), index);
+}
+
+SaveDataFactory::SaveDataFactory(VirtualDir save_directory) : dir(std::move(save_directory)) {
+    // Delete all temporary storages
+    // On hardware, it is expected that temporary storage be empty at first use.
+    dir->DeleteSubdirectoryRecursive("temp");
+}
+
+SaveDataFactory::~SaveDataFactory() = default;
+
+ResultVal<VirtualDir> SaveDataFactory::Create(SaveDataSpaceId space,
+                                              const SaveDataDescriptor& meta) const {
+    PrintSaveDataDescriptorWarnings(meta);
+
+    const auto save_directory =
         GetFullPath(space, meta.type, meta.title_id, meta.user_id, meta.save_id);
 
-    // TODO(DarkLordZach): Try to not create when opening, there are dedicated create save methods.
-    // But, user_ids don't match so this works for now.
+    auto out = dir->CreateDirectoryRelative(save_directory);
+
+    // Return an error if the save data doesn't actually exist.
+    if (out == nullptr) {
+        // TODO(DarkLordZach): Find out correct error code.
+        return ResultCode(-1);
+    }
+
+    return MakeResult<VirtualDir>(std::move(out));
+}
+
+ResultVal<VirtualDir> SaveDataFactory::Open(SaveDataSpaceId space,
+                                            const SaveDataDescriptor& meta) const {
+
+    const auto save_directory =
+        GetFullPath(space, meta.type, meta.title_id, meta.user_id, meta.save_id);
 
     auto out = dir->GetDirectoryRelative(save_directory);
 
-    if (out == nullptr) {
-        // TODO(bunnei): This is a work-around to always create a save data directory if it does not
-        // already exist. This is a hack, as we do not understand yet how this works on hardware.
-        // Without a save data directory, many games will assert on boot. This should not have any
-        // bad side-effects.
-        out = dir->CreateDirectoryRelative(save_directory);
+    if (out == nullptr && ShouldSaveDataBeAutomaticallyCreated(space, meta)) {
+        return Create(space, meta);
     }
 
     // Return an error if the save data doesn't actually exist.
@@ -109,8 +139,9 @@ std::string SaveDataFactory::GetFullPath(SaveDataSpaceId space, SaveDataType typ
                                          u128 user_id, u64 save_id) {
     // According to switchbrew, if a save is of type SaveData and the title id field is 0, it should
     // be interpreted as the title id of the current process.
-    if (type == SaveDataType::SaveData && title_id == 0)
-        title_id = Core::CurrentProcess()->GetTitleID();
+    if (type == SaveDataType::SaveData && title_id == 0) {
+        title_id = Core::System::GetInstance().CurrentProcess()->GetTitleID();
+    }
 
     std::string out = GetSaveDataSpaceIdPath(space);
 
@@ -128,7 +159,36 @@ std::string SaveDataFactory::GetFullPath(SaveDataSpaceId space, SaveDataType typ
         return fmt::format("{}save/cache/{:016X}", out, title_id);
     default:
         ASSERT_MSG(false, "Unrecognized SaveDataType: {:02X}", static_cast<u8>(type));
+        return fmt::format("{}save/unknown_{:X}/{:016X}", out, static_cast<u8>(type), title_id);
     }
+}
+
+SaveDataSize SaveDataFactory::ReadSaveDataSize(SaveDataType type, u64 title_id,
+                                               u128 user_id) const {
+    const auto path = GetFullPath(SaveDataSpaceId::NandUser, type, title_id, user_id, 0);
+    const auto dir = GetOrCreateDirectoryRelative(this->dir, path);
+
+    const auto size_file = dir->GetFile(SAVE_DATA_SIZE_FILENAME);
+    if (size_file == nullptr || size_file->GetSize() < sizeof(SaveDataSize))
+        return {0, 0};
+
+    SaveDataSize out;
+    if (size_file->ReadObject(&out) != sizeof(SaveDataSize))
+        return {0, 0};
+    return out;
+}
+
+void SaveDataFactory::WriteSaveDataSize(SaveDataType type, u64 title_id, u128 user_id,
+                                        SaveDataSize new_value) const {
+    const auto path = GetFullPath(SaveDataSpaceId::NandUser, type, title_id, user_id, 0);
+    const auto dir = GetOrCreateDirectoryRelative(this->dir, path);
+
+    const auto size_file = dir->CreateFile(SAVE_DATA_SIZE_FILENAME);
+    if (size_file == nullptr)
+        return;
+
+    size_file->Resize(sizeof(SaveDataSize));
+    size_file->WriteObject(new_value);
 }
 
 } // namespace FileSys

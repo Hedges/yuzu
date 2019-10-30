@@ -15,6 +15,10 @@
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/vfs.h"
 
+namespace FileSys {
+class NACP;
+} // namespace FileSys
+
 namespace Kernel {
 struct AddressMapping;
 class Process;
@@ -33,6 +37,7 @@ enum class FileType {
     NSP,
     XCI,
     NAX,
+    KIP,
     DeconstructedRomDirectory,
 };
 
@@ -67,6 +72,7 @@ enum class ResultStatus : u16 {
     ErrorBadACIHeader,
     ErrorBadFileAccessControl,
     ErrorBadFileAccessHeader,
+    ErrorBadKernelCapabilityDescriptors,
     ErrorBadPFSHeader,
     ErrorIncorrectPFSFileSize,
     ErrorBadNCAHeader,
@@ -89,6 +95,7 @@ enum class ResultStatus : u16 {
     ErrorNullFile,
     ErrorMissingNPDM,
     Error32BitISA,
+    ErrorUnableToParseKernelMetadata,
     ErrorNoRomFS,
     ErrorIncorrectELFFileSize,
     ErrorLoadingNRO,
@@ -118,6 +125,10 @@ enum class ResultStatus : u16 {
     ErrorBadSubsectionBuckets,
     ErrorMissingBKTRBaseRomFS,
     ErrorNoPackedUpdate,
+    ErrorBadKIPHeader,
+    ErrorBLZDecompressionFailed,
+    ErrorBadINIHeader,
+    ErrorINITooManyKIPs,
 };
 
 std::ostream& operator<<(std::ostream& os, ResultStatus status);
@@ -125,6 +136,12 @@ std::ostream& operator<<(std::ostream& os, ResultStatus status);
 /// Interface for loading an application
 class AppLoader : NonCopyable {
 public:
+    struct LoadParameters {
+        s32 main_thread_priority;
+        u64 main_thread_stack_size;
+    };
+    using LoadResult = std::pair<ResultStatus, std::optional<LoadParameters>>;
+
     explicit AppLoader(FileSys::VirtualFile file);
     virtual ~AppLoader();
 
@@ -139,18 +156,7 @@ public:
      * @param process The newly created process.
      * @return The status result of the operation.
      */
-    virtual ResultStatus Load(Kernel::Process& process) = 0;
-
-    /**
-     * Loads the system mode that this application needs.
-     * This function defaults to 2 (96MB allocated to the application) if it can't read the
-     * information.
-     * @returns A pair with the optional system mode, and and the status.
-     */
-    virtual std::pair<std::optional<u32>, ResultStatus> LoadKernelSystemMode() {
-        // 96MB allocated to the application.
-        return std::make_pair(2, ResultStatus::Success);
-    }
+    virtual LoadResult Load(Kernel::Process& process) = 0;
 
     /**
      * Get the code (typically .code section) of the application
@@ -172,6 +178,8 @@ public:
 
     /**
      * Get the banner (typically banner section) of the application
+     * In the context of NX, this is the animation that displays in the bottom right of the screen
+     * when a game boots. Stored in GIF format.
      * @param buffer Reference to buffer to store data
      * @return ResultStatus result of function
      */
@@ -181,6 +189,8 @@ public:
 
     /**
      * Get the logo (typically logo section) of the application
+     * In the context of NX, this is the static image that displays in the top left of the screen
+     * when a game boots. Stored in JPEG format.
      * @param buffer Reference to buffer to store data
      * @return ResultStatus result of function
      */
@@ -245,11 +255,26 @@ public:
     }
 
     /**
-     * Get the developer of the application
-     * @param developer Reference to store the application developer into
+     * Get the control data (CNMT) of the application
+     * @param control Reference to store the application control data into
      * @return ResultStatus result of function
      */
-    virtual ResultStatus ReadDeveloper(std::string& developer) {
+    virtual ResultStatus ReadControlData(FileSys::NACP& control) {
+        return ResultStatus::ErrorNotImplemented;
+    }
+
+    /**
+     * Get the RomFS of the manual of the application
+     * @param file The raw manual RomFS of the game
+     * @return ResultStatus result of function
+     */
+    virtual ResultStatus ReadManualRomFS(FileSys::VirtualFile& file) {
+        return ResultStatus::ErrorNotImplemented;
+    }
+
+    using Modules = std::map<VAddr, std::string>;
+
+    virtual ResultStatus ReadNSOModules(Modules& modules) {
         return ResultStatus::ErrorNotImplemented;
     }
 

@@ -17,10 +17,10 @@
 class EmuThread;
 
 namespace Kernel {
+class HandleTable;
 class ReadableEvent;
 class WaitObject;
 class Thread;
-class Timer;
 } // namespace Kernel
 
 class WaitTreeThread;
@@ -73,7 +73,7 @@ public:
 class WaitTreeMutexInfo : public WaitTreeExpandableItem {
     Q_OBJECT
 public:
-    explicit WaitTreeMutexInfo(VAddr mutex_address);
+    explicit WaitTreeMutexInfo(VAddr mutex_address, const Kernel::HandleTable& handle_table);
     ~WaitTreeMutexInfo() override;
 
     QString GetText() const override;
@@ -146,15 +146,6 @@ class WaitTreeEvent : public WaitTreeWaitObject {
 public:
     explicit WaitTreeEvent(const Kernel::ReadableEvent& object);
     ~WaitTreeEvent() override;
-
-    std::vector<std::unique_ptr<WaitTreeItem>> GetChildren() const override;
-};
-
-class WaitTreeTimer : public WaitTreeWaitObject {
-    Q_OBJECT
-public:
-    explicit WaitTreeTimer(const Kernel::Timer& object);
-    ~WaitTreeTimer() override;
 
     std::vector<std::unique_ptr<WaitTreeItem>> GetChildren() const override;
 };

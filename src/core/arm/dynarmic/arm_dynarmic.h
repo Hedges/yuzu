@@ -12,23 +12,17 @@
 #include "core/arm/exclusive_monitor.h"
 #include "core/arm/unicorn/arm_unicorn.h"
 
-namespace Memory {
-struct PageTable;
-}
-
 namespace Core {
 
 class ARM_Dynarmic_Callbacks;
 class DynarmicExclusiveMonitor;
+class System;
 
 class ARM_Dynarmic final : public ARM_Interface {
 public:
-    ARM_Dynarmic(ExclusiveMonitor& exclusive_monitor, std::size_t core_index);
-    ~ARM_Dynarmic();
+    ARM_Dynarmic(System& system, ExclusiveMonitor& exclusive_monitor, std::size_t core_index);
+    ~ARM_Dynarmic() override;
 
-    void MapBackingMemory(VAddr address, std::size_t size, u8* memory,
-                          Kernel::VMAPermission perms) override;
-    void UnmapMemory(u64 address, std::size_t size) override;
     void SetPC(u64 pc) override;
     u64 GetPC() const override;
     u64 GetReg(int index) const override;
@@ -51,10 +45,12 @@ public:
     void ClearExclusiveState() override;
 
     void ClearInstructionCache() override;
-    void PageTableChanged() override;
+    void PageTableChanged(Common::PageTable& new_page_table,
+                          std::size_t new_address_space_size_in_bits) override;
 
 private:
-    std::unique_ptr<Dynarmic::A64::Jit> MakeJit() const;
+    std::unique_ptr<Dynarmic::A64::Jit> MakeJit(Common::PageTable& page_table,
+                                                std::size_t address_space_bits) const;
 
     friend class ARM_Dynarmic_Callbacks;
     std::unique_ptr<ARM_Dynarmic_Callbacks> cb;
@@ -62,15 +58,14 @@ private:
     ARM_Unicorn inner_unicorn;
 
     std::size_t core_index;
+    System& system;
     DynarmicExclusiveMonitor& exclusive_monitor;
-
-    Memory::PageTable* current_page_table = nullptr;
 };
 
 class DynarmicExclusiveMonitor final : public ExclusiveMonitor {
 public:
     explicit DynarmicExclusiveMonitor(std::size_t core_count);
-    ~DynarmicExclusiveMonitor();
+    ~DynarmicExclusiveMonitor() override;
 
     void SetExclusive(std::size_t core_index, VAddr addr) override;
     void ClearExclusive() override;

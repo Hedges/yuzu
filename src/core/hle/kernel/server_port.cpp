@@ -26,7 +26,11 @@ ResultVal<SharedPtr<ServerSession>> ServerPort::Accept() {
     return MakeResult(std::move(session));
 }
 
-bool ServerPort::ShouldWait(Thread* thread) const {
+void ServerPort::AppendPendingSession(SharedPtr<ServerSession> pending_session) {
+    pending_sessions.push_back(std::move(pending_session));
+}
+
+bool ServerPort::ShouldWait(const Thread* thread) const {
     // If there are no pending sessions, we wait until a new one is added.
     return pending_sessions.empty();
 }
@@ -35,9 +39,8 @@ void ServerPort::Acquire(Thread* thread) {
     ASSERT_MSG(!ShouldWait(thread), "object unavailable!");
 }
 
-std::tuple<SharedPtr<ServerPort>, SharedPtr<ClientPort>> ServerPort::CreatePortPair(
-    KernelCore& kernel, u32 max_sessions, std::string name) {
-
+ServerPort::PortPair ServerPort::CreatePortPair(KernelCore& kernel, u32 max_sessions,
+                                                std::string name) {
     SharedPtr<ServerPort> server_port(new ServerPort(kernel));
     SharedPtr<ClientPort> client_port(new ClientPort(kernel));
 
@@ -47,7 +50,7 @@ std::tuple<SharedPtr<ServerPort>, SharedPtr<ClientPort>> ServerPort::CreatePortP
     client_port->max_sessions = max_sessions;
     client_port->active_sessions = 0;
 
-    return std::make_tuple(std::move(server_port), std::move(client_port));
+    return std::make_pair(std::move(server_port), std::move(client_port));
 }
 
 } // namespace Kernel

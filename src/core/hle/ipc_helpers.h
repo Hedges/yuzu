@@ -18,9 +18,12 @@
 #include "core/hle/kernel/client_session.h"
 #include "core/hle/kernel/hle_ipc.h"
 #include "core/hle/kernel/object.h"
-#include "core/hle/kernel/server_port.h"
+#include "core/hle/kernel/server_session.h"
+#include "core/hle/result.h"
 
 namespace IPC {
+
+constexpr ResultCode ERR_REMOTE_PROCESS_DEAD{ErrorModule::HIPC, 301};
 
 class RequestHelperBase {
 protected:
@@ -136,10 +139,8 @@ public:
             context->AddDomainObject(std::move(iface));
         } else {
             auto& kernel = Core::System::GetInstance().Kernel();
-            auto sessions =
+            auto [server, client] =
                 Kernel::ServerSession::CreateSessionPair(kernel, iface->GetServiceName());
-            auto server = std::get<Kernel::SharedPtr<Kernel::ServerSession>>(sessions);
-            auto client = std::get<Kernel::SharedPtr<Kernel::ClientSession>>(sessions);
             iface->ClientConnected(server);
             context->AddMoveObject(std::move(client));
         }
@@ -217,6 +218,11 @@ private:
 /// Push ///
 
 template <>
+inline void ResponseBuilder::Push(s32 value) {
+    cmdbuf[index++] = static_cast<u32>(value);
+}
+
+template <>
 inline void ResponseBuilder::Push(u32 value) {
     cmdbuf[index++] = value;
 }
@@ -235,6 +241,22 @@ inline void ResponseBuilder::Push(ResultCode value) {
 }
 
 template <>
+inline void ResponseBuilder::Push(s8 value) {
+    PushRaw(value);
+}
+
+template <>
+inline void ResponseBuilder::Push(s16 value) {
+    PushRaw(value);
+}
+
+template <>
+inline void ResponseBuilder::Push(s64 value) {
+    Push(static_cast<u32>(value));
+    Push(static_cast<u32>(value >> 32));
+}
+
+template <>
 inline void ResponseBuilder::Push(u8 value) {
     PushRaw(value);
 }
@@ -248,6 +270,20 @@ template <>
 inline void ResponseBuilder::Push(u64 value) {
     Push(static_cast<u32>(value));
     Push(static_cast<u32>(value >> 32));
+}
+
+template <>
+inline void ResponseBuilder::Push(float value) {
+    u32 integral;
+    std::memcpy(&integral, &value, sizeof(u32));
+    Push(integral);
+}
+
+template <>
+inline void ResponseBuilder::Push(double value) {
+    u64 integral;
+    std::memcpy(&integral, &value, sizeof(u64));
+    Push(integral);
 }
 
 template <>
@@ -329,7 +365,7 @@ public:
     template <class T>
     std::shared_ptr<T> PopIpcInterface() {
         ASSERT(context->Session()->IsDomain());
-        ASSERT(context->GetDomainMessageHeader()->input_object_count > 0);
+        ASSERT(context->GetDomainMessageHeader().input_object_count > 0);
         return context->GetDomainRequestHandler<T>(Pop<u32>() - 1);
     }
 };
@@ -339,6 +375,11 @@ public:
 template <>
 inline u32 RequestParser::Pop() {
     return cmdbuf[index++];
+}
+
+template <>
+inline s32 RequestParser::Pop() {
+    return static_cast<s32>(Pop<u32>());
 }
 
 template <typename T>
@@ -372,8 +413,34 @@ inline u64 RequestParser::Pop() {
 }
 
 template <>
+inline s8 RequestParser::Pop() {
+    return static_cast<s8>(Pop<u8>());
+}
+
+template <>
+inline s16 RequestParser::Pop() {
+    return static_cast<s16>(Pop<u16>());
+}
+
+template <>
 inline s64 RequestParser::Pop() {
     return static_cast<s64>(Pop<u64>());
+}
+
+template <>
+inline float RequestParser::Pop() {
+    const u32 value = Pop<u32>();
+    float real;
+    std::memcpy(&real, &value, sizeof(real));
+    return real;
+}
+
+template <>
+inline double RequestParser::Pop() {
+    const u64 value = Pop<u64>();
+    double real;
+    std::memcpy(&real, &value, sizeof(real));
+    return real;
 }
 
 template <>

@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <map>
 #include <optional>
 #include <string>
@@ -345,11 +346,40 @@ struct TouchscreenInput {
     u32 rotation_angle;
 };
 
+enum class NANDTotalSize : u64 {
+    S29_1GB = 0x747C00000ULL,
+};
+
+enum class NANDUserSize : u64 {
+    S26GB = 0x680000000ULL,
+};
+
+enum class NANDSystemSize : u64 {
+    S2_5GB = 0xA0000000,
+};
+
+enum class SDMCSize : u64 {
+    S1GB = 0x40000000,
+    S2GB = 0x80000000,
+    S4GB = 0x100000000ULL,
+    S8GB = 0x200000000ULL,
+    S16GB = 0x400000000ULL,
+    S32GB = 0x800000000ULL,
+    S64GB = 0x1000000000ULL,
+    S128GB = 0x2000000000ULL,
+    S256GB = 0x4000000000ULL,
+    S1TB = 0x10000000000ULL,
+};
+
 struct Values {
     // System
     bool use_docked_mode;
-    bool enable_nfc;
     std::optional<u32> rng_seed;
+    // Measured in seconds since epoch
+    std::optional<std::chrono::seconds> custom_rtc;
+    // Set on game boot, reset on stop. Seconds difference between current time and `custom_rtc`
+    std::chrono::seconds custom_rtc_differential;
+
     s32 current_user;
     s32 language_index;
 
@@ -373,19 +403,26 @@ struct Values {
     std::atomic_bool is_device_reload_pending{true};
 
     // Core
-    bool use_cpu_jit;
     bool use_multi_core;
 
     // Data Storage
     bool use_virtual_sd;
-    std::string nand_dir;
-    std::string sdmc_dir;
+    bool gamecard_inserted;
+    bool gamecard_current_game;
+    std::string gamecard_path;
+    NANDTotalSize nand_total_size;
+    NANDSystemSize nand_system_size;
+    NANDUserSize nand_user_size;
+    SDMCSize sdmc_size;
 
     // Renderer
     float resolution_factor;
     bool use_frame_limit;
     u16 frame_limit;
+    bool use_disk_shader_cache;
     bool use_accurate_gpu_emulation;
+    bool use_asynchronous_gpu_emulation;
+    bool force_30fps_mode;
 
     float bg_red;
     float bg_green;
@@ -402,11 +439,18 @@ struct Values {
     float volume;
 
     // Debugging
+    bool record_frame_times;
     bool use_gdbstub;
     u16 gdbstub_port;
     std::string program_args;
     bool dump_exefs;
     bool dump_nso;
+    bool reporting_services;
+    bool quest_flag;
+
+    // BCAT
+    std::string bcat_backend;
+    bool bcat_boxcat_local;
 
     // WebService
     bool enable_telemetry;
@@ -419,4 +463,5 @@ struct Values {
 } extern values;
 
 void Apply();
+void LogSettings();
 } // namespace Settings

@@ -14,15 +14,16 @@ namespace Kernel {
 ReadableEvent::ReadableEvent(KernelCore& kernel) : WaitObject{kernel} {}
 ReadableEvent::~ReadableEvent() = default;
 
-bool ReadableEvent::ShouldWait(Thread* thread) const {
+bool ReadableEvent::ShouldWait(const Thread* thread) const {
     return !signaled;
 }
 
 void ReadableEvent::Acquire(Thread* thread) {
     ASSERT_MSG(!ShouldWait(thread), "object unavailable!");
 
-    if (reset_type == ResetType::OneShot)
+    if (reset_type == ResetType::Automatic) {
         signaled = false;
+    }
 }
 
 void ReadableEvent::Signal() {
@@ -42,13 +43,6 @@ ResultCode ReadableEvent::Reset() {
     Clear();
 
     return RESULT_SUCCESS;
-}
-
-void ReadableEvent::WakeupAllWaitingThreads() {
-    WaitObject::WakeupAllWaitingThreads();
-
-    if (reset_type == ResetType::Pulse)
-        signaled = false;
 }
 
 } // namespace Kernel

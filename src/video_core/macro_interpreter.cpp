@@ -4,17 +4,99 @@
 
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "common/microprofile.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/macro_interpreter.h"
 
+MICROPROFILE_DEFINE(MacroInterp, "GPU", "Execute macro interpreter", MP_RGB(128, 128, 192));
+
 namespace Tegra {
+namespace {
+enum class Operation : u32 {
+    ALU = 0,
+    AddImmediate = 1,
+    ExtractInsert = 2,
+    ExtractShiftLeftImmediate = 3,
+    ExtractShiftLeftRegister = 4,
+    Read = 5,
+    Unused = 6, // This operation doesn't seem to be a valid encoding.
+    Branch = 7,
+};
+} // Anonymous namespace
+
+enum class MacroInterpreter::ALUOperation : u32 {
+    Add = 0,
+    AddWithCarry = 1,
+    Subtract = 2,
+    SubtractWithBorrow = 3,
+    // Operations 4-7 don't seem to be valid encodings.
+    Xor = 8,
+    Or = 9,
+    And = 10,
+    AndNot = 11,
+    Nand = 12
+};
+
+enum class MacroInterpreter::ResultOperation : u32 {
+    IgnoreAndFetch = 0,
+    Move = 1,
+    MoveAndSetMethod = 2,
+    FetchAndSend = 3,
+    MoveAndSend = 4,
+    FetchAndSetMethod = 5,
+    MoveAndSetMethodFetchAndSend = 6,
+    MoveAndSetMethodSend = 7
+};
+
+enum class MacroInterpreter::BranchCondition : u32 {
+    Zero = 0,
+    NotZero = 1,
+};
+
+union MacroInterpreter::Opcode {
+    u32 raw;
+    BitField<0, 3, Operation> operation;
+    BitField<4, 3, ResultOperation> result_operation;
+    BitField<4, 1, BranchCondition> branch_condition;
+    // If set on a branch, then the branch doesn't have a delay slot.
+    BitField<5, 1, u32> branch_annul;
+    BitField<7, 1, u32> is_exit;
+    BitField<8, 3, u32> dst;
+    BitField<11, 3, u32> src_a;
+    BitField<14, 3, u32> src_b;
+    // The signed immediate overlaps the second source operand and the alu operation.
+    BitField<14, 18, s32> immediate;
+
+    BitField<17, 5, ALUOperation> alu_operation;
+
+    // Bitfield instructions data
+    BitField<17, 5, u32> bf_src_bit;
+    BitField<22, 5, u32> bf_size;
+    BitField<27, 5, u32> bf_dst_bit;
+
+    u32 GetBitfieldMask() const {
+        return (1 << bf_size) - 1;
+    }
+
+    s32 GetBranchTarget() const {
+        return static_cast<s32>(immediate * sizeof(u32));
+    }
+};
 
 MacroInterpreter::MacroInterpreter(Engines::Maxwell3D& maxwell3d) : maxwell3d(maxwell3d) {}
 
-void MacroInterpreter::Execute(u32 offset, std::vector<u32> parameters) {
+void MacroInterpreter::Execute(u32 offset, std::size_t num_parameters, const u32* parameters) {
+    MICROPROFILE_SCOPE(MacroInterp);
     Reset();
+
     registers[1] = parameters[0];
-    this->parameters = std::move(parameters);
+
+    if (num_parameters > parameters_capacity) {
+        parameters_capacity = num_parameters;
+        this->parameters = std::make_unique<u32[]>(num_parameters);
+    }
+    std::memcpy(this->parameters.get(), parameters, num_parameters * sizeof(u32));
+    this->num_parameters = num_parameters;
 
     // Execute the code until we hit an exit condition.
     bool keep_executing = true;
@@ -23,7 +105,7 @@ void MacroInterpreter::Execute(u32 offset, std::vector<u32> parameters) {
     }
 
     // Assert the the macro used all the input parameters
-    ASSERT(next_parameter_index == this->parameters.size());
+    ASSERT(next_parameter_index == num_parameters);
 }
 
 void MacroInterpreter::Reset() {
@@ -31,7 +113,7 @@ void MacroInterpreter::Reset() {
     pc = 0;
     delayed_pc = {};
     method_address.raw = 0;
-    parameters.clear();
+    num_parameters = 0;
     // The next parameter index starts at 1, because $r1 already has the value of the first
     // parameter.
     next_parameter_index = 1;
@@ -118,10 +200,10 @@ bool MacroInterpreter::Step(u32 offset, bool is_delay_slot) {
                           static_cast<u32>(opcode.operation.Value()));
     }
 
-    if (opcode.is_exit) {
+    // An instruction with the Exit flag will not actually
+    // cause an exit if it's executed inside a delay slot.
+    if (opcode.is_exit && !is_delay_slot) {
         // Exit has a delay slot, execute the next instruction
-        // Note: Executing an exit during a branch delay slot will cause the instruction at the
-        // branch target to be executed before exiting.
         Step(offset, true);
         return false;
     }
@@ -171,6 +253,7 @@ u32 MacroInterpreter::GetALUResult(ALUOperation operation, u32 src_a, u32 src_b)
 
     default:
         UNIMPLEMENTED_MSG("Unimplemented ALU operation {}", static_cast<u32>(operation));
+        return 0;
     }
 }
 
@@ -222,27 +305,22 @@ void MacroInterpreter::ProcessResult(ResultOperation operation, u32 reg, u32 res
 }
 
 u32 MacroInterpreter::FetchParameter() {
-    ASSERT(next_parameter_index < parameters.size());
+    ASSERT(next_parameter_index < num_parameters);
     return parameters[next_parameter_index++];
 }
 
 u32 MacroInterpreter::GetRegister(u32 register_id) const {
-    // Register 0 is supposed to always return 0.
-    if (register_id == 0)
-        return 0;
-
-    ASSERT(register_id < registers.size());
-    return registers[register_id];
+    return registers.at(register_id);
 }
 
 void MacroInterpreter::SetRegister(u32 register_id, u32 value) {
-    // Register 0 is supposed to always return 0. NOP is implemented as a store to the zero
-    // register.
-    if (register_id == 0)
+    // Register 0 is hardwired as the zero register.
+    // Ensure no writes to it actually occur.
+    if (register_id == 0) {
         return;
+    }
 
-    ASSERT(register_id < registers.size());
-    registers[register_id] = value;
+    registers.at(register_id) = value;
 }
 
 void MacroInterpreter::SetMethodAddress(u32 address) {
@@ -250,7 +328,7 @@ void MacroInterpreter::SetMethodAddress(u32 address) {
 }
 
 void MacroInterpreter::Send(u32 value) {
-    maxwell3d.CallMethod({method_address.address, value});
+    maxwell3d.CallMethodFromMME({method_address.address, value});
     // Increment the method address by the method increment.
     method_address.address.Assign(method_address.address.Value() +
                                   method_address.increment.Value());
@@ -268,6 +346,7 @@ bool MacroInterpreter::EvaluateBranchCondition(BranchCondition cond, u32 value) 
         return value != 0;
     }
     UNREACHABLE();
+    return true;
 }
 
 } // namespace Tegra

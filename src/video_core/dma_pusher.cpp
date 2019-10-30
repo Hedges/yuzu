@@ -8,6 +8,7 @@
 #include "video_core/dma_pusher.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/gpu.h"
+#include "video_core/memory_manager.h"
 
 namespace Tegra {
 
@@ -21,7 +22,7 @@ void DmaPusher::DispatchCalls() {
     MICROPROFILE_SCOPE(DispatchCalls);
 
     // On entering GPU code, assume all memory may be touched by the ARM core.
-    gpu.Maxwell3D().dirty_flags.OnMemoryWrite();
+    gpu.Maxwell3D().dirty.OnMemoryWrite();
 
     dma_pushbuffer_subindex = 0;
 
@@ -30,19 +31,44 @@ void DmaPusher::DispatchCalls() {
             break;
         }
     }
+    gpu.FlushCommands();
 }
 
 bool DmaPusher::Step() {
-    if (dma_get != dma_put) {
-        // Push buffer non-empty, read a word
-        const CommandHeader command_header{
-            Memory::Read32(*gpu.MemoryManager().GpuToCpuAddress(dma_get))};
+    if (!ib_enable || dma_pushbuffer.empty()) {
+        // pushbuffer empty and IB empty or nonexistent - nothing to do
+        return false;
+    }
 
-        dma_get += sizeof(u32);
+    const CommandList& command_list{dma_pushbuffer.front()};
+    ASSERT_OR_EXECUTE(!command_list.empty(), {
+        // Somehow the command_list is empty, in order to avoid a crash
+        // We ignore it and assume its size is 0.
+        dma_pushbuffer.pop();
+        dma_pushbuffer_subindex = 0;
+        return true;
+    });
+    const CommandListHeader command_list_header{command_list[dma_pushbuffer_subindex++]};
+    GPUVAddr dma_get = command_list_header.addr;
+    GPUVAddr dma_put = dma_get + command_list_header.size * sizeof(u32);
+    bool non_main = command_list_header.is_non_main;
 
-        if (!non_main) {
-            dma_mget = dma_get;
-        }
+    if (dma_pushbuffer_subindex >= command_list.size()) {
+        // We've gone through the current list, remove it from the queue
+        dma_pushbuffer.pop();
+        dma_pushbuffer_subindex = 0;
+    }
+
+    if (command_list_header.size == 0) {
+        return true;
+    }
+
+    // Push buffer non-empty, read a word
+    command_headers.resize(command_list_header.size);
+    gpu.MemoryManager().ReadBlockUnsafe(dma_get, command_headers.data(),
+                                        command_list_header.size * sizeof(u32));
+
+    for (const CommandHeader& command_header : command_headers) {
 
         // now, see if we're in the middle of a command
         if (dma_state.length_pending) {
@@ -87,24 +113,15 @@ bool DmaPusher::Step() {
                 dma_state.non_incrementing = false;
                 dma_increment_once = true;
                 break;
+            default:
+                break;
             }
         }
-    } else if (ib_enable && !dma_pushbuffer.empty()) {
-        // Current pushbuffer empty, but we have more IB entries to read
-        const CommandList& command_list{dma_pushbuffer.front()};
-        const CommandListHeader& command_list_header{command_list[dma_pushbuffer_subindex++]};
-        dma_get = command_list_header.addr;
-        dma_put = dma_get + command_list_header.size * sizeof(u32);
-        non_main = command_list_header.is_non_main;
+    }
 
-        if (dma_pushbuffer_subindex >= command_list.size()) {
-            // We've gone through the current list, remove it from the queue
-            dma_pushbuffer.pop();
-            dma_pushbuffer_subindex = 0;
-        }
-    } else {
-        // Otherwise, pushbuffer empty and IB empty or nonexistent - nothing to do
-        return {};
+    if (!non_main) {
+        // TODO (degasus): This is dead code, as dma_mget is never read.
+        dma_mget = dma_put;
     }
 
     return true;

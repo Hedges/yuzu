@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <vector>
 #include "common/bit_field.h"
 #include "common/common_types.h"
 #include "common/swap.h"
@@ -38,10 +39,17 @@ enum class ProgramFilePermission : u64 {
  */
 class ProgramMetadata {
 public:
+    using KernelCapabilityDescriptors = std::vector<u32>;
+
     ProgramMetadata();
     ~ProgramMetadata();
 
     Loader::ResultStatus Load(VirtualFile file);
+
+    // Load from parameters instead of NPDM file, used for KIP
+    void LoadManual(bool is_64_bit, ProgramAddressSpaceType address_space, u8 main_thread_prio,
+                    u8 main_thread_core, u32 main_thread_stack_size, u64 title_id,
+                    u64 filesystem_permissions, KernelCapabilityDescriptors capabilities);
 
     bool Is64BitProgram() const;
     ProgramAddressSpaceType GetAddressSpaceType() const;
@@ -50,11 +58,12 @@ public:
     u32 GetMainThreadStackSize() const;
     u64 GetTitleID() const;
     u64 GetFilesystemPermissions() const;
+    u32 GetSystemResourceSize() const;
+    const KernelCapabilityDescriptors& GetKernelCapabilities() const;
 
     void Print() const;
 
 private:
-    // TODO(DarkLordZach): BitField is not trivially copyable.
     struct Header {
         std::array<char, 4> magic;
         std::array<u8, 8> reserved;
@@ -68,7 +77,8 @@ private:
         u8 reserved_3;
         u8 main_thread_priority;
         u8 main_thread_cpu;
-        std::array<u8, 8> reserved_4;
+        std::array<u8, 4> reserved_4;
+        u32_le system_resource_size;
         u32_le process_category;
         u32_le main_stack_size;
         std::array<u8, 0x10> application_name;
@@ -81,7 +91,6 @@ private:
 
     static_assert(sizeof(Header) == 0x80, "NPDM header structure size is wrong");
 
-    // TODO(DarkLordZach): BitField is not trivially copyable.
     struct AcidHeader {
         std::array<u8, 0x100> signature;
         std::array<u8, 0x100> nca_modulus;
@@ -154,6 +163,8 @@ private:
 
     FileAccessControl acid_file_access;
     FileAccessHeader aci_file_access;
+
+    KernelCapabilityDescriptors aci_kernel_capabilities;
 };
 
 } // namespace FileSys

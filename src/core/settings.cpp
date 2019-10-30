@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/file_util.h"
 #include "core/core.h"
 #include "core/gdbstub/gdbstub.h"
 #include "core/hle/service/hid/hid.h"
@@ -72,6 +73,38 @@ void Apply() {
     }
 
     Service::HID::ReloadInputDevices();
+}
+
+template <typename T>
+void LogSetting(const std::string& name, const T& value) {
+    LOG_INFO(Config, "{}: {}", name, value);
+}
+
+void LogSettings() {
+    LOG_INFO(Config, "yuzu Configuration:");
+    LogSetting("System_UseDockedMode", Settings::values.use_docked_mode);
+    LogSetting("System_RngSeed", Settings::values.rng_seed.value_or(0));
+    LogSetting("System_CurrentUser", Settings::values.current_user);
+    LogSetting("System_LanguageIndex", Settings::values.language_index);
+    LogSetting("Core_UseMultiCore", Settings::values.use_multi_core);
+    LogSetting("Renderer_UseResolutionFactor", Settings::values.resolution_factor);
+    LogSetting("Renderer_UseFrameLimit", Settings::values.use_frame_limit);
+    LogSetting("Renderer_FrameLimit", Settings::values.frame_limit);
+    LogSetting("Renderer_UseDiskShaderCache", Settings::values.use_disk_shader_cache);
+    LogSetting("Renderer_UseAccurateGpuEmulation", Settings::values.use_accurate_gpu_emulation);
+    LogSetting("Renderer_UseAsynchronousGpuEmulation",
+               Settings::values.use_asynchronous_gpu_emulation);
+    LogSetting("Audio_OutputEngine", Settings::values.sink_id);
+    LogSetting("Audio_EnableAudioStretching", Settings::values.enable_audio_stretching);
+    LogSetting("Audio_OutputDevice", Settings::values.audio_device_id);
+    LogSetting("DataStorage_UseVirtualSd", Settings::values.use_virtual_sd);
+    LogSetting("DataStorage_NandDir", FileUtil::GetUserPath(FileUtil::UserPath::NANDDir));
+    LogSetting("DataStorage_SdmcDir", FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir));
+    LogSetting("Debugging_UseGdbstub", Settings::values.use_gdbstub);
+    LogSetting("Debugging_GdbstubPort", Settings::values.gdbstub_port);
+    LogSetting("Debugging_ProgramArgs", Settings::values.program_args);
+    LogSetting("Services_BCATBackend", Settings::values.bcat_backend);
+    LogSetting("Services_BCATBoxcatLocal", Settings::values.bcat_boxcat_local);
 }
 
 } // namespace Settings

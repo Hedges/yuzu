@@ -64,13 +64,19 @@ public:
         };
         RegisterHandlers(functions);
     }
-    ~ISslContext() = default;
 
 private:
     void SetOption(Kernel::HLERequestContext& ctx) {
-        LOG_WARNING(Service_SSL, "(STUBBED) called");
+        struct Parameters {
+            u8 enable;
+            u32 option;
+        };
 
         IPC::RequestParser rp{ctx};
+        const auto parameters = rp.PopRaw<Parameters>();
+
+        LOG_WARNING(Service_SSL, "(STUBBED) called. enable={}, option={}", parameters.enable,
+                    parameters.option);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
@@ -97,6 +103,8 @@ public:
             {4, nullptr, "DebugIoctl"},
             {5, &SSL::SetInterfaceVersion, "SetInterfaceVersion"},
             {6, nullptr, "FlushSessionCache"},
+            {7, nullptr, "SetDebugOption"},
+            {8, nullptr, "GetDebugOption"},
         };
         // clang-format on
 

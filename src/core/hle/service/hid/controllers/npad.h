@@ -20,7 +20,7 @@ constexpr u32 NPAD_UNKNOWN = 16; // TODO(ogniK): What is this?
 
 class Controller_NPad final : public ControllerBase {
 public:
-    Controller_NPad();
+    explicit Controller_NPad(Core::System& system);
     ~Controller_NPad() override;
 
     // Called when the controller is initialized
@@ -30,7 +30,7 @@ public:
     void OnRelease() override;
 
     // When the controller is requesting an update for the shared memory
-    void OnUpdate(u8* data, std::size_t size) override;
+    void OnUpdate(const Core::Timing::CoreTiming& core_timing, u8* data, std::size_t size) override;
 
     // Called when input devices should be loaded
     void OnLoadInputDevices() override;
@@ -39,13 +39,13 @@ public:
         union {
             u32_le raw{};
 
-            BitField<0, 1, u32_le> pro_controller;
-            BitField<1, 1, u32_le> handheld;
-            BitField<2, 1, u32_le> joycon_dual;
-            BitField<3, 1, u32_le> joycon_left;
-            BitField<4, 1, u32_le> joycon_right;
+            BitField<0, 1, u32> pro_controller;
+            BitField<1, 1, u32> handheld;
+            BitField<2, 1, u32> joycon_dual;
+            BitField<3, 1, u32> joycon_left;
+            BitField<4, 1, u32> joycon_right;
 
-            BitField<6, 1, u32_le> pokeball; // TODO(ogniK): Confirm when possible
+            BitField<6, 1, u32> pokeball; // TODO(ogniK): Confirm when possible
         };
     };
     static_assert(sizeof(NPadType) == 4, "NPadType is an invalid size");
@@ -109,7 +109,7 @@ public:
     void VibrateController(const std::vector<u32>& controller_ids,
                            const std::vector<Vibration>& vibrations);
 
-    Kernel::SharedPtr<Kernel::ReadableEvent> GetStyleSetChangedEvent() const;
+    Kernel::SharedPtr<Kernel::ReadableEvent> GetStyleSetChangedEvent(u32 npad_id) const;
     Vibration GetLastVibration() const;
 
     void AddNewController(NPadControllerType controller);
@@ -119,10 +119,19 @@ public:
     void DisconnectNPad(u32 npad_id);
     LedPattern GetLedPattern(u32 npad_id);
     void SetVibrationEnabled(bool can_vibrate);
+    bool IsVibrationEnabled() const;
     void ClearAllConnectedControllers();
     void DisconnectAllConnectedControllers();
     void ConnectAllDisconnectedControllers();
     void ClearAllControllers();
+
+    void StartLRAssignmentMode();
+    void StopLRAssignmentMode();
+    bool SwapNpadAssignment(u32 npad_id_1, u32 npad_id_2);
+
+    // Logical OR for all buttons presses on all controllers
+    // Specifically for cheat engine and other features.
+    u32 GetAndResetPressState();
 
     static std::size_t NPadIdToIndex(u32 npad_id);
     static u32 IndexToNPad(std::size_t index);
@@ -146,43 +155,43 @@ private:
         union {
             u64_le raw{};
             // Button states
-            BitField<0, 1, u64_le> a;
-            BitField<1, 1, u64_le> b;
-            BitField<2, 1, u64_le> x;
-            BitField<3, 1, u64_le> y;
-            BitField<4, 1, u64_le> l_stick;
-            BitField<5, 1, u64_le> r_stick;
-            BitField<6, 1, u64_le> l;
-            BitField<7, 1, u64_le> r;
-            BitField<8, 1, u64_le> zl;
-            BitField<9, 1, u64_le> zr;
-            BitField<10, 1, u64_le> plus;
-            BitField<11, 1, u64_le> minus;
+            BitField<0, 1, u64> a;
+            BitField<1, 1, u64> b;
+            BitField<2, 1, u64> x;
+            BitField<3, 1, u64> y;
+            BitField<4, 1, u64> l_stick;
+            BitField<5, 1, u64> r_stick;
+            BitField<6, 1, u64> l;
+            BitField<7, 1, u64> r;
+            BitField<8, 1, u64> zl;
+            BitField<9, 1, u64> zr;
+            BitField<10, 1, u64> plus;
+            BitField<11, 1, u64> minus;
 
             // D-Pad
-            BitField<12, 1, u64_le> d_left;
-            BitField<13, 1, u64_le> d_up;
-            BitField<14, 1, u64_le> d_right;
-            BitField<15, 1, u64_le> d_down;
+            BitField<12, 1, u64> d_left;
+            BitField<13, 1, u64> d_up;
+            BitField<14, 1, u64> d_right;
+            BitField<15, 1, u64> d_down;
 
             // Left JoyStick
-            BitField<16, 1, u64_le> l_stick_left;
-            BitField<17, 1, u64_le> l_stick_up;
-            BitField<18, 1, u64_le> l_stick_right;
-            BitField<19, 1, u64_le> l_stick_down;
+            BitField<16, 1, u64> l_stick_left;
+            BitField<17, 1, u64> l_stick_up;
+            BitField<18, 1, u64> l_stick_right;
+            BitField<19, 1, u64> l_stick_down;
 
             // Right JoyStick
-            BitField<20, 1, u64_le> r_stick_left;
-            BitField<21, 1, u64_le> r_stick_up;
-            BitField<22, 1, u64_le> r_stick_right;
-            BitField<23, 1, u64_le> r_stick_down;
+            BitField<20, 1, u64> r_stick_left;
+            BitField<21, 1, u64> r_stick_up;
+            BitField<22, 1, u64> r_stick_right;
+            BitField<23, 1, u64> r_stick_down;
 
             // Not always active?
-            BitField<24, 1, u64_le> left_sl;
-            BitField<25, 1, u64_le> left_sr;
+            BitField<24, 1, u64> left_sl;
+            BitField<25, 1, u64> left_sr;
 
-            BitField<26, 1, u64_le> right_sl;
-            BitField<27, 1, u64_le> right_sr;
+            BitField<26, 1, u64> right_sl;
+            BitField<27, 1, u64> right_sr;
         };
     };
     static_assert(sizeof(ControllerPadState) == 8, "ControllerPadState is an invalid size");
@@ -196,12 +205,12 @@ private:
     struct ConnectionState {
         union {
             u32_le raw{};
-            BitField<0, 1, u32_le> IsConnected;
-            BitField<1, 1, u32_le> IsWired;
-            BitField<2, 1, u32_le> IsLeftJoyConnected;
-            BitField<3, 1, u32_le> IsLeftJoyWired;
-            BitField<4, 1, u32_le> IsRightJoyConnected;
-            BitField<5, 1, u32_le> IsRightJoyWired;
+            BitField<0, 1, u32> IsConnected;
+            BitField<1, 1, u32> IsWired;
+            BitField<2, 1, u32> IsLeftJoyConnected;
+            BitField<3, 1, u32> IsLeftJoyWired;
+            BitField<4, 1, u32> IsRightJoyConnected;
+            BitField<5, 1, u32> IsRightJoyWired;
         };
     };
     static_assert(sizeof(ConnectionState) == 4, "ConnectionState is an invalid size");
@@ -236,23 +245,23 @@ private:
     struct NPadProperties {
         union {
             s64_le raw{};
-            BitField<11, 1, s64_le> is_vertical;
-            BitField<12, 1, s64_le> is_horizontal;
-            BitField<13, 1, s64_le> use_plus;
-            BitField<14, 1, s64_le> use_minus;
+            BitField<11, 1, s64> is_vertical;
+            BitField<12, 1, s64> is_horizontal;
+            BitField<13, 1, s64> use_plus;
+            BitField<14, 1, s64> use_minus;
         };
     };
 
     struct NPadDevice {
         union {
             u32_le raw{};
-            BitField<0, 1, s32_le> pro_controller;
-            BitField<1, 1, s32_le> handheld;
-            BitField<2, 1, s32_le> handheld_left;
-            BitField<3, 1, s32_le> handheld_right;
-            BitField<4, 1, s32_le> joycon_left;
-            BitField<5, 1, s32_le> joycon_right;
-            BitField<6, 1, s32_le> pokeball;
+            BitField<0, 1, s32> pro_controller;
+            BitField<1, 1, s32> handheld;
+            BitField<2, 1, s32> handheld_left;
+            BitField<3, 1, s32> handheld_right;
+            BitField<4, 1, s32> joycon_left;
+            BitField<5, 1, s32> joycon_right;
+            BitField<6, 1, s32> pokeball;
         };
     };
 
@@ -292,6 +301,13 @@ private:
         bool is_connected;
     };
 
+    void InitNewlyAddedControler(std::size_t controller_idx);
+    bool IsControllerSupported(NPadControllerType controller) const;
+    NPadControllerType DecideBestController(NPadControllerType priority) const;
+    void RequestPadStateUpdate(u32 npad_id);
+
+    u32 press_state{};
+
     NPadType style{};
     std::array<NPadEntry, 10> shared_memory_entries{};
     std::array<
@@ -304,16 +320,14 @@ private:
         sticks;
     std::vector<u32> supported_npad_id_types{};
     NpadHoldType hold_type{NpadHoldType::Vertical};
-    Kernel::EventPair styleset_changed_event;
+    // Each controller should have their own styleset changed event
+    std::array<Kernel::EventPair, 10> styleset_changed_events;
     Vibration last_processed_vibration{};
     std::array<ControllerHolder, 10> connected_controllers{};
     bool can_controllers_vibrate{true};
 
-    void InitNewlyAddedControler(std::size_t controller_idx);
-    bool IsControllerSupported(NPadControllerType controller) const;
-    NPadControllerType DecideBestController(NPadControllerType priority) const;
-    void RequestPadStateUpdate(u32 npad_id);
     std::array<ControllerPad, 10> npad_pad_states{};
-    bool IsControllerSupported(NPadControllerType controller);
+    bool is_in_lr_assignment_mode{false};
+    Core::System& system;
 };
 } // namespace Service::HID

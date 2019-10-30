@@ -5,19 +5,22 @@
 #pragma once
 
 #include <array>
-#include <bitset>
 #include <cstddef>
-#include <memory>
+#include <list>
 #include <string>
 #include <vector>
-#include <boost/container/static_vector.hpp>
-#include "common/bit_field.h"
 #include "common/common_types.h"
+#include "core/hle/kernel/address_arbiter.h"
 #include "core/hle/kernel/handle_table.h"
-#include "core/hle/kernel/thread.h"
+#include "core/hle/kernel/mutex.h"
+#include "core/hle/kernel/process_capability.h"
 #include "core/hle/kernel/vm_manager.h"
 #include "core/hle/kernel/wait_object.h"
 #include "core/hle/result.h"
+
+namespace Core {
+class System;
+}
 
 namespace FileSys {
 class ProgramMetadata;
@@ -27,37 +30,15 @@ namespace Kernel {
 
 class KernelCore;
 class ResourceLimit;
+class Thread;
+class TLSPage;
 
-struct AddressMapping {
-    // Address and size must be page-aligned
-    VAddr address;
-    u64 size;
-    bool read_only;
-    bool unk_flag;
-};
+struct CodeSet;
 
 enum class MemoryRegion : u16 {
     APPLICATION = 1,
     SYSTEM = 2,
     BASE = 3,
-};
-
-union ProcessFlags {
-    u16 raw;
-
-    BitField<0, 1, u16>
-        allow_debug; ///< Allows other processes to attach to and debug this process.
-    BitField<1, 1, u16> force_debug; ///< Allows this process to attach to processes even if they
-                                     /// don't have allow_debug set.
-    BitField<2, 1, u16> allow_nonalphanum;
-    BitField<3, 1, u16> shared_page_writable; ///< Shared page is mapped with write permissions.
-    BitField<4, 1, u16> privileged_priority;  ///< Can use priority levels higher than 24.
-    BitField<5, 1, u16> allow_main_args;
-    BitField<6, 1, u16> shared_device_mem;
-    BitField<7, 1, u16> runnable_on_sleep;
-    BitField<8, 4, MemoryRegion>
-        memory_region;                ///< Default region for memory allocations for this process
-    BitField<12, 1, u16> loaded_high; ///< Application loaded high (not at 0x00100000).
 };
 
 /**
@@ -78,51 +59,29 @@ enum class ProcessStatus {
     DebugBreak,
 };
 
-struct CodeSet final {
-    struct Segment {
-        std::size_t offset = 0;
-        VAddr addr = 0;
-        u32 size = 0;
-    };
-
-    explicit CodeSet();
-    ~CodeSet();
-
-    Segment& CodeSegment() {
-        return segments[0];
-    }
-
-    const Segment& CodeSegment() const {
-        return segments[0];
-    }
-
-    Segment& RODataSegment() {
-        return segments[1];
-    }
-
-    const Segment& RODataSegment() const {
-        return segments[1];
-    }
-
-    Segment& DataSegment() {
-        return segments[2];
-    }
-
-    const Segment& DataSegment() const {
-        return segments[2];
-    }
-
-    std::shared_ptr<std::vector<u8>> memory;
-
-    std::array<Segment, 3> segments;
-    VAddr entrypoint = 0;
-};
-
 class Process final : public WaitObject {
 public:
+    enum : u64 {
+        /// Lowest allowed process ID for a kernel initial process.
+        InitialKIPIDMin = 1,
+        /// Highest allowed process ID for a kernel initial process.
+        InitialKIPIDMax = 80,
+
+        /// Lowest allowed process ID for a userland process.
+        ProcessIDMin = 81,
+        /// Highest allowed process ID for a userland process.
+        ProcessIDMax = 0xFFFFFFFFFFFFFFFF,
+    };
+
+    // Used to determine how process IDs are assigned.
+    enum class ProcessType {
+        KernelInternal,
+        Userland,
+    };
+
     static constexpr std::size_t RANDOM_ENTROPY_SIZE = 4;
 
-    static SharedPtr<Process> Create(KernelCore& kernel, std::string&& name);
+    static SharedPtr<Process> Create(Core::System& system, std::string name, ProcessType type);
 
     std::string GetTypeName() const override {
         return "Process";
@@ -131,7 +90,7 @@ public:
         return name;
     }
 
-    static const HandleType HANDLE_TYPE = HandleType::Process;
+    static constexpr HandleType HANDLE_TYPE = HandleType::Process;
     HandleType GetHandleType() const override {
         return HANDLE_TYPE;
     }
@@ -156,13 +115,38 @@ public:
         return handle_table;
     }
 
+    /// Gets a reference to the process' address arbiter.
+    AddressArbiter& GetAddressArbiter() {
+        return address_arbiter;
+    }
+
+    /// Gets a const reference to the process' address arbiter.
+    const AddressArbiter& GetAddressArbiter() const {
+        return address_arbiter;
+    }
+
+    /// Gets a reference to the process' mutex lock.
+    Mutex& GetMutex() {
+        return mutex;
+    }
+
+    /// Gets a const reference to the process' mutex lock
+    const Mutex& GetMutex() const {
+        return mutex;
+    }
+
+    /// Gets the address to the process' dedicated TLS region.
+    VAddr GetTLSRegionAddress() const {
+        return tls_region_address;
+    }
+
     /// Gets the current status of the process
     ProcessStatus GetStatus() const {
         return status;
     }
 
     /// Gets the unique ID that identifies this particular process.
-    u32 GetProcessID() const {
+    u64 GetProcessID() const {
         return process_id;
     }
 
@@ -174,23 +158,39 @@ public:
     /// Gets the resource limit descriptor for this process
     SharedPtr<ResourceLimit> GetResourceLimit() const;
 
-    /// Gets the default CPU ID for this process
-    u8 GetDefaultProcessorID() const {
-        return ideal_processor;
+    /// Gets the ideal CPU core ID for this process
+    u8 GetIdealCore() const {
+        return ideal_core;
     }
 
-    /// Gets the bitmask of allowed CPUs that this process' threads can run on.
-    u32 GetAllowedProcessorMask() const {
-        return allowed_processor_mask;
+    /// Gets the bitmask of allowed cores that this process' threads can run on.
+    u64 GetCoreMask() const {
+        return capabilities.GetCoreMask();
     }
 
     /// Gets the bitmask of allowed thread priorities.
-    u32 GetAllowedThreadPriorityMask() const {
-        return allowed_thread_priority_mask;
+    u64 GetPriorityMask() const {
+        return capabilities.GetPriorityMask();
     }
 
-    u32 IsVirtualMemoryEnabled() const {
-        return is_virtual_address_memory_enabled;
+    /// Gets the amount of secure memory to allocate for memory management.
+    u32 GetSystemResourceSize() const {
+        return system_resource_size;
+    }
+
+    /// Gets the amount of secure memory currently in use for memory management.
+    u32 GetSystemResourceUsage() const {
+        // On hardware, this returns the amount of system resource memory that has
+        // been used by the kernel. This is problematic for Yuzu to emulate, because
+        // system resource memory is used for page tables -- and yuzu doesn't really
+        // have a way to calculate how much memory is required for page tables for
+        // the current process at any given time.
+        // TODO: Is this even worth implementing? Games may retrieve this value via
+        // an SDK function that gets used + available system resource size for debug
+        // or diagnostic purposes. However, it seems unlikely that a game would make
+        // decisions based on how much system memory is dedicated to its page tables.
+        // Is returning a value other than zero wise?
+        return 0;
     }
 
     /// Whether this process is an AArch64 or AArch32 process.
@@ -213,6 +213,33 @@ public:
         return random_entropy.at(index);
     }
 
+    /// Retrieves the total physical memory available to this process in bytes.
+    u64 GetTotalPhysicalMemoryAvailable() const;
+
+    /// Retrieves the total physical memory available to this process in bytes,
+    /// without the size of the personal system resource heap added to it.
+    u64 GetTotalPhysicalMemoryAvailableWithoutSystemResource() const;
+
+    /// Retrieves the total physical memory used by this process in bytes.
+    u64 GetTotalPhysicalMemoryUsed() const;
+
+    /// Retrieves the total physical memory used by this process in bytes,
+    /// without the size of the personal system resource heap added to it.
+    u64 GetTotalPhysicalMemoryUsedWithoutSystemResource() const;
+
+    /// Gets the list of all threads created with this process as their owner.
+    const std::list<const Thread*>& GetThreadList() const {
+        return thread_list;
+    }
+
+    /// Registers a thread as being created under this process,
+    /// adding it to this process' thread list.
+    void RegisterThread(const Thread* thread);
+
+    /// Unregisters a thread from this process, removing it
+    /// from this process' thread list.
+    void UnregisterThread(const Thread* thread);
+
     /// Clears the signaled state of the process if and only if it's signaled.
     ///
     /// @pre The process must not be already terminated. If this is called on a
@@ -227,20 +254,20 @@ public:
      * Loads process-specifics configuration info with metadata provided
      * by an executable.
      *
-     * @param metadata The provided metadata to load process specific info.
+     * @param metadata The provided metadata to load process specific info from.
+     *
+     * @returns RESULT_SUCCESS if all relevant metadata was able to be
+     *          loaded and parsed. Otherwise, an error code is returned.
      */
-    void LoadFromMetadata(const FileSys::ProgramMetadata& metadata);
+    ResultCode LoadFromMetadata(const FileSys::ProgramMetadata& metadata);
 
     /**
-     * Parses a list of kernel capability descriptors (as found in the ExHeader) and applies them
-     * to this process.
+     * Starts the main application thread for this process.
+     *
+     * @param main_thread_priority The priority for the main thread.
+     * @param stack_size           The stack size for the main thread in bytes.
      */
-    void ParseKernelCaps(const u32* kernel_caps, std::size_t len);
-
-    /**
-     * Applies address space changes and launches the process main thread.
-     */
-    void Run(VAddr entry_point, s32 main_thread_priority, u32 stack_size);
+    void Run(s32 main_thread_priority, u64 stack_size);
 
     /**
      * Prepares a process for termination by stopping all of its threads
@@ -251,27 +278,20 @@ public:
     void LoadModule(CodeSet module_, VAddr base_addr);
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
-    // Memory Management
+    // Thread-local storage management
 
     // Marks the next available region as used and returns the address of the slot.
-    VAddr MarkNextAvailableTLSSlotAsUsed(Thread& thread);
+    [[nodiscard]] VAddr CreateTLSRegion();
 
     // Frees a used TLS slot identified by the given address
-    void FreeTLSSlot(VAddr tls_address);
-
-    ResultVal<VAddr> HeapAllocate(VAddr target, u64 size, VMAPermission perms);
-    ResultCode HeapFree(VAddr target, u32 size);
-
-    ResultCode MirrorMemory(VAddr dst_addr, VAddr src_addr, u64 size, MemoryState state);
-
-    ResultCode UnmapMemory(VAddr dst_addr, VAddr src_addr, u64 size);
+    void FreeTLSRegion(VAddr tls_address);
 
 private:
-    explicit Process(KernelCore& kernel);
+    explicit Process(Core::System& system);
     ~Process() override;
 
     /// Checks if the specified thread should wait until this process is available.
-    bool ShouldWait(Thread* thread) const override;
+    bool ShouldWait(const Thread* thread) const override;
 
     /// Acquires/locks this process for the specified thread if it's available.
     void Acquire(Thread* thread) override;
@@ -281,45 +301,47 @@ private:
     /// a process signal.
     void ChangeStatus(ProcessStatus new_status);
 
+    /// Allocates the main thread stack for the process, given the stack size in bytes.
+    void AllocateMainThreadStack(u64 stack_size);
+
     /// Memory manager for this process.
     Kernel::VMManager vm_manager;
 
+    /// Size of the main thread's stack in bytes.
+    u64 main_thread_stack_size = 0;
+
+    /// Size of the loaded code memory in bytes.
+    u64 code_memory_size = 0;
+
     /// Current status of the process
-    ProcessStatus status;
+    ProcessStatus status{};
 
     /// The ID of this process
-    u32 process_id = 0;
+    u64 process_id = 0;
 
     /// Title ID corresponding to the process
-    u64 program_id;
+    u64 program_id = 0;
+
+    /// Specifies additional memory to be reserved for the process's memory management by the
+    /// system. When this is non-zero, secure memory is allocated and used for page table allocation
+    /// instead of using the normal global page tables/memory block management.
+    u32 system_resource_size = 0;
 
     /// Resource limit descriptor for this process
     SharedPtr<ResourceLimit> resource_limit;
 
-    /// The process may only call SVCs which have the corresponding bit set.
-    std::bitset<0x80> svc_access_mask;
-    /// Maximum size of the handle table for the process.
-    u32 handle_table_size = 0x200;
-    /// Special memory ranges mapped into this processes address space. This is used to give
-    /// processes access to specific I/O regions and device memory.
-    boost::container::static_vector<AddressMapping, 8> address_mappings;
-    ProcessFlags flags;
-    /// Kernel compatibility version for this process
-    u16 kernel_version = 0;
-    /// The default CPU for this process, threads are scheduled on this cpu by default.
-    u8 ideal_processor = 0;
-    /// Bitmask of allowed CPUs that this process' threads can run on. TODO(Subv): Actually parse
-    /// this value from the process header.
-    u32 allowed_processor_mask = THREADPROCESSORID_DEFAULT_MASK;
-    u32 allowed_thread_priority_mask = 0xFFFFFFFF;
-    u32 is_virtual_address_memory_enabled = 0;
+    /// The ideal CPU core for this process, threads are scheduled on this core by default.
+    u8 ideal_core = 0;
 
     /// The Thread Local Storage area is allocated as processes create threads,
     /// each TLS area is 0x200 bytes, so one page (0x1000) is split up in 8 parts, and each part
     /// holds the TLS for a specific thread. This vector contains which parts are in use for each
     /// page as a bitmask.
     /// This vector will grow as more pages are allocated for new threads.
-    std::vector<std::bitset<8>> tls_slots;
+    std::vector<TLSPage> tls_pages;
+
+    /// Contains the parsed process capability descriptors.
+    ProcessCapabilities capabilities;
 
     /// Whether or not this process is AArch64, or AArch32.
     /// By default, we currently assume this is true, unless otherwise
@@ -336,9 +358,27 @@ private:
     /// Per-process handle table for storing created object handles in.
     HandleTable handle_table;
 
-    /// Random values for svcGetInfo RandomEntropy
-    std::array<u64, RANDOM_ENTROPY_SIZE> random_entropy;
+    /// Per-process address arbiter.
+    AddressArbiter address_arbiter;
 
+    /// The per-process mutex lock instance used for handling various
+    /// forms of services, such as lock arbitration, and condition
+    /// variable related facilities.
+    Mutex mutex;
+
+    /// Address indicating the location of the process' dedicated TLS region.
+    VAddr tls_region_address = 0;
+
+    /// Random values for svcGetInfo RandomEntropy
+    std::array<u64, RANDOM_ENTROPY_SIZE> random_entropy{};
+
+    /// List of threads that are running with this process as their owner.
+    std::list<const Thread*> thread_list;
+
+    /// System context
+    Core::System& system;
+
+    /// Name of this process
     std::string name;
 };
 

@@ -22,10 +22,9 @@ enum class HandleType : u32 {
     WritableEvent,
     ReadableEvent,
     SharedMemory,
+    TransferMemory,
     Thread,
     Process,
-    AddressArbiter,
-    Timer,
     ResourceLimit,
     ClientPort,
     ServerPort,
@@ -34,9 +33,8 @@ enum class HandleType : u32 {
 };
 
 enum class ResetType {
-    OneShot, ///< Reset automatically on object acquisition
-    Sticky,  ///< Never reset automatically
-    Pulse,   ///< Reset automatically on wakeup
+    Automatic, ///< Reset automatically on object acquisition
+    Manual,    ///< Never reset automatically
 };
 
 class Object : NonCopyable {

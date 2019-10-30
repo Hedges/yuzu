@@ -10,16 +10,17 @@
 namespace Service::HID {
 constexpr std::size_t SHARED_MEMORY_OFFSET = 0x3C00;
 
-Controller_XPad::Controller_XPad() = default;
+Controller_XPad::Controller_XPad(Core::System& system) : ControllerBase(system) {}
 Controller_XPad::~Controller_XPad() = default;
 
 void Controller_XPad::OnInit() {}
 
 void Controller_XPad::OnRelease() {}
 
-void Controller_XPad::OnUpdate(u8* data, std::size_t size) {
+void Controller_XPad::OnUpdate(const Core::Timing::CoreTiming& core_timing, u8* data,
+                               std::size_t size) {
     for (auto& xpad_entry : shared_memory.shared_memory_entries) {
-        xpad_entry.header.timestamp = CoreTiming::GetTicks();
+        xpad_entry.header.timestamp = core_timing.GetTicks();
         xpad_entry.header.total_entry_count = 17;
 
         if (!IsControllerActivated()) {

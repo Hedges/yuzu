@@ -18,10 +18,13 @@ public:
     explicit ConfigureDebug(QWidget* parent = nullptr);
     ~ConfigureDebug() override;
 
-    void applyConfiguration();
+    void ApplyConfiguration();
 
 private:
-    void setConfiguration();
+    void changeEvent(QEvent* event) override;
+
+    void RetranslateUI();
+    void SetConfiguration();
 
     std::unique_ptr<Ui::ConfigureDebug> ui;
 };

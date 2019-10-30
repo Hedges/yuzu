@@ -6,6 +6,7 @@
 
 #include "common/file_util.h"
 #include "common/logging/log.h"
+#include "core/core.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/romfs_factory.h"
 #include "core/hle/kernel/process.h"
@@ -30,36 +31,39 @@ FileType AppLoader_NCA::IdentifyType(const FileSys::VirtualFile& file) {
     return FileType::Error;
 }
 
-ResultStatus AppLoader_NCA::Load(Kernel::Process& process) {
+AppLoader_NCA::LoadResult AppLoader_NCA::Load(Kernel::Process& process) {
     if (is_loaded) {
-        return ResultStatus::ErrorAlreadyLoaded;
+        return {ResultStatus::ErrorAlreadyLoaded, {}};
     }
 
     const auto result = nca->GetStatus();
     if (result != ResultStatus::Success) {
-        return result;
+        return {result, {}};
     }
 
-    if (nca->GetType() != FileSys::NCAContentType::Program)
-        return ResultStatus::ErrorNCANotProgram;
+    if (nca->GetType() != FileSys::NCAContentType::Program) {
+        return {ResultStatus::ErrorNCANotProgram, {}};
+    }
 
     const auto exefs = nca->GetExeFS();
-
-    if (exefs == nullptr)
-        return ResultStatus::ErrorNoExeFS;
+    if (exefs == nullptr) {
+        return {ResultStatus::ErrorNoExeFS, {}};
+    }
 
     directory_loader = std::make_unique<AppLoader_DeconstructedRomDirectory>(exefs, true);
 
     const auto load_result = directory_loader->Load(process);
-    if (load_result != ResultStatus::Success)
+    if (load_result.first != ResultStatus::Success) {
         return load_result;
+    }
 
-    if (nca->GetRomFS() != nullptr && nca->GetRomFS()->GetSize() > 0)
-        Service::FileSystem::RegisterRomFS(std::make_unique<FileSys::RomFSFactory>(*this));
+    if (nca->GetRomFS() != nullptr && nca->GetRomFS()->GetSize() > 0) {
+        Core::System::GetInstance().GetFileSystemController().RegisterRomFS(
+            std::make_unique<FileSys::RomFSFactory>(*this));
+    }
 
     is_loaded = true;
-
-    return ResultStatus::Success;
+    return load_result;
 }
 
 ResultStatus AppLoader_NCA::ReadRomFS(FileSys::VirtualFile& dir) {
@@ -82,6 +86,34 @@ ResultStatus AppLoader_NCA::ReadProgramId(u64& out_program_id) {
         return ResultStatus::ErrorNotInitialized;
     out_program_id = nca->GetTitleId();
     return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NCA::ReadBanner(std::vector<u8>& buffer) {
+    if (nca == nullptr || nca->GetStatus() != ResultStatus::Success)
+        return ResultStatus::ErrorNotInitialized;
+    const auto logo = nca->GetLogoPartition();
+    if (logo == nullptr)
+        return ResultStatus::ErrorNoIcon;
+    buffer = logo->GetFile("StartupMovie.gif")->ReadAllBytes();
+    return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NCA::ReadLogo(std::vector<u8>& buffer) {
+    if (nca == nullptr || nca->GetStatus() != ResultStatus::Success)
+        return ResultStatus::ErrorNotInitialized;
+    const auto logo = nca->GetLogoPartition();
+    if (logo == nullptr)
+        return ResultStatus::ErrorNoIcon;
+    buffer = logo->GetFile("NintendoLogo.png")->ReadAllBytes();
+    return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NCA::ReadNSOModules(Modules& modules) {
+    if (directory_loader == nullptr) {
+        return ResultStatus::ErrorNotInitialized;
+    }
+
+    return directory_loader->ReadNSOModules(modules);
 }
 
 } // namespace Loader

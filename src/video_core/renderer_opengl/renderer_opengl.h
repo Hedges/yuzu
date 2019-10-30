@@ -12,8 +12,16 @@
 #include "video_core/renderer_opengl/gl_resource_manager.h"
 #include "video_core/renderer_opengl/gl_state.h"
 
+namespace Core {
+class System;
+}
+
 namespace Core::Frontend {
 class EmuWindow;
+}
+
+namespace Layout {
+struct FramebufferLayout;
 }
 
 namespace OpenGL {
@@ -30,29 +38,19 @@ struct TextureInfo {
 
 /// Structure used for storing information about the display target for the Switch screen
 struct ScreenInfo {
-    GLuint display_texture;
-    const MathUtil::Rectangle<float> display_texcoords{0.0f, 0.0f, 1.0f, 1.0f};
+    GLuint display_texture{};
+    bool display_srgb{};
+    const Common::Rectangle<float> display_texcoords{0.0f, 0.0f, 1.0f, 1.0f};
     TextureInfo texture;
 };
 
-/// Helper class to acquire/release OpenGL context within a given scope
-class ScopeAcquireGLContext : NonCopyable {
+class RendererOpenGL final : public VideoCore::RendererBase {
 public:
-    explicit ScopeAcquireGLContext(Core::Frontend::EmuWindow& window);
-    ~ScopeAcquireGLContext();
-
-private:
-    Core::Frontend::EmuWindow& emu_window;
-};
-
-class RendererOpenGL : public VideoCore::RendererBase {
-public:
-    explicit RendererOpenGL(Core::Frontend::EmuWindow& window);
+    explicit RendererOpenGL(Core::Frontend::EmuWindow& emu_window, Core::System& system);
     ~RendererOpenGL() override;
 
     /// Swap buffers (render frame)
-    void SwapBuffers(
-        std::optional<std::reference_wrapper<const Tegra::FramebufferConfig>> framebuffer) override;
+    void SwapBuffers(const Tegra::FramebufferConfig* framebuffer) override;
 
     /// Initialize the renderer
     bool Init() override;
@@ -62,13 +60,16 @@ public:
 
 private:
     void InitOpenGLObjects();
+    void AddTelemetryFields();
     void CreateRasterizer();
 
     void ConfigureFramebufferTexture(TextureInfo& texture,
                                      const Tegra::FramebufferConfig& framebuffer);
-    void DrawScreen();
+    void DrawScreen(const Layout::FramebufferLayout& layout);
     void DrawScreenTriangles(const ScreenInfo& screen_info, float x, float y, float w, float h);
     void UpdateFramerate();
+
+    void CaptureScreenshot();
 
     // Loads framebuffer from emulated memory into the display information structure
     void LoadFBToScreenInfo(const Tegra::FramebufferConfig& framebuffer);
@@ -76,12 +77,16 @@ private:
     void LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b, u8 color_a,
                                     const TextureInfo& texture);
 
+    Core::Frontend::EmuWindow& emu_window;
+    Core::System& system;
+
     OpenGLState state;
 
     // OpenGL object IDs
     OGLVertexArray vertex_array;
     OGLBuffer vertex_buffer;
     OGLProgram shader;
+    OGLFramebuffer screenshot_framebuffer;
 
     /// Display information for Switch screen
     ScreenInfo screen_info;
@@ -99,7 +104,7 @@ private:
 
     /// Used for transforming the framebuffer orientation
     Tegra::FramebufferConfig::TransformFlags framebuffer_transform_flags;
-    MathUtil::Rectangle<int> framebuffer_crop_rect;
+    Common::Rectangle<int> framebuffer_crop_rect;
 };
 
 } // namespace OpenGL

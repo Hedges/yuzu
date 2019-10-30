@@ -2,9 +2,6 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include "common/logging/log.h"
-#include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/hle_ipc.h"
 #include "core/hle/service/audio/audin_u.h"
 
 namespace Service::Audio {
@@ -12,6 +9,7 @@ namespace Service::Audio {
 class IAudioIn final : public ServiceFramework<IAudioIn> {
 public:
     IAudioIn() : ServiceFramework("IAudioIn") {
+        // clang-format off
         static const FunctionInfo functions[] = {
             {0, nullptr, "GetAudioInState"},
             {1, nullptr, "StartAudioIn"},
@@ -27,17 +25,25 @@ public:
             {11, nullptr, "GetAudioInBufferCount"},
             {12, nullptr, "SetAudioInDeviceGain"},
             {13, nullptr, "GetAudioInDeviceGain"},
+            {14, nullptr, "FlushAudioInBuffers"},
         };
+        // clang-format on
+
         RegisterHandlers(functions);
     }
-    ~IAudioIn() = default;
 };
 
 AudInU::AudInU() : ServiceFramework("audin:u") {
+    // clang-format off
     static const FunctionInfo functions[] = {
-        {0, nullptr, "ListAudioIns"},    {1, nullptr, "OpenAudioIn"},      {2, nullptr, "Unknown"},
-        {3, nullptr, "OpenAudioInAuto"}, {4, nullptr, "ListAudioInsAuto"},
+        {0, nullptr, "ListAudioIns"},
+        {1, nullptr, "OpenAudioIn"},
+        {2, nullptr, "Unknown"},
+        {3, nullptr, "OpenAudioInAuto"},
+        {4, nullptr, "ListAudioInsAuto"},
     };
+    // clang-format on
+
     RegisterHandlers(functions);
 }
 

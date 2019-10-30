@@ -14,14 +14,17 @@
 
 namespace Core::Frontend {
 class EmuWindow;
-class SoftwareKeyboardApplet;
 } // namespace Core::Frontend
 
 namespace FileSys {
+class ContentProvider;
+class ContentProviderUnion;
+enum class ContentProviderUnionSlot;
 class VfsFilesystem;
 } // namespace FileSys
 
 namespace Kernel {
+class GlobalScheduler;
 class KernelCore;
 class Process;
 class Scheduler;
@@ -32,9 +35,38 @@ class AppLoader;
 enum class ResultStatus : u16;
 } // namespace Loader
 
-namespace Service::SM {
+namespace Memory {
+struct CheatEntry;
+} // namespace Memory
+
+namespace Service {
+
+namespace AM::Applets {
+struct AppletFrontendSet;
+class AppletManager;
+} // namespace AM::Applets
+
+namespace APM {
+class Controller;
+}
+
+namespace FileSystem {
+class FileSystemController;
+} // namespace FileSystem
+
+namespace Glue {
+class ARPManager;
+}
+
+namespace LM {
+class Manager;
+} // namespace LM
+
+namespace SM {
 class ServiceManager;
-} // namespace Service::SM
+} // namespace SM
+
+} // namespace Service
 
 namespace Tegra {
 class DebugContext;
@@ -45,6 +77,14 @@ namespace VideoCore {
 class RendererBase;
 } // namespace VideoCore
 
+namespace Core::Timing {
+class CoreTiming;
+}
+
+namespace Core::Hardware {
+class InterruptManager;
+}
+
 namespace Core {
 
 class ARM_Interface;
@@ -52,6 +92,7 @@ class Cpu;
 class ExclusiveMonitor;
 class FrameLimiter;
 class PerfStats;
+class Reporter;
 class TelemetrySession;
 
 struct PerfStatsResults;
@@ -61,6 +102,8 @@ FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
 
 class System {
 public:
+    using CurrentBuildProcessID = std::array<u8, 0x20>;
+
     System(const System&) = delete;
     System& operator=(const System&) = delete;
 
@@ -82,7 +125,6 @@ public:
         Success,             ///< Succeeded
         ErrorNotInitialized, ///< Error trying to use core prior to initialization
         ErrorGetLoader,      ///< Error finding the correct application loader
-        ErrorSystemMode,     ///< Error determining the system mode
         ErrorSystemFiles,    ///< Error in finding system files
         ErrorSharedFont,     ///< Error in finding shared font
         ErrorVideoCore,      ///< Error in the video core
@@ -143,6 +185,9 @@ public:
     /// Prepare the core emulation for a reschedule
     void PrepareReschedule();
 
+    /// Prepare the core emulation for a reschedule
+    void PrepareReschedule(u32 core_index);
+
     /// Gets and resets core performance statistics
     PerfStatsResults GetAndResetPerfStats();
 
@@ -197,11 +242,29 @@ public:
     /// Gets the scheduler for the CPU core with the specified index
     const Kernel::Scheduler& Scheduler(std::size_t core_index) const;
 
+    /// Gets the global scheduler
+    Kernel::GlobalScheduler& GlobalScheduler();
+
+    /// Gets the global scheduler
+    const Kernel::GlobalScheduler& GlobalScheduler() const;
+
     /// Provides a pointer to the current process
     Kernel::Process* CurrentProcess();
 
     /// Provides a constant pointer to the current process.
     const Kernel::Process* CurrentProcess() const;
+
+    /// Provides a reference to the core timing instance.
+    Timing::CoreTiming& CoreTiming();
+
+    /// Provides a constant reference to the core timing instance.
+    const Timing::CoreTiming& CoreTiming() const;
+
+    /// Provides a reference to the interrupt manager instance.
+    Core::Hardware::InterruptManager& InterruptManager();
+
+    /// Provides a constant reference to the interrupt manager instance.
+    const Core::Hardware::InterruptManager& InterruptManager() const;
 
     /// Provides a reference to the kernel instance.
     Kernel::KernelCore& Kernel();
@@ -241,9 +304,54 @@ public:
 
     std::shared_ptr<FileSys::VfsFilesystem> GetFilesystem() const;
 
-    void SetSoftwareKeyboard(std::unique_ptr<Core::Frontend::SoftwareKeyboardApplet> applet);
+    void RegisterCheatList(const std::vector<Memory::CheatEntry>& list,
+                           const std::array<u8, 0x20>& build_id, VAddr main_region_begin,
+                           u64 main_region_size);
 
-    const Core::Frontend::SoftwareKeyboardApplet& GetSoftwareKeyboard() const;
+    void SetAppletFrontendSet(Service::AM::Applets::AppletFrontendSet&& set);
+
+    void SetDefaultAppletFrontendSet();
+
+    Service::AM::Applets::AppletManager& GetAppletManager();
+
+    const Service::AM::Applets::AppletManager& GetAppletManager() const;
+
+    void SetContentProvider(std::unique_ptr<FileSys::ContentProviderUnion> provider);
+
+    FileSys::ContentProvider& GetContentProvider();
+
+    const FileSys::ContentProvider& GetContentProvider() const;
+
+    Service::FileSystem::FileSystemController& GetFileSystemController();
+
+    const Service::FileSystem::FileSystemController& GetFileSystemController() const;
+
+    void RegisterContentProvider(FileSys::ContentProviderUnionSlot slot,
+                                 FileSys::ContentProvider* provider);
+
+    void ClearContentProvider(FileSys::ContentProviderUnionSlot slot);
+
+    const Reporter& GetReporter() const;
+
+    Service::Glue::ARPManager& GetARPManager();
+
+    const Service::Glue::ARPManager& GetARPManager() const;
+
+    Service::APM::Controller& GetAPMController();
+
+    const Service::APM::Controller& GetAPMController() const;
+
+    Service::LM::Manager& GetLogManager();
+
+    const Service::LM::Manager& GetLogManager() const;
+
+    void SetExitLock(bool locked);
+
+    bool GetExitLock() const;
+
+    void SetCurrentProcessBuildID(const CurrentBuildProcessID& id);
+
+    const CurrentBuildProcessID& GetCurrentProcessBuildID() const;
 
 private:
     System();
@@ -267,17 +375,5 @@ private:
 
     static System s_instance;
 };
-
-inline ARM_Interface& CurrentArmInterface() {
-    return System::GetInstance().CurrentArmInterface();
-}
-
-inline TelemetrySession& Telemetry() {
-    return System::GetInstance().TelemetrySession();
-}
-
-inline Kernel::Process* CurrentProcess() {
-    return System::GetInstance().CurrentProcess();
-}
 
 } // namespace Core

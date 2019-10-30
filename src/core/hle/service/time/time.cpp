@@ -5,6 +5,7 @@
 #include <chrono>
 #include <ctime>
 #include "common/logging/log.h"
+#include "core/core.h"
 #include "core/core_timing.h"
 #include "core/core_timing_util.h"
 #include "core/hle/ipc_helpers.h"
@@ -12,8 +13,16 @@
 #include "core/hle/kernel/client_session.h"
 #include "core/hle/service/time/interface.h"
 #include "core/hle/service/time/time.h"
+#include "core/hle/service/time/time_sharedmemory.h"
+#include "core/settings.h"
 
 namespace Service::Time {
+
+static std::chrono::seconds GetSecondsSinceEpoch() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::system_clock::now().time_since_epoch()) +
+           Settings::values.custom_rtc_differential;
+}
 
 static void PosixToCalendar(u64 posix_time, CalendarTime& calendar_time,
                             CalendarAdditionalInfo& additional_info,
@@ -53,9 +62,18 @@ static u64 CalendarToPosix(const CalendarTime& calendar_time,
     return static_cast<u64>(epoch_time);
 }
 
+enum class ClockContextType {
+    StandardSteady,
+    StandardUserSystem,
+    StandardNetworkSystem,
+    StandardLocalSystem,
+};
+
 class ISystemClock final : public ServiceFramework<ISystemClock> {
 public:
-    ISystemClock() : ServiceFramework("ISystemClock") {
+    ISystemClock(std::shared_ptr<Service::Time::SharedMemory> shared_memory,
+                 ClockContextType clock_type)
+        : ServiceFramework("ISystemClock"), shared_memory(shared_memory), clock_type(clock_type) {
         static const FunctionInfo functions[] = {
             {0, &ISystemClock::GetCurrentTime, "GetCurrentTime"},
             {1, nullptr, "SetCurrentTime"},
@@ -64,13 +82,13 @@ public:
 
         };
         RegisterHandlers(functions);
+
+        UpdateSharedMemoryContext(system_clock_context);
     }
 
 private:
     void GetCurrentTime(Kernel::HLERequestContext& ctx) {
-        const s64 time_since_epoch{std::chrono::duration_cast<std::chrono::seconds>(
-                                       std::chrono::system_clock::now().time_since_epoch())
-                                       .count()};
+        const s64 time_since_epoch{GetSecondsSinceEpoch().count()};
         LOG_DEBUG(Service_Time, "called");
 
         IPC::ResponseBuilder rb{ctx, 4};
@@ -81,32 +99,64 @@ private:
     void GetSystemClockContext(Kernel::HLERequestContext& ctx) {
         LOG_WARNING(Service_Time, "(STUBBED) called");
 
-        SystemClockContext system_clock_ontext{};
+        // TODO(ogniK): This should be updated periodically however since we have it stubbed we'll
+        // only update when we get a new context
+        UpdateSharedMemoryContext(system_clock_context);
+
         IPC::ResponseBuilder rb{ctx, (sizeof(SystemClockContext) / 4) + 2};
         rb.Push(RESULT_SUCCESS);
-        rb.PushRaw(system_clock_ontext);
+        rb.PushRaw(system_clock_context);
     }
+
+    void UpdateSharedMemoryContext(const SystemClockContext& clock_context) {
+        switch (clock_type) {
+        case ClockContextType::StandardLocalSystem:
+            shared_memory->SetStandardLocalSystemClockContext(clock_context);
+            break;
+        case ClockContextType::StandardNetworkSystem:
+            shared_memory->SetStandardNetworkSystemClockContext(clock_context);
+            break;
+        }
+    }
+
+    SystemClockContext system_clock_context{};
+    std::shared_ptr<Service::Time::SharedMemory> shared_memory;
+    ClockContextType clock_type;
 };
 
 class ISteadyClock final : public ServiceFramework<ISteadyClock> {
 public:
-    ISteadyClock() : ServiceFramework("ISteadyClock") {
+    ISteadyClock(std::shared_ptr<SharedMemory> shared_memory, Core::System& system)
+        : ServiceFramework("ISteadyClock"), shared_memory(shared_memory), system(system) {
         static const FunctionInfo functions[] = {
             {0, &ISteadyClock::GetCurrentTimePoint, "GetCurrentTimePoint"},
         };
         RegisterHandlers(functions);
+
+        shared_memory->SetStandardSteadyClockTimepoint(GetCurrentTimePoint());
     }
 
 private:
     void GetCurrentTimePoint(Kernel::HLERequestContext& ctx) {
         LOG_DEBUG(Service_Time, "called");
 
-        SteadyClockTimePoint steady_clock_time_point{
-            CoreTiming::cyclesToMs(CoreTiming::GetTicks()) / 1000};
+        const auto time_point = GetCurrentTimePoint();
+        // TODO(ogniK): This should be updated periodically
+        shared_memory->SetStandardSteadyClockTimepoint(time_point);
+
         IPC::ResponseBuilder rb{ctx, (sizeof(SteadyClockTimePoint) / 4) + 2};
         rb.Push(RESULT_SUCCESS);
-        rb.PushRaw(steady_clock_time_point);
+        rb.PushRaw(time_point);
     }
+
+    SteadyClockTimePoint GetCurrentTimePoint() const {
+        const auto& core_timing = system.CoreTiming();
+        const auto ms = Core::Timing::CyclesToMs(core_timing.GetTicks());
+        return {static_cast<u64_le>(ms.count() / 1000), {}};
+    }
+
+    std::shared_ptr<SharedMemory> shared_memory;
+    Core::System& system;
 };
 
 class ITimeZoneService final : public ServiceFramework<ITimeZoneService> {
@@ -225,7 +275,7 @@ void Module::Interface::GetStandardUserSystemClock(Kernel::HLERequestContext& ct
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<ISystemClock>();
+    rb.PushIpcInterface<ISystemClock>(shared_memory, ClockContextType::StandardUserSystem);
 }
 
 void Module::Interface::GetStandardNetworkSystemClock(Kernel::HLERequestContext& ctx) {
@@ -233,7 +283,7 @@ void Module::Interface::GetStandardNetworkSystemClock(Kernel::HLERequestContext&
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<ISystemClock>();
+    rb.PushIpcInterface<ISystemClock>(shared_memory, ClockContextType::StandardNetworkSystem);
 }
 
 void Module::Interface::GetStandardSteadyClock(Kernel::HLERequestContext& ctx) {
@@ -241,7 +291,7 @@ void Module::Interface::GetStandardSteadyClock(Kernel::HLERequestContext& ctx) {
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<ISteadyClock>();
+    rb.PushIpcInterface<ISteadyClock>(shared_memory, system);
 }
 
 void Module::Interface::GetTimeZoneService(Kernel::HLERequestContext& ctx) {
@@ -257,21 +307,16 @@ void Module::Interface::GetStandardLocalSystemClock(Kernel::HLERequestContext& c
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushIpcInterface<ISystemClock>();
+    rb.PushIpcInterface<ISystemClock>(shared_memory, ClockContextType::StandardLocalSystem);
 }
 
 void Module::Interface::GetClockSnapshot(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service_Time, "called");
 
     IPC::RequestParser rp{ctx};
-    auto unknown_u8 = rp.PopRaw<u8>();
+    const auto initial_type = rp.PopRaw<u8>();
 
-    ClockSnapshot clock_snapshot{};
-
-    const s64 time_since_epoch{std::chrono::duration_cast<std::chrono::seconds>(
-                                   std::chrono::system_clock::now().time_since_epoch())
-                                   .count()};
-    CalendarTime calendar_time{};
+    const s64 time_since_epoch{GetSecondsSinceEpoch().count()};
     const std::time_t time(time_since_epoch);
     const std::tm* tm = std::localtime(&time);
     if (tm == nullptr) {
@@ -280,16 +325,20 @@ void Module::Interface::GetClockSnapshot(Kernel::HLERequestContext& ctx) {
         rb.Push(ResultCode(-1)); // TODO(ogniK): Find appropriate error code
         return;
     }
-    SteadyClockTimePoint steady_clock_time_point{CoreTiming::cyclesToMs(CoreTiming::GetTicks()) /
-                                                 1000};
 
-    LocationName location_name{"UTC"};
+    const auto& core_timing = system.CoreTiming();
+    const auto ms = Core::Timing::CyclesToMs(core_timing.GetTicks());
+    const SteadyClockTimePoint steady_clock_time_point{static_cast<u64_le>(ms.count() / 1000), {}};
+
+    CalendarTime calendar_time{};
     calendar_time.year = tm->tm_year + 1900;
     calendar_time.month = tm->tm_mon + 1;
     calendar_time.day = tm->tm_mday;
     calendar_time.hour = tm->tm_hour;
     calendar_time.minute = tm->tm_min;
     calendar_time.second = tm->tm_sec;
+
+    ClockSnapshot clock_snapshot{};
     clock_snapshot.system_posix_time = time_since_epoch;
     clock_snapshot.network_posix_time = time_since_epoch;
     clock_snapshot.system_calendar_time = calendar_time;
@@ -302,9 +351,10 @@ void Module::Interface::GetClockSnapshot(Kernel::HLERequestContext& ctx) {
     clock_snapshot.network_calendar_info = additional_info;
 
     clock_snapshot.steady_clock_timepoint = steady_clock_time_point;
-    clock_snapshot.location_name = location_name;
+    clock_snapshot.location_name = LocationName{"UTC"};
     clock_snapshot.clock_auto_adjustment_enabled = 1;
-    clock_snapshot.ipc_u8 = unknown_u8;
+    clock_snapshot.type = initial_type;
+
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(RESULT_SUCCESS);
     ctx.WriteBuffer(&clock_snapshot, sizeof(ClockSnapshot));
@@ -325,16 +375,56 @@ void Module::Interface::CalculateStandardUserSystemClockDifferenceByUser(
     rb.PushRaw<u64>(difference);
 }
 
-Module::Interface::Interface(std::shared_ptr<Module> time, const char* name)
-    : ServiceFramework(name), time(std::move(time)) {}
+void Module::Interface::GetSharedMemoryNativeHandle(Kernel::HLERequestContext& ctx) {
+    LOG_DEBUG(Service_Time, "called");
+    IPC::ResponseBuilder rb{ctx, 2, 1};
+    rb.Push(RESULT_SUCCESS);
+    rb.PushCopyObjects(shared_memory->GetSharedMemoryHolder());
+}
+
+void Module::Interface::IsStandardUserSystemClockAutomaticCorrectionEnabled(
+    Kernel::HLERequestContext& ctx) {
+    // ogniK(TODO): When clock contexts are implemented, the value should be read from the context
+    // instead of our shared memory holder
+    LOG_DEBUG(Service_Time, "called");
+
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(RESULT_SUCCESS);
+    rb.Push<u8>(shared_memory->GetStandardUserSystemClockAutomaticCorrectionEnabled());
+}
+
+void Module::Interface::SetStandardUserSystemClockAutomaticCorrectionEnabled(
+    Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto enabled = rp.Pop<u8>();
+
+    LOG_WARNING(Service_Time, "(PARTIAL IMPLEMENTATION) called");
+
+    // TODO(ogniK): Update clock contexts and correct timespans
+
+    shared_memory->SetStandardUserSystemClockAutomaticCorrectionEnabled(enabled > 0);
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+Module::Interface::Interface(std::shared_ptr<Module> time,
+                             std::shared_ptr<SharedMemory> shared_memory, Core::System& system,
+                             const char* name)
+    : ServiceFramework(name), time(std::move(time)), shared_memory(std::move(shared_memory)),
+      system(system) {}
 
 Module::Interface::~Interface() = default;
 
-void InstallInterfaces(SM::ServiceManager& service_manager) {
+void InstallInterfaces(Core::System& system) {
     auto time = std::make_shared<Module>();
-    std::make_shared<Time>(time, "time:a")->InstallAsService(service_manager);
-    std::make_shared<Time>(time, "time:s")->InstallAsService(service_manager);
-    std::make_shared<Time>(time, "time:u")->InstallAsService(service_manager);
+    auto shared_mem = std::make_shared<SharedMemory>(system);
+
+    std::make_shared<Time>(time, shared_mem, system, "time:a")
+        ->InstallAsService(system.ServiceManager());
+    std::make_shared<Time>(time, shared_mem, system, "time:s")
+        ->InstallAsService(system.ServiceManager());
+    std::make_shared<Time>(std::move(time), shared_mem, system, "time:u")
+        ->InstallAsService(system.ServiceManager());
 }
 
 } // namespace Service::Time
