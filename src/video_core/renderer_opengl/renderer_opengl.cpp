@@ -316,8 +316,8 @@ void RendererOpenGL::DrawScreenTriangles(const ScreenInfo& screen_info, float x,
         }
     }
 
-    ASSERT_MSG(framebuffer_crop_rect.top == 0, "Unimplemented");
-    ASSERT_MSG(framebuffer_crop_rect.left == 0, "Unimplemented");
+    //ASSERT_MSG(framebuffer_crop_rect.top == 0, "Unimplemented");
+    //ASSERT_MSG(framebuffer_crop_rect.left == 0, "Unimplemented");
 
     // Scale the output by the crop width/height. This is commonly used with 1280x720 rendering
     // (e.g. handheld mode) on a 1920x1080 framebuffer.
