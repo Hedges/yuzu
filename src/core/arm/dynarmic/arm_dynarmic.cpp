@@ -67,6 +67,9 @@ public:
         ARM_Interface::ThreadContext ctx;
         parent.SaveContext(ctx);
         parent.inner_unicorn.LoadContext(ctx);
+        Kernel::Thread* thread = Kernel::GetCurrentThread();
+        parent.inner_unicorn.SetTlsAddress(thread->GetTLSAddress());
+        parent.inner_unicorn.SetTPIDR_EL0(thread->GetTPIDR_EL0());
         parent.inner_unicorn.ExecuteInstructions(static_cast<int>(num_instructions));
         parent.inner_unicorn.SaveContext(ctx);
         parent.LoadContext(ctx);
@@ -149,7 +152,7 @@ std::unique_ptr<Dynarmic::A64::Jit> ARM_Dynarmic::MakeJit(Common::PageTable& pag
     config.tpidr_el0 = &cb->tpidr_el0;
     config.dczid_el0 = 4;
     config.ctr_el0 = 0x8444c004;
-    config.cntfrq_el0 = Timing::CNTFREQ;
+    config.cntfrq_el0 = Timing::CNTFREQ+8;
 
     // Unpredictable instructions
     config.define_unpredictable_behaviour = true;
@@ -176,6 +179,15 @@ ARM_Dynarmic::ARM_Dynarmic(System& system, ExclusiveMonitor& exclusive_monitor,
       exclusive_monitor{dynamic_cast<DynarmicExclusiveMonitor&>(exclusive_monitor)} {}
 
 ARM_Dynarmic::~ARM_Dynarmic() = default;
+
+void ARM_Dynarmic::MapBackingMemory(u64 address, std::size_t size, u8* memory,
+                                    Kernel::VMAPermission perms) {
+    inner_unicorn.MapBackingMemory(address, size, memory, perms);
+}
+
+void ARM_Dynarmic::UnmapMemory(u64 address, std::size_t size) {
+    inner_unicorn.UnmapMemory(address, size);
+}
 
 void ARM_Dynarmic::SetPC(u64 pc) {
     jit->SetPC(pc);
