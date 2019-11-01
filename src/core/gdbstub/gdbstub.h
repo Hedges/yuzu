@@ -84,18 +84,15 @@ BreakpointAddress GetNextBreakpointFromAddress(VAddr addr, GDBStub::BreakpointTy
  */
 bool CheckBreakpoint(VAddr addr, GDBStub::BreakpointType type);
 
-/// If set to true, the CPU will halt at the beginning of the next CPU loop.
+/// Returns whether the CPU shall halt at the beginning of the next CPU loop.
 bool GetCpuHaltFlag();
 
-/// If set to true and the CPU is halted, the CPU will step one instruction.
-bool GetCpuStepFlag();
-
 /**
- * When set to true, the CPU will step one instruction when the CPU is halted next.
+ * Returns whether GDB is issuing a single-step command to the given thread.
  *
- * @param is_step
+ * @param thread Thread the CPU is about to execute (or has just executed).
  */
-void SetCpuStepFlag(bool is_step);
+bool GetThreadStepFlag(Kernel::Thread* thread);
 
 /**
  * Send trap signal from thread back to the gdbstub server.

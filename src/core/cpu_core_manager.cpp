@@ -110,24 +110,11 @@ void CpuCoreManager::RunLoop(bool tight_loop) {
     // Update thread_to_cpu in case Core 0 is run from a different host thread
     thread_to_cpu[std::this_thread::get_id()] = cores[0].get();
 
-    if (GDBStub::IsServerEnabled()) {
-        GDBStub::HandlePacket();
-
-        // If the loop is halted and we want to step, use a tiny (1) number of instructions to
-        // execute. Otherwise, get out of the loop function.
-        if (GDBStub::GetCpuHaltFlag()) {
-            if (GDBStub::GetCpuStepFlag()) {
-                tight_loop = false;
-            } else {
-                return;
-            }
-        }
-    }
-
     auto& core_timing = system.CoreTiming();
     core_timing.ResetRun();
     bool keep_running{};
     do {
+        GDBStub::HandlePacket();
         keep_running = false;
         for (active_core = 0; active_core < NUM_CPU_CORES; ++active_core) {
             core_timing.SwitchContext(active_core);
@@ -137,10 +124,6 @@ void CpuCoreManager::RunLoop(bool tight_loop) {
             keep_running |= core_timing.CanCurrentContextRun();
         }
     } while (keep_running);
-
-    if (GDBStub::IsServerEnabled()) {
-        GDBStub::SetCpuStepFlag(false);
-    }
 }
 
 void CpuCoreManager::InvalidateAllInstructionCaches() {
