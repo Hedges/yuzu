@@ -164,7 +164,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
         modules.insert_or_assign(load_addr, module);
         LOG_DEBUG(Loader, "loaded module {} @ 0x{:X}", module, load_addr);
         // Register module with GDBStub
-        GDBStub::RegisterModule(module, load_addr, next_load_addr - 1, false);
+        GDBStub::RegisterModule(module, load_addr, next_load_addr - 1);
     }
 
     // Find the RomFS by searching for a ".romfs" file in this directory

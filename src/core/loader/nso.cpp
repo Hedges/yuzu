@@ -162,7 +162,7 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::Process& process,
     process.LoadModule(std::move(codeset), load_base);
 
     // Register module with GDBStub
-    GDBStub::RegisterModule(file.GetName(), load_base, load_base);
+    GDBStub::RegisterModule(file.GetName(), load_base, load_base + program_image.size());
 
     return load_base + image_size;
 }
