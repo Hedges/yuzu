@@ -396,8 +396,8 @@ public:
         INSERT_PADDING_WORDS(3);
         u32_le timestamp;
         s32_le is_auto_timestamp;
-        s32_le crop_top;
         s32_le crop_left;
+        s32_le crop_top;
         s32_le crop_right;
         s32_le crop_bottom;
         s32_le scaling_mode;

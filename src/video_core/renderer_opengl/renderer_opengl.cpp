@@ -318,6 +318,8 @@ void RendererOpenGL::DrawScreenTriangles(const ScreenInfo& screen_info, float x,
 
     //ASSERT_MSG(framebuffer_crop_rect.top == 0, "Unimplemented");
     //ASSERT_MSG(framebuffer_crop_rect.left == 0, "Unimplemented");
+    f32 u0 = framebuffer_crop_rect.left / (f32)screen_info.texture.width;
+    f32 v0 = framebuffer_crop_rect.top / (f32)screen_info.texture.height;
 
     // Scale the output by the crop width/height. This is commonly used with 1280x720 rendering
     // (e.g. handheld mode) on a 1920x1080 framebuffer.
@@ -330,10 +332,10 @@ void RendererOpenGL::DrawScreenTriangles(const ScreenInfo& screen_info, float x,
     }
 
     std::array<ScreenRectVertex, 4> vertices = {{
-        ScreenRectVertex(x, y, texcoords.top * scale_u, left * scale_v),
-        ScreenRectVertex(x + w, y, texcoords.bottom * scale_u, left * scale_v),
-        ScreenRectVertex(x, y + h, texcoords.top * scale_u, right * scale_v),
-        ScreenRectVertex(x + w, y + h, texcoords.bottom * scale_u, right * scale_v),
+        ScreenRectVertex(x, y, u0 + texcoords.top * scale_u, v0 + left * scale_v),
+        ScreenRectVertex(x + w, y, u0 + texcoords.bottom * scale_u, v0 + left * scale_v),
+        ScreenRectVertex(x, y + h, u0 + texcoords.top * scale_u, v0 + right * scale_v),
+        ScreenRectVertex(x + w, y + h, u0 + texcoords.bottom * scale_u, v0 + right * scale_v),
     }};
 
     state.textures[0] = screen_info.display_texture;
