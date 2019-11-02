@@ -359,7 +359,7 @@ void RasterizerOpenGL::ConfigureFramebuffers() {
 
     const auto& regs = gpu.regs;
     state.framebuffer_srgb.enabled = regs.framebuffer_srgb != 0;
-    UNIMPLEMENTED_IF(regs.rt_separate_frag_data == 0);
+    //UNIMPLEMENTED_IF(regs.rt_separate_frag_data == 0);
 
     // Bind the framebuffer surfaces
     FramebufferCacheKey fbkey;
