@@ -67,7 +67,7 @@ static std::size_t GetConstBufferSize(const Tegra::Engines::ConstBufferInfo& buf
 RasterizerOpenGL::RasterizerOpenGL(Core::System& system, Core::Frontend::EmuWindow& emu_window,
                                    ScreenInfo& info)
     : texture_cache{system, *this, device}, shader_cache{*this, system, emu_window, device},
-      system{system}, screen_info{info}, buffer_cache{*this, system, STREAM_BUFFER_SIZE} {
+      system{system}, screen_info{info}, buffer_cache{*this, system, device, STREAM_BUFFER_SIZE} {
     shader_program_manager = std::make_unique<GLShader::ProgramManager>();
     state.draw.shader_program = 0;
     state.Apply();
@@ -558,6 +558,8 @@ void RasterizerOpenGL::DrawPrelude() {
     SyncPolygonOffset();
     SyncAlphaTest();
 
+    buffer_cache.Acquire();
+
     // Draw the vertex batch
     const bool is_indexed = accelerate_draw == AccelDraw::Indexed;
 
@@ -879,7 +881,8 @@ void RasterizerOpenGL::SetupConstBuffer(const Tegra::Engines::ConstBufferInfo& b
     const std::size_t size = Common::AlignUp(GetConstBufferSize(buffer, entry), sizeof(GLvec4));
 
     const auto alignment = device.GetUniformBufferAlignment();
-    const auto [cbuf, offset] = buffer_cache.UploadMemory(buffer.address, size, alignment);
+    const auto [cbuf, offset] = buffer_cache.UploadMemory(buffer.address, size, alignment, false,
+                                                          device.HasFastBufferSubData());
     bind_ubo_pushbuffer.Push(cbuf, offset, size);
 }
 
@@ -935,10 +938,9 @@ TextureBufferUsage RasterizerOpenGL::SetupDrawTextures(Maxwell::ShaderStage stag
             if (!entry.IsBindless()) {
                 return maxwell3d.GetStageTexture(stage, entry.GetOffset());
             }
-            const auto cbuf = entry.GetBindlessCBuf();
-            Tegra::Texture::TextureHandle tex_handle;
-            Tegra::Engines::ShaderType shader_type = static_cast<Tegra::Engines::ShaderType>(stage);
-            tex_handle.raw = maxwell3d.AccessConstBuffer32(shader_type, cbuf.first, cbuf.second);
+            const auto shader_type = static_cast<Tegra::Engines::ShaderType>(stage);
+            const Tegra::Texture::TextureHandle tex_handle =
+                maxwell3d.AccessConstBuffer32(shader_type, entry.GetBuffer(), entry.GetOffset());
             return maxwell3d.GetTextureInfo(tex_handle);
         }();
 
@@ -966,10 +968,8 @@ TextureBufferUsage RasterizerOpenGL::SetupComputeTextures(const Shader& kernel) 
             if (!entry.IsBindless()) {
                 return compute.GetTexture(entry.GetOffset());
             }
-            const auto cbuf = entry.GetBindlessCBuf();
-            Tegra::Texture::TextureHandle tex_handle;
-            tex_handle.raw = compute.AccessConstBuffer32(Tegra::Engines::ShaderType::Compute,
-                                                         cbuf.first, cbuf.second);
+            const Tegra::Texture::TextureHandle tex_handle = compute.AccessConstBuffer32(
+                Tegra::Engines::ShaderType::Compute, entry.GetBuffer(), entry.GetOffset());
             return compute.GetTextureInfo(tex_handle);
         }();
 
@@ -1012,10 +1012,8 @@ void RasterizerOpenGL::SetupComputeImages(const Shader& shader) {
             if (!entry.IsBindless()) {
                 return compute.GetTexture(entry.GetOffset()).tic;
             }
-            const auto cbuf = entry.GetBindlessCBuf();
-            Tegra::Texture::TextureHandle tex_handle;
-            tex_handle.raw = compute.AccessConstBuffer32(Tegra::Engines::ShaderType::Compute,
-                                                         cbuf.first, cbuf.second);
+            const Tegra::Texture::TextureHandle tex_handle = compute.AccessConstBuffer32(
+                Tegra::Engines::ShaderType::Compute, entry.GetBuffer(), entry.GetOffset());
             return compute.GetTextureInfo(tex_handle).tic;
         }();
         SetupImage(bindpoint, tic, entry);

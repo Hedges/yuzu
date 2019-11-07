@@ -44,10 +44,6 @@ u32 ShaderIR::DecodeTexture(NodeBlock& bb, u32 pc) {
     bool is_bindless = false;
     switch (opcode->get().GetId()) {
     case OpCode::Id::TEX: {
-        if (instr.tex.UsesMiscMode(TextureMiscMode::NODEP)) {
-            LOG_WARNING(HW_GPU, "TEX.NODEP implementation is incomplete");
-        }
-
         const TextureType texture_type{instr.tex.texture_type};
         const bool is_array = instr.tex.array != 0;
         const bool is_aoffi = instr.tex.UsesMiscMode(TextureMiscMode::AOFFI);
@@ -61,10 +57,6 @@ u32 ShaderIR::DecodeTexture(NodeBlock& bb, u32 pc) {
     case OpCode::Id::TEX_B: {
         UNIMPLEMENTED_IF_MSG(instr.tex.UsesMiscMode(TextureMiscMode::AOFFI),
                              "AOFFI is not implemented");
-
-        if (instr.tex.UsesMiscMode(TextureMiscMode::NODEP)) {
-            LOG_WARNING(HW_GPU, "TEX.NODEP implementation is incomplete");
-        }
 
         const TextureType texture_type{instr.tex_b.texture_type};
         const bool is_array = instr.tex_b.array != 0;
@@ -81,10 +73,6 @@ u32 ShaderIR::DecodeTexture(NodeBlock& bb, u32 pc) {
         const bool is_array{instr.texs.IsArrayTexture()};
         const bool depth_compare = instr.texs.UsesMiscMode(TextureMiscMode::DC);
         const auto process_mode = instr.texs.GetTextureProcessMode();
-
-        if (instr.texs.UsesMiscMode(TextureMiscMode::NODEP)) {
-            LOG_WARNING(HW_GPU, "TEXS.NODEP implementation is incomplete");
-        }
 
         const Node4 components =
             GetTexsCode(instr, texture_type, process_mode, depth_compare, is_array);
@@ -107,10 +95,6 @@ u32 ShaderIR::DecodeTexture(NodeBlock& bb, u32 pc) {
         UNIMPLEMENTED_IF_MSG(instr.tld4.UsesMiscMode(TextureMiscMode::PTP),
                              "PTP is not implemented");
 
-        if (instr.tld4.UsesMiscMode(TextureMiscMode::NODEP)) {
-            LOG_WARNING(HW_GPU, "TLD4.NODEP implementation is incomplete");
-        }
-
         const auto texture_type = instr.tld4.texture_type.Value();
         const bool depth_compare = is_bindless ? instr.tld4_b.UsesMiscMode(TextureMiscMode::DC)
                                                : instr.tld4.UsesMiscMode(TextureMiscMode::DC);
@@ -125,9 +109,6 @@ u32 ShaderIR::DecodeTexture(NodeBlock& bb, u32 pc) {
     case OpCode::Id::TLD4S: {
         UNIMPLEMENTED_IF_MSG(instr.tld4s.UsesMiscMode(TextureMiscMode::AOFFI),
                              "AOFFI is not implemented");
-        if (instr.tld4s.UsesMiscMode(TextureMiscMode::NODEP)) {
-            LOG_WARNING(HW_GPU, "TLD4S.NODEP implementation is incomplete");
-        }
 
         const bool depth_compare = instr.tld4s.UsesMiscMode(TextureMiscMode::DC);
         const Node op_a = GetRegister(instr.gpr8);
@@ -164,10 +145,6 @@ u32 ShaderIR::DecodeTexture(NodeBlock& bb, u32 pc) {
         is_bindless = true;
         [[fallthrough]];
     case OpCode::Id::TXQ: {
-        if (instr.txq.UsesMiscMode(TextureMiscMode::NODEP)) {
-            LOG_WARNING(HW_GPU, "TXQ.NODEP implementation is incomplete");
-        }
-
         // TODO: The new commits on the texture refactor, change the way samplers work.
         // Sadly, not all texture instructions specify the type of texture their sampler
         // uses. This must be fixed at a later instance.
@@ -204,10 +181,6 @@ u32 ShaderIR::DecodeTexture(NodeBlock& bb, u32 pc) {
     case OpCode::Id::TMML: {
         UNIMPLEMENTED_IF_MSG(instr.tmml.UsesMiscMode(Tegra::Shader::TextureMiscMode::NDV),
                              "NDV is not implemented");
-
-        if (instr.tmml.UsesMiscMode(TextureMiscMode::NODEP)) {
-            LOG_WARNING(HW_GPU, "TMML.NODEP implementation is incomplete");
-        }
 
         auto texture_type = instr.tmml.texture_type.Value();
         const bool is_array = instr.tmml.array != 0;
@@ -254,24 +227,16 @@ u32 ShaderIR::DecodeTexture(NodeBlock& bb, u32 pc) {
         UNIMPLEMENTED_IF_MSG(instr.tld.ms, "MS is not implemented");
         UNIMPLEMENTED_IF_MSG(instr.tld.cl, "CL is not implemented");
 
-        if (instr.tld.nodep_flag) {
-            LOG_WARNING(HW_GPU, "TLD.NODEP implementation is incomplete");
-        }
-
         WriteTexInstructionFloat(bb, instr, GetTldCode(instr));
         break;
     }
     case OpCode::Id::TLDS: {
-        const Tegra::Shader::TextureType texture_type{instr.tlds.GetTextureType()};
+        const TextureType texture_type{instr.tlds.GetTextureType()};
         const bool is_array{instr.tlds.IsArrayTexture()};
 
         UNIMPLEMENTED_IF_MSG(instr.tlds.UsesMiscMode(TextureMiscMode::AOFFI),
                              "AOFFI is not implemented");
         UNIMPLEMENTED_IF_MSG(instr.tlds.UsesMiscMode(TextureMiscMode::MZ), "MZ is not implemented");
-
-        if (instr.tlds.UsesMiscMode(TextureMiscMode::NODEP)) {
-            LOG_WARNING(HW_GPU, "TLDS.NODEP implementation is incomplete");
-        }
 
         const Node4 components = GetTldsCode(instr, texture_type, is_array);
 
@@ -293,77 +258,80 @@ const Sampler& ShaderIR::GetSampler(const Tegra::Shader::Sampler& sampler,
                                     std::optional<SamplerInfo> sampler_info) {
     const auto offset = static_cast<u32>(sampler.index.Value());
 
-    Tegra::Shader::TextureType type;
+    TextureType type;
     bool is_array;
     bool is_shadow;
     if (sampler_info) {
         type = sampler_info->type;
         is_array = sampler_info->is_array;
         is_shadow = sampler_info->is_shadow;
-    } else if (auto sampler = locker.ObtainBoundSampler(offset); sampler) {
+    } else if (const auto sampler = locker.ObtainBoundSampler(offset)) {
         type = sampler->texture_type.Value();
         is_array = sampler->is_array.Value() != 0;
         is_shadow = sampler->is_shadow.Value() != 0;
     } else {
-        type = Tegra::Shader::TextureType::Texture2D;
+        LOG_WARNING(HW_GPU, "Unknown sampler info");
+        type = TextureType::Texture2D;
         is_array = false;
         is_shadow = false;
     }
 
     // If this sampler has already been used, return the existing mapping.
-    const auto itr =
+    const auto it =
         std::find_if(used_samplers.begin(), used_samplers.end(),
-                     [&](const Sampler& entry) { return entry.GetOffset() == offset; });
-    if (itr != used_samplers.end()) {
-        ASSERT(itr->GetType() == type && itr->IsArray() == is_array &&
-               itr->IsShadow() == is_shadow);
-        return *itr;
+                     [offset](const Sampler& entry) { return entry.GetOffset() == offset; });
+    if (it != used_samplers.end()) {
+        ASSERT(!it->IsBindless() && it->GetType() == type && it->IsArray() == is_array &&
+               it->IsShadow() == is_shadow);
+        return *it;
     }
 
     // Otherwise create a new mapping for this sampler
-    const std::size_t next_index = used_samplers.size();
-    const Sampler entry{offset, next_index, type, is_array, is_shadow};
-    return *used_samplers.emplace(entry).first;
-} // namespace VideoCommon::Shader
+    const auto next_index = static_cast<u32>(used_samplers.size());
+    return used_samplers.emplace_back(Sampler(next_index, offset, type, is_array, is_shadow));
+}
 
 const Sampler& ShaderIR::GetBindlessSampler(const Tegra::Shader::Register& reg,
                                             std::optional<SamplerInfo> sampler_info) {
     const Node sampler_register = GetRegister(reg);
-    const auto [base_sampler, cbuf_index, cbuf_offset] =
+    const auto [base_sampler, buffer, offset] =
         TrackCbuf(sampler_register, global_code, static_cast<s64>(global_code.size()));
     ASSERT(base_sampler != nullptr);
-    const auto cbuf_key = (static_cast<u64>(cbuf_index) << 32) | static_cast<u64>(cbuf_offset);
-    Tegra::Shader::TextureType type;
+
+    TextureType type;
     bool is_array;
     bool is_shadow;
     if (sampler_info) {
         type = sampler_info->type;
         is_array = sampler_info->is_array;
         is_shadow = sampler_info->is_shadow;
-    } else if (auto sampler = locker.ObtainBindlessSampler(cbuf_index, cbuf_offset); sampler) {
+    } else if (const auto sampler = locker.ObtainBindlessSampler(buffer, offset)) {
         type = sampler->texture_type.Value();
         is_array = sampler->is_array.Value() != 0;
         is_shadow = sampler->is_shadow.Value() != 0;
     } else {
-        type = Tegra::Shader::TextureType::Texture2D;
+        LOG_WARNING(HW_GPU, "Unknown sampler info");
+        type = TextureType::Texture2D;
         is_array = false;
         is_shadow = false;
     }
 
     // If this sampler has already been used, return the existing mapping.
-    const auto itr =
+    const auto it =
         std::find_if(used_samplers.begin(), used_samplers.end(),
-                     [&](const Sampler& entry) { return entry.GetOffset() == cbuf_key; });
-    if (itr != used_samplers.end()) {
-        ASSERT(itr->GetType() == type && itr->IsArray() == is_array &&
-               itr->IsShadow() == is_shadow);
-        return *itr;
+                     [buffer = buffer, offset = offset](const Sampler& entry) {
+                         return entry.GetBuffer() == buffer && entry.GetOffset() == offset;
+                     });
+    if (it != used_samplers.end()) {
+        ASSERT(it->IsBindless() && it->GetType() == type && it->IsArray() == is_array &&
+               it->IsShadow() == is_shadow);
+        return *it;
     }
 
     // Otherwise create a new mapping for this sampler
-    const std::size_t next_index = used_samplers.size();
-    const Sampler entry{cbuf_index, cbuf_offset, next_index, type, is_array, is_shadow};
-    return *used_samplers.emplace(entry).first;
+    const auto next_index = static_cast<u32>(used_samplers.size());
+    return used_samplers.emplace_back(
+        Sampler(next_index, offset, buffer, type, is_array, is_shadow));
 }
 
 void ShaderIR::WriteTexInstructionFloat(NodeBlock& bb, Instruction instr, const Node4& components) {
