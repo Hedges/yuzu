@@ -114,7 +114,7 @@ void HandleDownloadDisplayResult(const AM::Applets::AppletManager& applet_manage
 
     const auto& frontend{applet_manager.GetAppletFrontendSet()};
     frontend.error->ShowCustomErrorText(
-        ResultCode(-1), "There was an error while attempting to use Boxcat.",
+        RESULT_UNKNOWN, "There was an error while attempting to use Boxcat.",
         DOWNLOAD_RESULT_LOG_MESSAGES[static_cast<std::size_t>(res)], [] {});
 }
 
@@ -255,7 +255,7 @@ private:
     using Digest = std::array<u8, 0x20>;
     static Digest DigestFile(std::vector<u8> bytes) {
         Digest out{};
-        mbedtls_sha256(bytes.data(), bytes.size(), out.data(), 0);
+        mbedtls_sha256_ret(bytes.data(), bytes.size(), out.data(), 0);
         return out;
     }
 
