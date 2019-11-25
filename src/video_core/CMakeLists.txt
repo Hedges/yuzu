@@ -22,6 +22,7 @@ add_library(video_core STATIC
     engines/maxwell_dma.h
     engines/shader_bytecode.h
     engines/shader_header.h
+    engines/shader_type.h
     gpu.cpp
     gpu.h
     gpu_asynch.cpp
@@ -127,6 +128,8 @@ add_library(video_core STATIC
     shader/track.cpp
     surface.cpp
     surface.h
+    texture_cache/format_lookup_table.cpp
+    texture_cache/format_lookup_table.h
     texture_cache/surface_base.cpp
     texture_cache/surface_base.h
     texture_cache/surface_params.cpp

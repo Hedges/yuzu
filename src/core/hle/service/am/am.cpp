@@ -229,7 +229,15 @@ IDebugFunctions::IDebugFunctions() : ServiceFramework{"IDebugFunctions"} {
         {20, nullptr, "InvalidateTransitionLayer"},
         {30, nullptr, "RequestLaunchApplicationWithUserAndArgumentForDebug"},
         {40, nullptr, "GetAppletResourceUsageInfo"},
-        {41, nullptr, "SetCpuBoostModeForApplet"},
+        {100, nullptr, "SetCpuBoostModeForApplet"},
+        {110, nullptr, "PushToAppletBoundChannelForDebug"},
+        {111, nullptr, "TryPopFromAppletBoundChannelForDebug"},
+        {120, nullptr, "AlarmSettingNotificationEnableAppEventReserve"},
+        {121, nullptr, "AlarmSettingNotificationDisableAppEventReserve"},
+        {122, nullptr, "AlarmSettingNotificationPushAppEventNotify"},
+        {130, nullptr, "FriendInvitationSetApplicationParameter"},
+        {131, nullptr, "FriendInvitationClearApplicationParameter"},
+        {132, nullptr, "FriendInvitationPushApplicationParameter"},
     };
     // clang-format on
 
@@ -278,10 +286,12 @@ ISelfController::ISelfController(Core::System& system,
         {69, &ISelfController::IsAutoSleepDisabled, "IsAutoSleepDisabled"},
         {70, nullptr, "ReportMultimediaError"},
         {71, nullptr, "GetCurrentIlluminanceEx"},
+        {72, nullptr, "SetInputDetectionPolicy"},
         {80, nullptr, "SetWirelessPriorityMode"},
         {90, &ISelfController::GetAccumulatedSuspendedTickValue, "GetAccumulatedSuspendedTickValue"},
         {91, &ISelfController::GetAccumulatedSuspendedTickChangedEvent, "GetAccumulatedSuspendedTickChangedEvent"},
         {100, nullptr, "SetAlbumImageTakenNotificationEnabled"},
+        {110, nullptr, "SetApplicationAlbumUserData"},
         {1000, nullptr, "GetDebugStorageChannel"},
     };
     // clang-format on
@@ -531,12 +541,11 @@ AppletMessageQueue::AppletMessageQueue(Kernel::KernelCore& kernel) {
 
 AppletMessageQueue::~AppletMessageQueue() = default;
 
-const Kernel::SharedPtr<Kernel::ReadableEvent>& AppletMessageQueue::GetMesssageRecieveEvent()
-    const {
+const std::shared_ptr<Kernel::ReadableEvent>& AppletMessageQueue::GetMesssageRecieveEvent() const {
     return on_new_message.readable;
 }
 
-const Kernel::SharedPtr<Kernel::ReadableEvent>& AppletMessageQueue::GetOperationModeChangedEvent()
+const std::shared_ptr<Kernel::ReadableEvent>& AppletMessageQueue::GetOperationModeChangedEvent()
     const {
     return on_operation_mode_changed.readable;
 }
@@ -613,6 +622,7 @@ ICommonStateGetter::ICommonStateGetter(Core::System& system,
         {90, nullptr, "SetPerformanceConfigurationChangedNotification"},
         {91, nullptr, "GetCurrentPerformanceConfiguration"},
         {200, nullptr, "GetOperationModeSystemInfo"},
+        {300, nullptr, "GetSettingsPlatformRegion"},
     };
     // clang-format on
 
@@ -1076,12 +1086,18 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_)
         {100, &IApplicationFunctions::InitializeApplicationCopyrightFrameBuffer, "InitializeApplicationCopyrightFrameBuffer"},
         {101, &IApplicationFunctions::SetApplicationCopyrightImage, "SetApplicationCopyrightImage"},
         {102, &IApplicationFunctions::SetApplicationCopyrightVisibility, "SetApplicationCopyrightVisibility"},
-        {110, nullptr, "QueryApplicationPlayStatistics"},
+        {110, &IApplicationFunctions::QueryApplicationPlayStatistics, "QueryApplicationPlayStatistics"},
         {111, &IApplicationFunctions::QueryApplicationPlayStatisticsByUid, "QueryApplicationPlayStatisticsByUid"},
         {120, nullptr, "ExecuteProgram"},
         {121, nullptr, "ClearUserChannel"},
         {122, nullptr, "UnpopToUserChannel"},
         {130, &IApplicationFunctions::GetGpuErrorDetectedSystemEvent, "GetGpuErrorDetectedSystemEvent"},
+        {140, nullptr, "GetFriendInvitationStorageChannelEvent"},
+        {141, nullptr, "TryPopFromFriendInvitationStorageChannel"},
+        {150, nullptr, "GetNotificationStorageChannelEvent"},
+        {151, nullptr, "TryPopFromNotificationStorageChannel"},
+        {160, nullptr, "GetHealthWarningDisappearedSystemEvent"},
+        {170, nullptr, "SetHdcpAuthenticationActivated"},
         {500, nullptr, "StartContinuousRecordingFlushForDebug"},
         {1000, nullptr, "CreateMovieMaker"},
         {1001, nullptr, "PrepareForJit"},
@@ -1336,12 +1352,16 @@ void IApplicationFunctions::GetPseudoDeviceId(Kernel::HLERequestContext& ctx) {
 }
 
 void IApplicationFunctions::ExtendSaveData(Kernel::HLERequestContext& ctx) {
+    struct Parameters {
+        FileSys::SaveDataType type;
+        u128 user_id;
+        u64 new_normal_size;
+        u64 new_journal_size;
+    };
+    static_assert(sizeof(Parameters) == 40);
+
     IPC::RequestParser rp{ctx};
-    const auto type{rp.PopRaw<FileSys::SaveDataType>()};
-    rp.Skip(1, false);
-    const auto user_id{rp.PopRaw<u128>()};
-    const auto new_normal_size{rp.PopRaw<u64>()};
-    const auto new_journal_size{rp.PopRaw<u64>()};
+    const auto [type, user_id, new_normal_size, new_journal_size] = rp.PopRaw<Parameters>();
 
     LOG_DEBUG(Service_AM,
               "called with type={:02X}, user_id={:016X}{:016X}, new_normal={:016X}, "
@@ -1360,10 +1380,14 @@ void IApplicationFunctions::ExtendSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void IApplicationFunctions::GetSaveDataSize(Kernel::HLERequestContext& ctx) {
+    struct Parameters {
+        FileSys::SaveDataType type;
+        u128 user_id;
+    };
+    static_assert(sizeof(Parameters) == 24);
+
     IPC::RequestParser rp{ctx};
-    const auto type{rp.PopRaw<FileSys::SaveDataType>()};
-    rp.Skip(1, false);
-    const auto user_id{rp.PopRaw<u128>()};
+    const auto [type, user_id] = rp.PopRaw<Parameters>();
 
     LOG_DEBUG(Service_AM, "called with type={:02X}, user_id={:016X}{:016X}", static_cast<u8>(type),
               user_id[1], user_id[0]);
@@ -1377,12 +1401,12 @@ void IApplicationFunctions::GetSaveDataSize(Kernel::HLERequestContext& ctx) {
     rb.Push(size.journal);
 }
 
-void IApplicationFunctions::GetGpuErrorDetectedSystemEvent(Kernel::HLERequestContext& ctx) {
+void IApplicationFunctions::QueryApplicationPlayStatistics(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service_AM, "(STUBBED) called");
 
-    IPC::ResponseBuilder rb{ctx, 2, 1};
+    IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(gpu_error_detected_event.readable);
+    rb.Push<u32>(0);
 }
 
 void IApplicationFunctions::QueryApplicationPlayStatisticsByUid(Kernel::HLERequestContext& ctx) {
@@ -1391,6 +1415,14 @@ void IApplicationFunctions::QueryApplicationPlayStatisticsByUid(Kernel::HLEReque
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(RESULT_SUCCESS);
     rb.Push<u32>(0);
+}
+
+void IApplicationFunctions::GetGpuErrorDetectedSystemEvent(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 2, 1};
+    rb.Push(RESULT_SUCCESS);
+    rb.PushCopyObjects(gpu_error_detected_event.readable);
 }
 
 void InstallInterfaces(SM::ServiceManager& service_manager,
@@ -1418,6 +1450,8 @@ IHomeMenuFunctions::IHomeMenuFunctions() : ServiceFramework("IHomeMenuFunctions"
         {30, nullptr, "GetHomeButtonWriterLockAccessor"},
         {31, nullptr, "GetWriterLockAccessorEx"},
         {100, nullptr, "PopRequestLaunchApplicationForDebug"},
+        {110, nullptr, "IsForceTerminateApplicationDisabledForDebug"},
+        {200, nullptr, "LaunchDevMenu"},
     };
     // clang-format on
 

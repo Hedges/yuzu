@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <list>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include "common/common_types.h"
 #include "core/hle/kernel/address_arbiter.h"
@@ -61,6 +62,9 @@ enum class ProcessStatus {
 
 class Process final : public WaitObject {
 public:
+    explicit Process(Core::System& system);
+    ~Process() override;
+
     enum : u64 {
         /// Lowest allowed process ID for a kernel initial process.
         InitialKIPIDMin = 1,
@@ -81,7 +85,8 @@ public:
 
     static constexpr std::size_t RANDOM_ENTROPY_SIZE = 4;
 
-    static SharedPtr<Process> Create(Core::System& system, std::string name, ProcessType type);
+    static std::shared_ptr<Process> Create(Core::System& system, std::string name,
+                                           ProcessType type);
 
     std::string GetTypeName() const override {
         return "Process";
@@ -156,7 +161,7 @@ public:
     }
 
     /// Gets the resource limit descriptor for this process
-    SharedPtr<ResourceLimit> GetResourceLimit() const;
+    std::shared_ptr<ResourceLimit> GetResourceLimit() const;
 
     /// Gets the ideal CPU core ID for this process
     u8 GetIdealCore() const {
@@ -232,6 +237,15 @@ public:
         return thread_list;
     }
 
+    /// Insert a thread into the condition variable wait container
+    void InsertConditionVariableThread(std::shared_ptr<Thread> thread);
+
+    /// Remove a thread from the condition variable wait container
+    void RemoveConditionVariableThread(std::shared_ptr<Thread> thread);
+
+    /// Obtain all condition variable threads waiting for some address
+    std::vector<std::shared_ptr<Thread>> GetConditionVariableThreads(VAddr cond_var_addr);
+
     /// Registers a thread as being created under this process,
     /// adding it to this process' thread list.
     void RegisterThread(const Thread* thread);
@@ -287,9 +301,6 @@ public:
     void FreeTLSRegion(VAddr tls_address);
 
 private:
-    explicit Process(Core::System& system);
-    ~Process() override;
-
     /// Checks if the specified thread should wait until this process is available.
     bool ShouldWait(const Thread* thread) const override;
 
@@ -328,7 +339,7 @@ private:
     u32 system_resource_size = 0;
 
     /// Resource limit descriptor for this process
-    SharedPtr<ResourceLimit> resource_limit;
+    std::shared_ptr<ResourceLimit> resource_limit;
 
     /// The ideal CPU core for this process, threads are scheduled on this core by default.
     u8 ideal_core = 0;
@@ -374,6 +385,9 @@ private:
 
     /// List of threads that are running with this process as their owner.
     std::list<const Thread*> thread_list;
+
+    /// List of threads waiting for a condition variable
+    std::unordered_map<VAddr, std::list<std::shared_ptr<Thread>>> cond_var_threads;
 
     /// System context
     Core::System& system;

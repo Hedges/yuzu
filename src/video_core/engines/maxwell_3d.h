@@ -18,6 +18,7 @@
 #include "video_core/engines/const_buffer_engine_interface.h"
 #include "video_core/engines/const_buffer_info.h"
 #include "video_core/engines/engine_upload.h"
+#include "video_core/engines/shader_type.h"
 #include "video_core/gpu.h"
 #include "video_core/macro_interpreter.h"
 #include "video_core/textures/texture.h"
@@ -62,7 +63,6 @@ public:
         static constexpr std::size_t NumVertexArrays = 32;
         static constexpr std::size_t NumVertexAttributes = 32;
         static constexpr std::size_t NumVaryings = 31;
-        static constexpr std::size_t NumTextureSamplers = 32;
         static constexpr std::size_t NumImages = 8; // TODO(Rodrigo): Investigate this number
         static constexpr std::size_t NumClipDistances = 8;
         static constexpr std::size_t MaxShaderProgram = 6;
@@ -128,14 +128,6 @@ public:
             TesselationEval = 3,
             Geometry = 4,
             Fragment = 5,
-        };
-
-        enum class ShaderStage : u32 {
-            Vertex = 0,
-            TesselationControl = 1,
-            TesselationEval = 2,
-            Geometry = 3,
-            Fragment = 4,
         };
 
         struct VertexAttribute {
@@ -677,8 +669,8 @@ public:
                 INSERT_UNION_PADDING_WORDS(0x15);
 
                 s32 stencil_back_func_ref;
-                u32 stencil_back_mask;
                 u32 stencil_back_func_mask;
+                u32 stencil_back_mask;
 
                 INSERT_UNION_PADDING_WORDS(0xC);
 
@@ -1254,7 +1246,7 @@ public:
     Texture::FullTextureInfo GetTextureInfo(Texture::TextureHandle tex_handle) const;
 
     /// Returns the texture information for a specific texture in a specific shader stage.
-    Texture::FullTextureInfo GetStageTexture(Regs::ShaderStage stage, std::size_t offset) const;
+    Texture::FullTextureInfo GetStageTexture(ShaderType stage, std::size_t offset) const;
 
     u32 AccessConstBuffer32(ShaderType stage, u64 const_buffer, u64 offset) const override;
 
@@ -1376,7 +1368,7 @@ private:
     void FinishCBData();
 
     /// Handles a write to the CB_BIND register.
-    void ProcessCBBind(Regs::ShaderStage stage);
+    void ProcessCBBind(std::size_t stage_index);
 
     /// Handles a write to the VERTEX_END_GL register, triggering a draw.
     void DrawArrays();
@@ -1407,8 +1399,8 @@ ASSERT_REG_POSITION(polygon_offset_line_enable, 0x371);
 ASSERT_REG_POSITION(polygon_offset_fill_enable, 0x372);
 ASSERT_REG_POSITION(scissor_test, 0x380);
 ASSERT_REG_POSITION(stencil_back_func_ref, 0x3D5);
-ASSERT_REG_POSITION(stencil_back_mask, 0x3D6);
-ASSERT_REG_POSITION(stencil_back_func_mask, 0x3D7);
+ASSERT_REG_POSITION(stencil_back_func_mask, 0x3D6);
+ASSERT_REG_POSITION(stencil_back_mask, 0x3D7);
 ASSERT_REG_POSITION(color_mask_common, 0x3E4);
 ASSERT_REG_POSITION(rt_separate_frag_data, 0x3EB);
 ASSERT_REG_POSITION(depth_bounds, 0x3EC);

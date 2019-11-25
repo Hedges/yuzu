@@ -87,7 +87,7 @@ struct DeliveryCacheDirectoryEntry {
 
 class IDeliveryCacheProgressService final : public ServiceFramework<IDeliveryCacheProgressService> {
 public:
-    IDeliveryCacheProgressService(Kernel::SharedPtr<Kernel::ReadableEvent> event,
+    IDeliveryCacheProgressService(std::shared_ptr<Kernel::ReadableEvent> event,
                                   const DeliveryCacheProgressImpl& impl)
         : ServiceFramework{"IDeliveryCacheProgressService"}, event(std::move(event)), impl(impl) {
         // clang-format off
@@ -118,7 +118,7 @@ private:
         rb.Push(RESULT_SUCCESS);
     }
 
-    Kernel::SharedPtr<Kernel::ReadableEvent> event;
+    std::shared_ptr<Kernel::ReadableEvent> event;
     const DeliveryCacheProgressImpl& impl;
 };
 
@@ -137,14 +137,20 @@ public:
             {10200, nullptr, "CancelSyncDeliveryCacheRequest"},
             {20100, nullptr, "RequestSyncDeliveryCacheWithApplicationId"},
             {20101, nullptr, "RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName"},
+            {20300, nullptr, "GetDeliveryCacheStorageUpdateNotifier"},
+            {20301, nullptr, "RequestSuspendDeliveryTask"},
+            {20400, nullptr, "RegisterSystemApplicationDeliveryTask"},
+            {20401, nullptr, "UnregisterSystemApplicationDeliveryTask"},
             {30100, &IBcatService::SetPassphrase, "SetPassphrase"},
             {30200, nullptr, "RegisterBackgroundDeliveryTask"},
             {30201, nullptr, "UnregisterBackgroundDeliveryTask"},
             {30202, nullptr, "BlockDeliveryTask"},
             {30203, nullptr, "UnblockDeliveryTask"},
+            {30300, nullptr, "RegisterSystemApplicationDeliveryTasks"},
             {90100, nullptr, "EnumerateBackgroundDeliveryTask"},
             {90200, nullptr, "GetDeliveryList"},
             {90201, &IBcatService::ClearDeliveryCacheStorage, "ClearDeliveryCacheStorage"},
+            {90202, nullptr, "ClearDeliveryTaskSubscriptionStatus"},
             {90300, nullptr, "GetPushNotificationLog"},
         };
         // clang-format on

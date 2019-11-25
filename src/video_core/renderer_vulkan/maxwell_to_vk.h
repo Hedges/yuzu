@@ -16,7 +16,6 @@ namespace Vulkan::MaxwellToVK {
 
 using Maxwell = Tegra::Engines::Maxwell3D::Regs;
 using PixelFormat = VideoCore::Surface::PixelFormat;
-using ComponentType = VideoCore::Surface::ComponentType;
 
 namespace Sampler {
 
@@ -31,9 +30,9 @@ vk::CompareOp DepthCompareFunction(Tegra::Texture::DepthCompareFunc depth_compar
 } // namespace Sampler
 
 std::pair<vk::Format, bool> SurfaceFormat(const VKDevice& device, FormatType format_type,
-                                          PixelFormat pixel_format, ComponentType component_type);
+                                          PixelFormat pixel_format);
 
-vk::ShaderStageFlagBits ShaderStage(Maxwell::ShaderStage stage);
+vk::ShaderStageFlagBits ShaderStage(Tegra::Engines::ShaderType stage);
 
 vk::PrimitiveTopology PrimitiveTopology(Maxwell::PrimitiveTopology topology);
 

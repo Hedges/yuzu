@@ -54,8 +54,8 @@ public:
     explicit AppletMessageQueue(Kernel::KernelCore& kernel);
     ~AppletMessageQueue();
 
-    const Kernel::SharedPtr<Kernel::ReadableEvent>& GetMesssageRecieveEvent() const;
-    const Kernel::SharedPtr<Kernel::ReadableEvent>& GetOperationModeChangedEvent() const;
+    const std::shared_ptr<Kernel::ReadableEvent>& GetMesssageRecieveEvent() const;
+    const std::shared_ptr<Kernel::ReadableEvent>& GetOperationModeChangedEvent() const;
     void PushMessage(AppletMessage msg);
     AppletMessage PopMessage();
     std::size_t GetMessageCount() const;
@@ -255,8 +255,9 @@ private:
     void InitializeApplicationCopyrightFrameBuffer(Kernel::HLERequestContext& ctx);
     void SetApplicationCopyrightImage(Kernel::HLERequestContext& ctx);
     void SetApplicationCopyrightVisibility(Kernel::HLERequestContext& ctx);
-    void GetGpuErrorDetectedSystemEvent(Kernel::HLERequestContext& ctx);
+    void QueryApplicationPlayStatistics(Kernel::HLERequestContext& ctx);
     void QueryApplicationPlayStatisticsByUid(Kernel::HLERequestContext& ctx);
+    void GetGpuErrorDetectedSystemEvent(Kernel::HLERequestContext& ctx);
 
     bool launch_popped_application_specific = false;
     bool launch_popped_account_preselect = false;
