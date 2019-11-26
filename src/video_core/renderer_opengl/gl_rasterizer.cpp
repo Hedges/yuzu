@@ -1078,8 +1078,7 @@ void RasterizerOpenGL::SyncCullMode() {
 
     state.cull.front_face = MaxwellToGL::FrontFace(regs.cull.front_face);
 
-    const bool flip_triangles{regs.screen_y_control.triangle_rast_flip == 0 ||
-                              regs.viewport_transform[0].scale_y < 0.0f};
+    const bool flip_triangles{state.clip_control.origin == GL_LOWER_LEFT};
 
     // If the GPU is configured to flip the rasterized triangles, then we need to flip the
     // notion of front and back. Note: We flip the triangles when the value of the register is 0
