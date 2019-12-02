@@ -1,4 +1,4 @@
-// Copyright 2014 Citra Emulator Project
+// Copyright 2019 yuzu emulator team
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -9,17 +9,22 @@
 #include <utility>
 #include <vector>
 
-#include "core/hle/kernel/object.h"
+#include "common/threadsafe_queue.h"
 #include "core/hle/kernel/wait_object.h"
 #include "core/hle/result.h"
 
+namespace Memory {
+class Memory;
+}
+
+namespace Core::Timing {
+struct EventType;
+}
+
 namespace Kernel {
 
-class ClientPort;
-class ClientSession;
 class HLERequestContext;
 class KernelCore;
-class ServerSession;
 class Session;
 class SessionRequestHandler;
 class Thread;
@@ -40,6 +45,12 @@ class ServerSession final : public WaitObject {
 public:
     explicit ServerSession(KernelCore& kernel);
     ~ServerSession() override;
+
+    friend class Session;
+
+    static ResultVal<std::shared_ptr<ServerSession>> Create(KernelCore& kernel,
+                                                            std::shared_ptr<Session> parent,
+                                                            std::string name = "Unknown");
 
     std::string GetTypeName() const override {
         return "ServerSession";
@@ -62,18 +73,6 @@ public:
         return parent.get();
     }
 
-    using SessionPair = std::pair<std::shared_ptr<ServerSession>, std::shared_ptr<ClientSession>>;
-
-    /**
-     * Creates a pair of ServerSession and an associated ClientSession.
-     * @param kernel      The kernal instance to create the session pair under.
-     * @param name        Optional name of the ports.
-     * @param client_port Optional The ClientPort that spawned this session.
-     * @return The created session tuple
-     */
-    static SessionPair CreateSessionPair(KernelCore& kernel, const std::string& name = "Unknown",
-                                         std::shared_ptr<ClientPort> client_port = nullptr);
-
     /**
      * Sets the HLE handler for the session. This handler will be called to service IPC requests
      * instead of the regular IPC machinery. (The regular IPC machinery is currently not
@@ -85,10 +84,13 @@ public:
 
     /**
      * Handle a sync request from the emulated application.
+     *
      * @param thread Thread that initiated the request.
+     * @param memory Memory context to handle the sync request under.
+     *
      * @returns ResultCode from the operation.
      */
-    ResultCode HandleSyncRequest(std::shared_ptr<Thread> thread);
+    ResultCode HandleSyncRequest(std::shared_ptr<Thread> thread, Memory::Memory& memory);
 
     bool ShouldWait(const Thread* thread) const override;
 
@@ -121,15 +123,11 @@ public:
     }
 
 private:
-    /**
-     * Creates a server session. The server session can have an optional HLE handler,
-     * which will be invoked to handle the IPC requests that this session receives.
-     * @param kernel The kernel instance to create this server session under.
-     * @param name Optional name of the server session.
-     * @return The created server session
-     */
-    static ResultVal<std::shared_ptr<ServerSession>> Create(KernelCore& kernel,
-                                                            std::string name = "Unknown");
+    /// Queues a sync request from the emulated application.
+    ResultCode QueueSyncRequest(std::shared_ptr<Thread> thread, Memory::Memory& memory);
+
+    /// Completes a sync request from the emulated application.
+    ResultCode CompleteSyncRequest();
 
     /// Handles a SyncRequest to a domain, forwarding the request to the proper object or closing an
     /// object handle.
@@ -159,6 +157,12 @@ private:
 
     /// The name of this session (optional)
     std::string name;
+
+    /// Core timing event used to schedule the service request at some point in the future
+    std::shared_ptr<Core::Timing::EventType> request_event;
+
+    /// Queue of scheduled service requests
+    Common::MPSCQueue<std::shared_ptr<Kernel::HLERequestContext>> request_queue;
 };
 
 } // namespace Kernel
