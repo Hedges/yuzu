@@ -1657,7 +1657,8 @@ static ResultCode WaitProcessWideKeyAtomic(Core::System& system, VAddr mutex_add
 }
 
 /// Signal process wide key
-static void SignalProcessWideKey(Core::System& system, VAddr condition_variable_addr, s32 target) {
+static ResultCode SignalProcessWideKey(Core::System& system, VAddr condition_variable_addr,
+                                       s32 target) {
     LOG_TRACE(Kernel_SVC, "called, condition_variable_addr=0x{:X}, target=0x{:08X}",
               condition_variable_addr, target);
 
@@ -1732,6 +1733,8 @@ static void SignalProcessWideKey(Core::System& system, VAddr condition_variable_
             system.PrepareReschedule(thread->GetProcessorID());
         }
     }
+
+    return RESULT_SUCCESS;
 }
 
 // Wait for an address (via Address Arbiter)
