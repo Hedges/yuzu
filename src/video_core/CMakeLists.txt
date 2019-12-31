@@ -151,12 +151,16 @@ add_library(video_core STATIC
 if (ENABLE_VULKAN)
     target_sources(video_core PRIVATE
         renderer_vulkan/declarations.h
+        renderer_vulkan/fixed_pipeline_state.cpp
+        renderer_vulkan/fixed_pipeline_state.h
         renderer_vulkan/maxwell_to_vk.cpp
         renderer_vulkan/maxwell_to_vk.h
         renderer_vulkan/vk_buffer_cache.cpp
         renderer_vulkan/vk_buffer_cache.h
         renderer_vulkan/vk_device.cpp
         renderer_vulkan/vk_device.h
+        renderer_vulkan/vk_image.cpp
+        renderer_vulkan/vk_image.h
         renderer_vulkan/vk_memory_manager.cpp
         renderer_vulkan/vk_memory_manager.h
         renderer_vulkan/vk_resource_manager.cpp
@@ -167,6 +171,8 @@ if (ENABLE_VULKAN)
         renderer_vulkan/vk_scheduler.h
         renderer_vulkan/vk_shader_decompiler.cpp
         renderer_vulkan/vk_shader_decompiler.h
+        renderer_vulkan/vk_staging_buffer_pool.cpp
+        renderer_vulkan/vk_staging_buffer_pool.h
         renderer_vulkan/vk_stream_buffer.cpp
         renderer_vulkan/vk_stream_buffer.h
         renderer_vulkan/vk_swapchain.cpp

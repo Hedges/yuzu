@@ -271,6 +271,9 @@ void RasterizerOpenGL::SetupShaders(GLenum primitive_mode) {
             case Maxwell::ShaderProgram::Geometry:
                 shader_program_manager->UseTrivialGeometryShader();
                 break;
+            case Maxwell::ShaderProgram::Fragment:
+                shader_program_manager->UseTrivialFragmentShader();
+                break;
             default:
                 break;
             }
@@ -514,6 +517,7 @@ void RasterizerOpenGL::Clear() {
     ConfigureClearFramebuffer(clear_state, use_color, use_depth, use_stencil);
 
     SyncViewport(clear_state);
+    SyncRasterizeEnable(clear_state);
     if (regs.clear_flags.scissor) {
         SyncScissorTest(clear_state);
     }
@@ -541,6 +545,7 @@ void RasterizerOpenGL::Clear() {
 void RasterizerOpenGL::DrawPrelude() {
     auto& gpu = system.GPU().Maxwell3D();
 
+    SyncRasterizeEnable(state);
     SyncColorMask();
     SyncFragmentColorClampState();
     SyncMultiSampleState();
@@ -1143,6 +1148,11 @@ void RasterizerOpenGL::SyncStencilTestState() {
         state.stencil.back.action_depth_fail = GL_KEEP;
         state.stencil.back.action_depth_pass = GL_KEEP;
     }
+}
+
+void RasterizerOpenGL::SyncRasterizeEnable(OpenGLState& current_state) {
+    const auto& regs = system.GPU().Maxwell3D().regs;
+    current_state.rasterizer_discard = regs.rasterize_enable == 0;
 }
 
 void RasterizerOpenGL::SyncColorMask() {
