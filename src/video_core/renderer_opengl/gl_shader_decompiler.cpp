@@ -1856,6 +1856,16 @@ private:
                 Type::Uint};
     }
 
+    template <const std::string_view& opname, Type type>
+    Expression Atomic(Operation operation) {
+        ASSERT(stage == ShaderType::Compute);
+        auto& smem = std::get<SmemNode>(*operation[0]);
+
+        return {fmt::format("atomic{}(smem[{} >> 2], {})", opname, Visit(smem.GetAddress()).AsInt(),
+                            Visit(operation[1]).As(type)),
+                type};
+    }
+
     Expression Branch(Operation operation) {
         const auto target = std::get_if<ImmediateNode>(&*operation[0]);
         UNIMPLEMENTED_IF(!target);
@@ -2194,6 +2204,8 @@ private:
         &GLSLDecompiler::AtomicImage<Func::Xor>,
         &GLSLDecompiler::AtomicImage<Func::Exchange>,
 
+        &GLSLDecompiler::Atomic<Func::Add, Type::Uint>,
+
         &GLSLDecompiler::Branch,
         &GLSLDecompiler::BranchIndirect,
         &GLSLDecompiler::PushFlowStack,
@@ -2313,7 +2325,7 @@ public:
     explicit ExprDecompiler(GLSLDecompiler& decomp) : decomp{decomp} {}
 
     void operator()(const ExprAnd& expr) {
-        inner += "( ";
+        inner += '(';
         std::visit(*this, *expr.operand1);
         inner += " && ";
         std::visit(*this, *expr.operand2);
@@ -2321,7 +2333,7 @@ public:
     }
 
     void operator()(const ExprOr& expr) {
-        inner += "( ";
+        inner += '(';
         std::visit(*this, *expr.operand1);
         inner += " || ";
         std::visit(*this, *expr.operand2);
@@ -2339,28 +2351,7 @@ public:
     }
 
     void operator()(const ExprCondCode& expr) {
-        const Node cc = decomp.ir.GetConditionCode(expr.cc);
-        std::string target;
-
-        if (const auto pred = std::get_if<PredicateNode>(&*cc)) {
-            const auto index = pred->GetIndex();
-            switch (index) {
-            case Tegra::Shader::Pred::NeverExecute:
-                target = "false";
-                break;
-            case Tegra::Shader::Pred::UnusedIndex:
-                target = "true";
-                break;
-            default:
-                target = decomp.GetPredicate(index);
-                break;
-            }
-        } else if (const auto flag = std::get_if<InternalFlagNode>(&*cc)) {
-            target = decomp.GetInternalFlag(flag->GetFlag());
-        } else {
-            UNREACHABLE();
-        }
-        inner += target;
+        inner += decomp.Visit(decomp.ir.GetConditionCode(expr.cc)).AsBool();
     }
 
     void operator()(const ExprVar& expr) {
@@ -2372,8 +2363,7 @@ public:
     }
 
     void operator()(VideoCommon::Shader::ExprGprEqual& expr) {
-        inner +=
-            "( ftou(" + decomp.GetRegister(expr.gpr) + ") == " + std::to_string(expr.value) + ')';
+        inner += fmt::format("(ftou({}) == {})", decomp.GetRegister(expr.gpr), expr.value);
     }
 
     const std::string& GetResult() const {
@@ -2381,8 +2371,8 @@ public:
     }
 
 private:
-    std::string inner;
     GLSLDecompiler& decomp;
+    std::string inner;
 };
 
 class ASTDecompiler {
