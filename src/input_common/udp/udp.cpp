@@ -74,15 +74,15 @@ State::State() {
         std::make_unique<Client>(status, Settings::values.udp_input_address,
                                  Settings::values.udp_input_port, Settings::values.udp_pad_index);
 
-    Input::RegisterFactory<Input::TouchDevice>("cemuhookudp",
-                                               std::make_shared<UDPTouchFactory>(status));
-    Input::RegisterFactory<Input::MotionDevice>("cemuhookudp",
-                                                std::make_shared<UDPMotionFactory>(status));
+    //Input::RegisterFactory<Input::TouchDevice>("cemuhookudp",
+    //                                           std::make_shared<UDPTouchFactory>(status));
+    //Input::RegisterFactory<Input::MotionDevice>("cemuhookudp",
+    //                                            std::make_shared<UDPMotionFactory>(status));
 }
 
 State::~State() {
-    Input::UnregisterFactory<Input::TouchDevice>("cemuhookudp");
-    Input::UnregisterFactory<Input::MotionDevice>("cemuhookudp");
+    //Input::UnregisterFactory<Input::TouchDevice>("cemuhookudp");
+    //Input::UnregisterFactory<Input::MotionDevice>("cemuhookudp");
 }
 
 void State::ReloadUDPClient() {
