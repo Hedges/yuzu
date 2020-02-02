@@ -52,6 +52,8 @@ void CpuManager::RunLoop(bool tight_loop) {
     auto& core_timing = system.CoreTiming();
     core_timing.ResetRun();
     bool keep_running{};
+    int num_loops = 0;
+    const int max_loops = 4;
     do {
         keep_running = false;
         for (active_core = 0; active_core < NUM_CPU_CORES; ++active_core) {
@@ -59,11 +61,12 @@ void CpuManager::RunLoop(bool tight_loop) {
             if (core_timing.CanCurrentContextRun()) {
                 core_managers[active_core]->RunLoop(tight_loop);
             }
-            if (!GDBStub::IsConnected()) {
-                keep_running |= core_timing.CanCurrentContextRun();
-            }
+            keep_running |= core_timing.CanCurrentContextRun();
         }
-    } while (keep_running);
+        if (GDBStub::IsConnected()) {
+            num_loops++;
+        }
+    } while (keep_running && (num_loops < max_loops));
 }
 
 } // namespace Core
