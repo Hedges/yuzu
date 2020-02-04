@@ -2176,7 +2176,7 @@ private:
             return {Type::Uint, t_in_uint, t_in_uint4};
         case Maxwell::VertexAttribute::Type::UnsignedScaled:
         case Maxwell::VertexAttribute::Type::SignedScaled:
-            UNIMPLEMENTED();
+            //UNIMPLEMENTED();
             return {Type::Float, t_in_float, t_in_float4};
         default:
             UNREACHABLE();

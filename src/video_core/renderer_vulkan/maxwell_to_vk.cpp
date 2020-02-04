@@ -399,9 +399,10 @@ vk::Format VertexFormat(Maxwell::VertexAttribute::Type type, Maxwell::VertexAttr
         }
         break;
     }
-    UNIMPLEMENTED_MSG("Unimplemented vertex format of type={} and size={}", static_cast<u32>(type),
-                      static_cast<u32>(size));
-    return {};
+    //UNIMPLEMENTED_MSG("Unimplemented vertex format of type={} and size={}", static_cast<u32>(type),
+    //                  static_cast<u32>(size));
+    //return {};
+    return vk::Format::eR8Snorm;
 }
 
 vk::CompareOp ComparisonOp(Maxwell::ComparisonOp comparison) {
