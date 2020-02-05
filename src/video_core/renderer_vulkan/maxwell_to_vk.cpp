@@ -370,6 +370,8 @@ vk::Format VertexFormat(Maxwell::VertexAttribute::Type type, Maxwell::VertexAttr
         switch (size) {
         case Maxwell::VertexAttribute::Size::Size_8_8:
             return vk::Format::eR8G8Uscaled;
+        case Maxwell::VertexAttribute::Size::Size_8_8_8_8:
+            return vk::Format::eR8G8B8A8Uscaled;
         default:
             break;
         }
@@ -399,10 +401,9 @@ vk::Format VertexFormat(Maxwell::VertexAttribute::Type type, Maxwell::VertexAttr
         }
         break;
     }
-    //UNIMPLEMENTED_MSG("Unimplemented vertex format of type={} and size={}", static_cast<u32>(type),
-    //                  static_cast<u32>(size));
-    //return {};
-    return vk::Format::eR8Snorm;
+    UNIMPLEMENTED_MSG("Unimplemented vertex format of type={} and size={}", static_cast<u32>(type),
+                      static_cast<u32>(size));
+    return {};
 }
 
 vk::CompareOp ComparisonOp(Maxwell::ComparisonOp comparison) {
