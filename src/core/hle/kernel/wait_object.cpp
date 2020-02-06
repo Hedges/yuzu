@@ -66,7 +66,7 @@ void WaitObject::WakeupWaitingThread(std::shared_ptr<Thread> thread) {
 
     if (thread->IsSleepingOnWait()) {
         for (const auto& object : thread->GetWaitObjects()) {
-            ASSERT(!object->ShouldWait(thread.get()));
+            //ASSERT(!object->ShouldWait(thread.get()));
             object->Acquire(thread.get());
         }
     } else {
