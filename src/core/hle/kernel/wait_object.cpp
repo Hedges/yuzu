@@ -50,17 +50,8 @@ std::shared_ptr<Thread> WaitObject::GetHighestPriorityReadyThread() const {
         if (ShouldWait(thread.get()))
             continue;
 
-        // A thread is ready to run if it's either in ThreadStatus::WaitSynch
-        // and the rest of the objects it is waiting on are ready.
-        bool ready_to_run = true;
-        if (thread_status == ThreadStatus::WaitSynch) {
-            ready_to_run = thread->AllWaitObjectsReady();
-        }
-
-        if (ready_to_run) {
-            candidate = thread.get();
-            candidate_priority = thread->GetPriority();
-        }
+        candidate = thread.get();
+        candidate_priority = thread->GetPriority();
     }
 
     return SharedFrom(candidate);
@@ -75,7 +66,7 @@ void WaitObject::WakeupWaitingThread(std::shared_ptr<Thread> thread) {
 
     if (thread->IsSleepingOnWait()) {
         for (const auto& object : thread->GetWaitObjects()) {
-            ASSERT(!object->ShouldWait(thread.get()));
+            //ASSERT(!object->ShouldWait(thread.get()));
             object->Acquire(thread.get());
         }
     } else {

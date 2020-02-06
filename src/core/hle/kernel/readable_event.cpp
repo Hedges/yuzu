@@ -19,7 +19,7 @@ bool ReadableEvent::ShouldWait(const Thread* thread) const {
 }
 
 void ReadableEvent::Acquire(Thread* thread) {
-    ASSERT_MSG(!ShouldWait(thread), "object unavailable!");
+    //ASSERT_MSG(!ShouldWait(thread), "object unavailable!");
 }
 
 void ReadableEvent::Signal() {
