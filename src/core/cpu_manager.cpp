@@ -53,7 +53,7 @@ void CpuManager::RunLoop(bool tight_loop) {
     core_timing.ResetRun();
     bool keep_running{};
     int num_loops = 0;
-    const int max_loops = 4;
+    const int max_loops = 2;
     do {
         keep_running = false;
         for (active_core = 0; active_core < NUM_CPU_CORES; ++active_core) {
