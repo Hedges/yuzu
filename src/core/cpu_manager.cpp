@@ -8,6 +8,7 @@
 #include "core/core_timing.h"
 #include "core/cpu_manager.h"
 #include "core/gdbstub/gdbstub.h"
+#include "core/settings.h"
 
 namespace Core {
 
@@ -53,7 +54,7 @@ void CpuManager::RunLoop(bool tight_loop) {
     core_timing.ResetRun();
     bool keep_running{};
     int num_loops = 0;
-    const int max_loops = 2;
+    const int max_loops = Settings::values.gdbstub_loops;
     do {
         keep_running = false;
         for (active_core = 0; active_core < NUM_CPU_CORES; ++active_core) {

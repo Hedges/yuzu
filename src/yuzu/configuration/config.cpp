@@ -525,6 +525,7 @@ void Config::ReadDebuggingValues() {
         qt_config->value(QStringLiteral("record_frame_times"), false).toBool();
     Settings::values.use_gdbstub = ReadSetting(QStringLiteral("use_gdbstub"), false).toBool();
     Settings::values.gdbstub_port = ReadSetting(QStringLiteral("gdbstub_port"), 24689).toInt();
+    Settings::values.gdbstub_loops = ReadSetting(QStringLiteral("gdbstub_loops"), 1).toInt();
     Settings::values.program_args =
         ReadSetting(QStringLiteral("program_args"), QStringLiteral("")).toString().toStdString();
     Settings::values.dump_exefs = ReadSetting(QStringLiteral("dump_exefs"), false).toBool();
@@ -989,6 +990,7 @@ void Config::SaveDebuggingValues() {
     qt_config->setValue(QStringLiteral("record_frame_times"), Settings::values.record_frame_times);
     WriteSetting(QStringLiteral("use_gdbstub"), Settings::values.use_gdbstub, false);
     WriteSetting(QStringLiteral("gdbstub_port"), Settings::values.gdbstub_port, 24689);
+    WriteSetting(QStringLiteral("gdbstub_loops"), Settings::values.gdbstub_loops, 1);
     WriteSetting(QStringLiteral("program_args"),
                  QString::fromStdString(Settings::values.program_args), QStringLiteral(""));
     WriteSetting(QStringLiteral("dump_exefs"), Settings::values.dump_exefs, false);

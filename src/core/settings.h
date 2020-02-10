@@ -454,6 +454,7 @@ struct Values {
     bool record_frame_times;
     bool use_gdbstub;
     u16 gdbstub_port;
+    u32 gdbstub_loops;
     std::string program_args;
     bool dump_exefs;
     bool dump_nso;
