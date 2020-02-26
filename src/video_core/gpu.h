@@ -57,6 +57,7 @@ enum class RenderTargetFormat : u32 {
     RG16_UINT = 0xDD,
     RG16_FLOAT = 0xDE,
     R11G11B10_FLOAT = 0xE0,
+    R32_SINT = 0xE3,
     R32_UINT = 0xE4,
     R32_FLOAT = 0xE5,
     B5G6R5_UNORM = 0xE8,
@@ -81,12 +82,6 @@ enum class DepthFormat : u32 {
     Z24_C8_UNORM = 0x18,
     Z32_S8_X24_FLOAT = 0x19,
 };
-
-/// Returns the number of bytes per pixel of each rendertarget format.
-u32 RenderTargetBytesPerPixel(RenderTargetFormat format);
-
-/// Returns the number of bytes per pixel of each depth format.
-u32 DepthFormatBytesPerPixel(DepthFormat format);
 
 struct CommandListHeader;
 class DebugContext;
