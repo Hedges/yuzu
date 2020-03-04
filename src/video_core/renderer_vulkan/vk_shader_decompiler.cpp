@@ -2211,6 +2211,8 @@ private:
         switch (specialization.attribute_types.at(location)) {
         case Maxwell::VertexAttribute::Type::SignedNorm:
         case Maxwell::VertexAttribute::Type::UnsignedNorm:
+        case Maxwell::VertexAttribute::Type::UnsignedScaled:
+        case Maxwell::VertexAttribute::Type::SignedScaled:
         case Maxwell::VertexAttribute::Type::Float:
             return {Type::Float, t_in_float, t_in_float4};
         case Maxwell::VertexAttribute::Type::SignedInt:
