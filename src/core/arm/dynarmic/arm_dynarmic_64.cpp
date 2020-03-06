@@ -8,7 +8,7 @@
 #include <dynarmic/A64/config.h>
 #include "common/logging/log.h"
 #include "common/microprofile.h"
-#include "core/arm/dynarmic/arm_dynarmic.h"
+#include "core/arm/dynarmic/arm_dynarmic_64.h"
 #include "core/core.h"
 #include "core/core_manager.h"
 #include "core/core_timing.h"
@@ -25,9 +25,9 @@ namespace Core {
 
 using Vector = Dynarmic::A64::Vector;
 
-class ARM_Dynarmic_Callbacks : public Dynarmic::A64::UserCallbacks {
+class DynarmicCallbacks64 : public Dynarmic::A64::UserCallbacks {
 public:
-    explicit ARM_Dynarmic_Callbacks(ARM_Dynarmic& parent) : parent(parent) {}
+    explicit DynarmicCallbacks64(ARM_Dynarmic_64& parent) : parent(parent) {}
 
     u8 MemoryRead8(u64 vaddr) override {
         return parent.system.Memory().Read8(vaddr);
@@ -68,7 +68,7 @@ public:
         LOG_INFO(Core_ARM, "Unicorn fallback @ 0x{:X} for {} instructions (instr = {:08X})", pc,
                  num_instructions, MemoryReadCode(pc));
 
-        ARM_Interface::ThreadContext ctx;
+        ARM_Interface::ThreadContext64 ctx;
         parent.SaveContext(ctx);
         parent.inner_unicorn.LoadContext(ctx);
         Kernel::Thread* thread = Kernel::GetCurrentThread();
@@ -93,7 +93,7 @@ public:
                 parent.jit->HaltExecution();
                 parent.SetPC(pc);
                 Kernel::Thread* const thread = parent.system.CurrentScheduler().GetCurrentThread();
-                parent.SaveContext(thread->GetContext());
+                parent.SaveContext(thread->GetContext64());
                 GDBStub::Break();
                 GDBStub::SendTrap(thread, 5);
                 return;
@@ -131,13 +131,13 @@ public:
         return Timing::CpuCyclesToClockCycles(parent.system.CoreTiming().GetTicks());
     }
 
-    ARM_Dynarmic& parent;
+    ARM_Dynarmic_64& parent;
     std::size_t num_interpreted_instructions = 0;
     u64 tpidrro_el0 = 0;
     u64 tpidr_el0 = 0;
 };
 
-std::shared_ptr<Dynarmic::A64::Jit> ARM_Dynarmic::MakeJit(Common::PageTable& page_table,
+std::shared_ptr<Dynarmic::A64::Jit> ARM_Dynarmic_64::MakeJit(Common::PageTable& page_table,
                                                           std::size_t address_space_bits) const {
     Dynarmic::A64::UserConfig config;
 
@@ -167,85 +167,85 @@ std::shared_ptr<Dynarmic::A64::Jit> ARM_Dynarmic::MakeJit(Common::PageTable& pag
     return std::make_shared<Dynarmic::A64::Jit>(config);
 }
 
-MICROPROFILE_DEFINE(ARM_Jit_Dynarmic, "ARM JIT", "Dynarmic", MP_RGB(255, 64, 64));
+MICROPROFILE_DEFINE(ARM_Jit_Dynarmic_64, "ARM JIT", "Dynarmic", MP_RGB(255, 64, 64));
 
-void ARM_Dynarmic::Run() {
-    MICROPROFILE_SCOPE(ARM_Jit_Dynarmic);
+void ARM_Dynarmic_64::Run() {
+    MICROPROFILE_SCOPE(ARM_Jit_Dynarmic_64);
 
     jit->Run();
 }
 
-void ARM_Dynarmic::Step() {
+void ARM_Dynarmic_64::Step() {
     cb->InterpreterFallback(jit->GetPC(), 1);
 }
 
-ARM_Dynarmic::ARM_Dynarmic(System& system, ExclusiveMonitor& exclusive_monitor,
+ARM_Dynarmic_64::ARM_Dynarmic_64(System& system, ExclusiveMonitor& exclusive_monitor,
                            std::size_t core_index)
     : ARM_Interface{system},
-      cb(std::make_unique<ARM_Dynarmic_Callbacks>(*this)), inner_unicorn{system},
+      cb(std::make_unique<DynarmicCallbacks64>(*this)), inner_unicorn{system},
       core_index{core_index}, exclusive_monitor{
                                   dynamic_cast<DynarmicExclusiveMonitor&>(exclusive_monitor)} {}
 
-ARM_Dynarmic::~ARM_Dynarmic() = default;
+ARM_Dynarmic_64::~ARM_Dynarmic_64() = default;
 
-void ARM_Dynarmic::MapBackingMemory(u64 address, std::size_t size, u8* memory,
+void ARM_Dynarmic_64::MapBackingMemory(u64 address, std::size_t size, u8* memory,
                                     Kernel::VMAPermission perms) {
     inner_unicorn.MapBackingMemory(address, size, memory, perms);
 }
 
-void ARM_Dynarmic::UnmapMemory(u64 address, std::size_t size) {
+void ARM_Dynarmic_64::UnmapMemory(u64 address, std::size_t size) {
     inner_unicorn.UnmapMemory(address, size);
 }
 
-void ARM_Dynarmic::SetPC(u64 pc) {
+void ARM_Dynarmic_64::SetPC(u64 pc) {
     jit->SetPC(pc);
 }
 
-u64 ARM_Dynarmic::GetPC() const {
+u64 ARM_Dynarmic_64::GetPC() const {
     return jit->GetPC();
 }
 
-u64 ARM_Dynarmic::GetReg(int index) const {
+u64 ARM_Dynarmic_64::GetReg(int index) const {
     return jit->GetRegister(index);
 }
 
-void ARM_Dynarmic::SetReg(int index, u64 value) {
+void ARM_Dynarmic_64::SetReg(int index, u64 value) {
     jit->SetRegister(index, value);
 }
 
-u128 ARM_Dynarmic::GetVectorReg(int index) const {
+u128 ARM_Dynarmic_64::GetVectorReg(int index) const {
     return jit->GetVector(index);
 }
 
-void ARM_Dynarmic::SetVectorReg(int index, u128 value) {
+void ARM_Dynarmic_64::SetVectorReg(int index, u128 value) {
     jit->SetVector(index, value);
 }
 
-u32 ARM_Dynarmic::GetPSTATE() const {
+u32 ARM_Dynarmic_64::GetPSTATE() const {
     return jit->GetPstate();
 }
 
-void ARM_Dynarmic::SetPSTATE(u32 pstate) {
+void ARM_Dynarmic_64::SetPSTATE(u32 pstate) {
     jit->SetPstate(pstate);
 }
 
-u64 ARM_Dynarmic::GetTlsAddress() const {
+u64 ARM_Dynarmic_64::GetTlsAddress() const {
     return cb->tpidrro_el0;
 }
 
-void ARM_Dynarmic::SetTlsAddress(VAddr address) {
+void ARM_Dynarmic_64::SetTlsAddress(VAddr address) {
     cb->tpidrro_el0 = address;
 }
 
-u64 ARM_Dynarmic::GetTPIDR_EL0() const {
+u64 ARM_Dynarmic_64::GetTPIDR_EL0() const {
     return cb->tpidr_el0;
 }
 
-void ARM_Dynarmic::SetTPIDR_EL0(u64 value) {
+void ARM_Dynarmic_64::SetTPIDR_EL0(u64 value) {
     cb->tpidr_el0 = value;
 }
 
-void ARM_Dynarmic::SaveContext(ThreadContext& ctx) {
+void ARM_Dynarmic_64::SaveContext(ThreadContext64& ctx) {
     ctx.cpu_registers = jit->GetRegisters();
     ctx.sp = jit->GetSP();
     ctx.pc = jit->GetPC();
@@ -256,7 +256,7 @@ void ARM_Dynarmic::SaveContext(ThreadContext& ctx) {
     ctx.tpidr = cb->tpidr_el0;
 }
 
-void ARM_Dynarmic::LoadContext(const ThreadContext& ctx) {
+void ARM_Dynarmic_64::LoadContext(const ThreadContext64& ctx) {
     jit->SetRegisters(ctx.cpu_registers);
     jit->SetSP(ctx.sp);
     jit->SetPC(ctx.pc);
@@ -267,19 +267,19 @@ void ARM_Dynarmic::LoadContext(const ThreadContext& ctx) {
     SetTPIDR_EL0(ctx.tpidr);
 }
 
-void ARM_Dynarmic::PrepareReschedule() {
+void ARM_Dynarmic_64::PrepareReschedule() {
     jit->HaltExecution();
 }
 
-void ARM_Dynarmic::ClearInstructionCache() {
+void ARM_Dynarmic_64::ClearInstructionCache() {
     jit->ClearCache();
 }
 
-void ARM_Dynarmic::ClearExclusiveState() {
+void ARM_Dynarmic_64::ClearExclusiveState() {
     jit->ClearExclusiveState();
 }
 
-void ARM_Dynarmic::PageTableChanged(Common::PageTable& page_table,
+void ARM_Dynarmic_64::PageTableChanged(Common::PageTable& page_table,
                                     std::size_t new_address_space_size_in_bits) {
     auto key = std::make_pair(&page_table, new_address_space_size_in_bits);
     auto iter = jit_cache.find(key);
@@ -291,8 +291,8 @@ void ARM_Dynarmic::PageTableChanged(Common::PageTable& page_table,
     jit_cache.emplace(key, jit);
 }
 
-DynarmicExclusiveMonitor::DynarmicExclusiveMonitor(Memory::Memory& memory_, std::size_t core_count)
-    : monitor(core_count), memory{memory_} {}
+DynarmicExclusiveMonitor::DynarmicExclusiveMonitor(Memory::Memory& memory, std::size_t core_count)
+    : monitor(core_count), memory{memory} {}
 
 DynarmicExclusiveMonitor::~DynarmicExclusiveMonitor() = default;
 

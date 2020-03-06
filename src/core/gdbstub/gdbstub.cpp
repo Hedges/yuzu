@@ -222,7 +222,7 @@ static u64 RegRead(std::size_t id, Kernel::Thread* thread = nullptr) {
         return 0;
     }
 
-    const auto& thread_context = thread->GetContext();
+    const auto& thread_context = thread->GetContext64();
 
     if (id < SP_REGISTER) {
         return thread_context.cpu_registers[id];
@@ -244,7 +244,7 @@ static void RegWrite(std::size_t id, u64 val, Kernel::Thread* thread = nullptr) 
         return;
     }
 
-    auto& thread_context = thread->GetContext();
+    auto& thread_context = thread->GetContext64();
 
     if (id < SP_REGISTER) {
         thread_context.cpu_registers[id] = val;
@@ -264,7 +264,7 @@ static u128 FpuRead(std::size_t id, Kernel::Thread* thread = nullptr) {
         return u128{0};
     }
 
-    auto& thread_context = thread->GetContext();
+    auto& thread_context = thread->GetContext64();
 
     if (id >= UC_ARM64_REG_Q0 && id < FPCR_REGISTER) {
         return thread_context.vector_registers[id - UC_ARM64_REG_Q0];
@@ -280,7 +280,7 @@ static void FpuWrite(std::size_t id, u128 val, Kernel::Thread* thread = nullptr)
         return;
     }
 
-    auto& thread_context = thread->GetContext();
+    auto& thread_context = thread->GetContext64();
 
     if (id >= UC_ARM64_REG_Q0 && id < FPCR_REGISTER) {
         thread_context.vector_registers[id - UC_ARM64_REG_Q0] = val;
@@ -920,7 +920,7 @@ static void WriteRegister() {
     // Update ARM context, skipping scheduler - no running threads at this point
     Core::System::GetInstance()
         .ArmInterface(current_core)
-        .LoadContext(current_thread->GetContext());
+        .LoadContext(current_thread->GetContext64());
 
     SendReply("OK");
 }
@@ -951,7 +951,7 @@ static void WriteRegisters() {
     // Update ARM context, skipping scheduler - no running threads at this point
     Core::System::GetInstance()
         .ArmInterface(current_core)
-        .LoadContext(current_thread->GetContext());
+        .LoadContext(current_thread->GetContext64());
 
     SendReply("OK");
 }
@@ -1030,7 +1030,7 @@ static void Step() {
         // Update ARM context, skipping scheduler - no running threads at this point
         Core::System::GetInstance()
             .ArmInterface(current_core)
-            .LoadContext(current_thread->GetContext());
+            .LoadContext(current_thread->GetContext64());
     }
     step_loop = true;
     halt_loop = false;

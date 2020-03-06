@@ -42,7 +42,8 @@ void SetupMainThread(Process& owner_process, KernelCore& kernel, u32 priority) {
 
     // Register 1 must be a handle to the main thread
     const Handle thread_handle = owner_process.GetHandleTable().Create(thread).Unwrap();
-    thread->GetContext().cpu_registers[1] = thread_handle;
+    thread->GetContext32().cpu_registers[1] = thread_handle;
+    thread->GetContext64().cpu_registers[1] = thread_handle;
 
     // Threads by default are dormant, wake up the main thread so it runs when the scheduler fires
     thread->ResumeFromWait();
@@ -317,6 +318,8 @@ void Process::FreeTLSRegion(VAddr tls_address) {
 }
 
 void Process::LoadModule(CodeSet module_, VAddr base_addr) {
+    Core::System::GetInstance().Kernel().MakeCurrentProcess(this);
+
     code_memory_size += module_.memory.size();
 
     const auto memory = std::make_shared<PhysicalMemory>(std::move(module_.memory));

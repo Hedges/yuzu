@@ -53,7 +53,7 @@ static bool UnmappedMemoryHook(uc_engine* uc, uc_mem_type type, u64 addr, int si
                                void* user_data) {
     auto* const system = static_cast<System*>(user_data);
 
-    ARM_Interface::ThreadContext ctx{};
+    ARM_Interface::ThreadContext64 ctx{};
     system->CurrentArmInterface().SaveContext(ctx);
     ASSERT_MSG(false, "Attempted to read from unmapped memory: 0x{:X}, pc=0x{:X}, lr=0x{:X}", addr,
                ctx.pc, ctx.cpu_registers[30]);
@@ -188,7 +188,7 @@ void ARM_Unicorn::ExecuteInstructions(std::size_t num_instructions) {
         }
 
         Kernel::Thread* const thread = system.CurrentScheduler().GetCurrentThread();
-        SaveContext(thread->GetContext());
+        SaveContext(thread->GetContext64());
         if (last_bkpt_hit) {
             last_bkpt_hit = false;
             GDBStub::Break();
@@ -197,7 +197,7 @@ void ARM_Unicorn::ExecuteInstructions(std::size_t num_instructions) {
     }
 }
 
-void ARM_Unicorn::SaveContext(ThreadContext& ctx) {
+void ARM_Unicorn::SaveContext(ThreadContext64& ctx) {
     int uregs[32];
     void* tregs[32];
 
@@ -224,7 +224,7 @@ void ARM_Unicorn::SaveContext(ThreadContext& ctx) {
     CHECKED(uc_reg_read_batch(uc, uregs, tregs, 32));
 }
 
-void ARM_Unicorn::LoadContext(const ThreadContext& ctx) {
+void ARM_Unicorn::LoadContext(const ThreadContext64& ctx) {
     int uregs[32];
     void* tregs[32];
 
