@@ -125,6 +125,7 @@ struct FormatTuple {
     {vk::Format::eR8Uint, Attachable | Storage},                 // R8UI
     {vk::Format::eR16G16B16A16Sfloat, Attachable | Storage},     // RGBA16F
     {vk::Format::eR16G16B16A16Unorm, Attachable | Storage},      // RGBA16U
+    {vk::Format::eR16G16B16A16Snorm, Attachable | Storage},      // RGBA16S
     {vk::Format::eR16G16B16A16Uint, Attachable | Storage},       // RGBA16UI
     {vk::Format::eB10G11R11UfloatPack32, Attachable | Storage},  // R11FG11FB10F
     {vk::Format::eR32G32B32A32Uint, Attachable | Storage},       // RGBA32UI
@@ -331,6 +332,8 @@ vk::Format VertexFormat(Maxwell::VertexAttribute::Type type, Maxwell::VertexAttr
             return vk::Format::eR16G16B16Unorm;
         case Maxwell::VertexAttribute::Size::Size_16_16_16_16:
             return vk::Format::eR16G16B16A16Unorm;
+        case Maxwell::VertexAttribute::Size::Size_10_10_10_2:
+            return vk::Format::eA2B10G10R10UnormPack32;
         default:
             break;
         }
