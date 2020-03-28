@@ -1034,6 +1034,14 @@ void GMainWindow::BootGame(const QString& filename) {
 }
 
 void GMainWindow::ShutdownGame() {
+    if (!emulation_running) {
+        return;
+    }
+
+    if (ui.action_Fullscreen->isChecked()) {
+        HideFullscreen();
+    }
+
     AllowOSSleep();
 
     discord_rpc->Pause();
@@ -1716,11 +1724,6 @@ void GMainWindow::OnStartGame() {
 }
 
 void GMainWindow::OnPauseGame() {
-    Core::System& system{Core::System::GetInstance()};
-    if (system.GetExitLock() && !ConfirmForceLockedExit()) {
-        return;
-    }
-
     emu_thread->SetRunning(false);
 
     ui.action_Start->setEnabled(true);
@@ -1803,7 +1806,7 @@ void GMainWindow::ToggleWindowMode() {
         // Render in the main window...
         render_window->BackupGeometry();
         ui.horizontalLayout->addWidget(render_window);
-        render_window->setFocusPolicy(Qt::ClickFocus);
+        render_window->setFocusPolicy(Qt::StrongFocus);
         if (emulation_running) {
             render_window->setVisible(true);
             render_window->setFocus();
