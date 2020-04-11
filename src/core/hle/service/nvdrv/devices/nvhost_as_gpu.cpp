@@ -52,7 +52,7 @@ u32 nvhost_as_gpu::ioctl(Ioctl command, const std::vector<u8>& input, const std:
     if (static_cast<IoctlCommand>(command.cmd.Value()) == IoctlCommand::IocRemapCommand)
         return Remap(input, output);
 
-    UNIMPLEMENTED_MSG("Unimplemented ioctl command");
+    //UNIMPLEMENTED_MSG("Unimplemented ioctl command");
     return 0;
 }
 
