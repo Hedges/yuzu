@@ -51,7 +51,7 @@ void Init();
 void DeferStart();
 
 /// Stop gdbstub server.
-void Shutdown();
+void Shutdown(int status = 0);
 
 /// Checks if the gdbstub server is enabled.
 bool IsServerEnabled();
