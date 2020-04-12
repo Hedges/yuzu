@@ -46,9 +46,7 @@ const CoreManager& CpuManager::GetCurrentCoreManager() const {
 }
 
 void CpuManager::RunLoop(bool tight_loop) {
-    if (GDBStub::IsServerEnabled()) {
-        GDBStub::HandlePacket();
-    }
+    GDBStub::HandlePacket();
 
     auto& core_timing = system.CoreTiming();
     core_timing.ResetRun();
