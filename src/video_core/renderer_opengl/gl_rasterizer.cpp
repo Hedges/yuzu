@@ -345,7 +345,7 @@ void RasterizerOpenGL::ConfigureFramebuffers() {
 
     texture_cache.GuardRenderTargets(true);
 
-    View depth_surface = texture_cache.GetDepthBufferSurface(true);
+    View depth_surface = texture_cache.GetDepthBufferSurface();
 
     const auto& regs = gpu.regs;
     UNIMPLEMENTED_IF(regs.rt_separate_frag_data == 0);
@@ -354,7 +354,7 @@ void RasterizerOpenGL::ConfigureFramebuffers() {
     FramebufferCacheKey key;
     const auto colors_count = static_cast<std::size_t>(regs.rt_control.count);
     for (std::size_t index = 0; index < colors_count; ++index) {
-        View color_surface{texture_cache.GetColorBufferSurface(index, true)};
+        View color_surface{texture_cache.GetColorBufferSurface(index)};
         if (!color_surface) {
             continue;
         }
@@ -387,12 +387,12 @@ void RasterizerOpenGL::ConfigureClearFramebuffer(bool using_color_fb, bool using
     View color_surface;
     if (using_color_fb) {
         const std::size_t index = regs.clear_buffers.RT;
-        color_surface = texture_cache.GetColorBufferSurface(index, true);
+        color_surface = texture_cache.GetColorBufferSurface(index);
         texture_cache.MarkColorBufferInUse(index);
     }
     View depth_surface;
     if (using_depth_fb || using_stencil_fb) {
-        depth_surface = texture_cache.GetDepthBufferSurface(true);
+        depth_surface = texture_cache.GetDepthBufferSurface();
         texture_cache.MarkDepthBufferInUse();
     }
     texture_cache.GuardRenderTargets(false);
@@ -496,6 +496,7 @@ void RasterizerOpenGL::Draw(bool is_indexed, bool is_instanced) {
     SyncPrimitiveRestart();
     SyncScissorTest();
     SyncPointState();
+    SyncLineState();
     SyncPolygonOffset();
     SyncAlphaTest();
     SyncFramebufferSRGB();
@@ -1323,6 +1324,19 @@ void RasterizerOpenGL::SyncPointState() {
     // in OpenGL).
     glPointSize(std::max(1.0f, gpu.regs.point_size));
     glDisable(GL_PROGRAM_POINT_SIZE);
+}
+
+void RasterizerOpenGL::SyncLineState() {
+    auto& gpu = system.GPU().Maxwell3D();
+    auto& flags = gpu.dirty.flags;
+    if (!flags[Dirty::LineWidth]) {
+        return;
+    }
+    flags[Dirty::LineWidth] = false;
+
+    const auto& regs = gpu.regs;
+    oglEnable(GL_LINE_SMOOTH, regs.line_smooth_enable);
+    glLineWidth(regs.line_smooth_enable ? regs.line_width_smooth : regs.line_width_aliased);
 }
 
 void RasterizerOpenGL::SyncPolygonOffset() {
