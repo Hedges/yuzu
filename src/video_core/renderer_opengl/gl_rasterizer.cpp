@@ -1336,7 +1336,7 @@ void RasterizerOpenGL::SyncLineState() {
 
     const auto& regs = gpu.regs;
     oglEnable(GL_LINE_SMOOTH, regs.line_smooth_enable);
-    glLineWidth(regs.line_smooth_enable ? regs.line_width_smooth : regs.line_width_aliased);
+    glLineWidth(regs.line_smooth_enable ? std::max(regs.line_width_smooth, 1.0f) : std::max(regs.line_width_aliased, 1.0f));
 }
 
 void RasterizerOpenGL::SyncPolygonOffset() {
