@@ -140,8 +140,13 @@ void RasterizerOpenGL::SetupVertexFormat() {
         const auto attrib = gpu.regs.vertex_attrib_format[index];
         const auto gl_index = static_cast<GLuint>(index);
 
-        // Disable constant attributes.
-        if (attrib.IsConstant()) {
+        //// Disable constant attributes.
+        //if (attrib.IsConstant()) {
+        //    glDisableVertexAttribArray(gl_index);
+        //    continue;
+        //}
+        // Ignore invalid attributes.
+        if (!attrib.IsValid()) {
             glDisableVertexAttribArray(gl_index);
             continue;
         }
