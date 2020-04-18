@@ -16,7 +16,7 @@
 #include "core/arm/exclusive_monitor.h"
 #include "core/arm/unicorn/arm_unicorn.h"
 
-namespace Memory {
+namespace Core::Memory {
 class Memory;
 }
 

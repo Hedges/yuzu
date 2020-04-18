@@ -249,7 +249,7 @@ bool PatchManager::HasNSOPatch(const std::array<u8, 32>& build_id_) const {
 }
 
 namespace {
-std::optional<std::vector<Memory::CheatEntry>> ReadCheatFileFromFolder(
+std::optional<std::vector<Core::Memory::CheatEntry>> ReadCheatFileFromFolder(
     const Core::System& system, u64 title_id, const std::array<u8, 0x20>& build_id_,
     const VirtualDir& base_path, bool upper) {
     const auto build_id_raw = Common::HexToString(build_id_, upper);
@@ -269,14 +269,14 @@ std::optional<std::vector<Memory::CheatEntry>> ReadCheatFileFromFolder(
         return std::nullopt;
     }
 
-    Memory::TextCheatParser parser;
+    Core::Memory::TextCheatParser parser;
     return parser.Parse(
         system, std::string_view(reinterpret_cast<const char* const>(data.data()), data.size()));
 }
 
 } // Anonymous namespace
 
-std::vector<Memory::CheatEntry> PatchManager::CreateCheatList(
+std::vector<Core::Memory::CheatEntry> PatchManager::CreateCheatList(
     const Core::System& system, const std::array<u8, 32>& build_id_) const {
     const auto load_dir = system.GetFileSystemController().GetModificationLoadRoot(title_id);
     if (load_dir == nullptr) {
@@ -289,7 +289,7 @@ std::vector<Memory::CheatEntry> PatchManager::CreateCheatList(
     std::sort(patch_dirs.begin(), patch_dirs.end(),
               [](const VirtualDir& l, const VirtualDir& r) { return l->GetName() < r->GetName(); });
 
-    std::vector<Memory::CheatEntry> out;
+    std::vector<Core::Memory::CheatEntry> out;
     for (const auto& subdir : patch_dirs) {
         if (std::find(disabled.cbegin(), disabled.cend(), subdir->GetName()) != disabled.cend()) {
             continue;
@@ -440,7 +440,8 @@ std::map<std::string, std::string, std::less<>> PatchManager::GetPatchVersionNam
     // Game Updates
     const auto update_tid = GetUpdateTitleID(title_id);
     PatchManager update{update_tid};
-    auto [nacp, discard_icon_file] = update.GetControlMetadata();
+    const auto metadata = update.GetControlMetadata();
+    const auto& nacp = metadata.first;
 
     const auto update_disabled =
         std::find(disabled.cbegin(), disabled.cend(), "Update") != disabled.cend();

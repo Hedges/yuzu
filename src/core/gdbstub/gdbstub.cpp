@@ -37,9 +37,9 @@
 #include "core/core.h"
 #include "core/core_manager.h"
 #include "core/gdbstub/gdbstub.h"
+#include "core/hle/kernel/memory/page_table.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/scheduler.h"
-#include "core/hle/kernel/vm_manager.h"
 #include "core/loader/loader.h"
 #include "core/memory.h"
 
@@ -647,7 +647,10 @@ static void HandleQuery() {
                        strlen("Xfer:features:read:target.xml:")) == 0) {
         SendReply(target_xml);
     } else if (strncmp(query, "Offsets", strlen("Offsets")) == 0) {
-        const VAddr base_address = (modules.size() > 1) ? modules[1].beg : Core::System::GetInstance().CurrentProcess()->VMManager().GetCodeRegionBaseAddress();
+        const VAddr base_address =
+            (modules.size() > 1)
+                ? modules[1].beg
+                : Core::System::GetInstance().CurrentProcess()->PageTable().GetCodeRegionStart();
         std::string buffer = fmt::format("TextSeg={:0x}", base_address);
         SendReply(buffer.c_str());
     } else if (strncmp(query, "fThreadInfo", strlen("fThreadInfo")) == 0) {
@@ -975,10 +978,8 @@ static void ReadMemory() {
         SendReply("E01");
     }
 
-    const auto& vm_manager = Core::System::GetInstance().CurrentProcess()->VMManager();
-    if (addr < vm_manager.GetAddressSpaceBaseAddress() ||
-       addr >= vm_manager.GetAddressSpaceEndAddress())
-    {
+    const auto& page_table = Core::System::GetInstance().CurrentProcess()->PageTable();
+    if (addr < page_table.GetAddressSpaceStart() || addr >= page_table.GetAddressSpaceEnd()) {
         return SendReply("E00");
     }
 
