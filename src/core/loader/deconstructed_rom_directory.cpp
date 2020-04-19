@@ -157,6 +157,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
         next_load_addr = *tentative_next_load_addr;
         modules.insert_or_assign(load_addr, module);
         LOG_DEBUG(Loader, "loaded module {} @ 0x{:X}", module, load_addr);
+
         // Register module with GDBStub
         GDBStub::RegisterModule(module, load_addr, next_load_addr - 1);
     }

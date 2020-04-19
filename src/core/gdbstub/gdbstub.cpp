@@ -1289,7 +1289,7 @@ static void Init(u16 port) {
     breakpoints_read.clear();
     breakpoints_write.clear();
 
-    modules.clear();
+    // modules.clear();
 
     // Start gdb server
     LOG_INFO(Debug_GDBStub, "Starting GDB server on port {}...", port);

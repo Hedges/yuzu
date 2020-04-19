@@ -165,11 +165,12 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::Process& process,
     }
 
     // Load codeset for current process
+    u64 program_size = program_image.size();
     codeset.memory = std::move(program_image);
     process.LoadModule(std::move(codeset), load_base);
 
     // Register module with GDBStub
-    GDBStub::RegisterModule(file.GetName(), load_base, load_base + program_image.size());
+    GDBStub::RegisterModule(file.GetName(), load_base, load_base + program_size - 1);
 
     return load_base + image_size;
 }

@@ -88,12 +88,13 @@ AppLoader::LoadResult AppLoader_KIP::Load(Kernel::Process& process) {
     program_image.resize(PageAlignSize(kip->GetBSSOffset()) + kip->GetBSSSize());
     codeset.DataSegment().size += kip->GetBSSSize();
 
-    GDBStub::RegisterModule(kip->GetName(), base_address, base_address + program_image.size());
-
+    u64 program_size = program_image.size();
     codeset.memory = std::move(program_image);
     process.LoadModule(std::move(codeset), base_address);
 
     LOG_DEBUG(Loader, "loaded module {} @ 0x{:X}", kip->GetName(), base_address);
+
+    GDBStub::RegisterModule(kip->GetName(), base_address, base_address + program_size - 1);
 
     is_loaded = true;
     return {ResultStatus::Success,
