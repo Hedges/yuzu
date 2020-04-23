@@ -61,9 +61,9 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdPipelineBarrier);
     X(vkCmdPushConstants);
     X(vkCmdSetBlendConstants);
-    X(vkCmdSetCheckpointNV);
     X(vkCmdSetDepthBias);
     X(vkCmdSetDepthBounds);
+    X(vkCmdSetEvent);
     X(vkCmdSetScissor);
     X(vkCmdSetStencilCompareMask);
     X(vkCmdSetStencilReference);
@@ -76,6 +76,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCreateDescriptorPool);
     X(vkCreateDescriptorSetLayout);
     X(vkCreateDescriptorUpdateTemplateKHR);
+    X(vkCreateEvent);
     X(vkCreateFence);
     X(vkCreateFramebuffer);
     X(vkCreateGraphicsPipelines);
@@ -94,6 +95,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkDestroyDescriptorPool);
     X(vkDestroyDescriptorSetLayout);
     X(vkDestroyDescriptorUpdateTemplateKHR);
+    X(vkDestroyEvent);
     X(vkDestroyFence);
     X(vkDestroyFramebuffer);
     X(vkDestroyImage);
@@ -113,10 +115,10 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkFreeMemory);
     X(vkGetBufferMemoryRequirements);
     X(vkGetDeviceQueue);
+    X(vkGetEventStatus);
     X(vkGetFenceStatus);
     X(vkGetImageMemoryRequirements);
     X(vkGetQueryPoolResults);
-    X(vkGetQueueCheckpointDataNV);
     X(vkMapMemory);
     X(vkQueueSubmit);
     X(vkResetFences);
@@ -271,6 +273,10 @@ void Destroy(VkDevice device, VkDeviceMemory handle, const DeviceDispatch& dld) 
     dld.vkFreeMemory(device, handle, nullptr);
 }
 
+void Destroy(VkDevice device, VkEvent handle, const DeviceDispatch& dld) noexcept {
+    dld.vkDestroyEvent(device, handle, nullptr);
+}
+
 void Destroy(VkDevice device, VkFence handle, const DeviceDispatch& dld) noexcept {
     dld.vkDestroyFence(device, handle, nullptr);
 }
@@ -409,17 +415,6 @@ DebugCallback Instance::TryCreateDebugCallback(
     return DebugCallback(messenger, handle, *dld);
 }
 
-std::vector<VkCheckpointDataNV> Queue::GetCheckpointDataNV(const DeviceDispatch& dld) const {
-    if (!dld.vkGetQueueCheckpointDataNV) {
-        return {};
-    }
-    u32 num;
-    dld.vkGetQueueCheckpointDataNV(queue, &num, nullptr);
-    std::vector<VkCheckpointDataNV> checkpoints(num);
-    dld.vkGetQueueCheckpointDataNV(queue, &num, checkpoints.data());
-    return checkpoints;
-}
-
 void Buffer::BindMemory(VkDeviceMemory memory, VkDeviceSize offset) const {
     Check(dld->vkBindBufferMemory(owner, handle, memory, offset));
 }
@@ -469,12 +464,11 @@ std::vector<VkImage> SwapchainKHR::GetImages() const {
 }
 
 Device Device::Create(VkPhysicalDevice physical_device, Span<VkDeviceQueueCreateInfo> queues_ci,
-                      Span<const char*> enabled_extensions,
-                      const VkPhysicalDeviceFeatures2& enabled_features,
+                      Span<const char*> enabled_extensions, const void* next,
                       DeviceDispatch& dld) noexcept {
     VkDeviceCreateInfo ci;
     ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    ci.pNext = &enabled_features;
+    ci.pNext = next;
     ci.flags = 0;
     ci.queueCreateInfoCount = queues_ci.size();
     ci.pQueueCreateInfos = queues_ci.data();
@@ -611,6 +605,16 @@ ShaderModule Device::CreateShaderModule(const VkShaderModuleCreateInfo& ci) cons
     VkShaderModule object;
     Check(dld->vkCreateShaderModule(handle, &ci, nullptr, &object));
     return ShaderModule(object, handle, *dld);
+}
+
+Event Device::CreateEvent() const {
+    VkEventCreateInfo ci;
+    ci.sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO;
+    ci.pNext = nullptr;
+    ci.flags = 0;
+    VkEvent object;
+    Check(dld->vkCreateEvent(handle, &ci, nullptr, &object));
+    return Event(object, handle, *dld);
 }
 
 SwapchainKHR Device::CreateSwapchainKHR(const VkSwapchainCreateInfoKHR& ci) const {

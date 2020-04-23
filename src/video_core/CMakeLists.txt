@@ -23,6 +23,7 @@ add_library(video_core STATIC
     engines/shader_bytecode.h
     engines/shader_header.h
     engines/shader_type.h
+    fence_manager.h
     gpu.cpp
     gpu.h
     gpu_asynch.cpp
@@ -51,6 +52,8 @@ add_library(video_core STATIC
     renderer_opengl/gl_buffer_cache.h
     renderer_opengl/gl_device.cpp
     renderer_opengl/gl_device.h
+    renderer_opengl/gl_fence_manager.cpp
+    renderer_opengl/gl_fence_manager.h
     renderer_opengl/gl_framebuffer_cache.cpp
     renderer_opengl/gl_framebuffer_cache.h
     renderer_opengl/gl_rasterizer.cpp
@@ -160,6 +163,8 @@ if (ENABLE_VULKAN)
         renderer_vulkan/fixed_pipeline_state.h
         renderer_vulkan/maxwell_to_vk.cpp
         renderer_vulkan/maxwell_to_vk.h
+        renderer_vulkan/nsight_aftermath_tracker.cpp
+        renderer_vulkan/nsight_aftermath_tracker.h
         renderer_vulkan/renderer_vulkan.h
         renderer_vulkan/renderer_vulkan.cpp
         renderer_vulkan/vk_blit_screen.cpp
@@ -174,6 +179,8 @@ if (ENABLE_VULKAN)
         renderer_vulkan/vk_descriptor_pool.h
         renderer_vulkan/vk_device.cpp
         renderer_vulkan/vk_device.h
+        renderer_vulkan/vk_fence_manager.cpp
+        renderer_vulkan/vk_fence_manager.h
         renderer_vulkan/vk_graphics_pipeline.cpp
         renderer_vulkan/vk_graphics_pipeline.h
         renderer_vulkan/vk_image.cpp
@@ -213,17 +220,28 @@ if (ENABLE_VULKAN)
         renderer_vulkan/wrapper.cpp
         renderer_vulkan/wrapper.h
     )
-
-    target_include_directories(video_core PRIVATE sirit ../../externals/Vulkan-Headers/include)
-    target_compile_definitions(video_core PRIVATE HAS_VULKAN)
 endif()
 
 create_target_directory_groups(video_core)
 
 target_link_libraries(video_core PUBLIC common core)
 target_link_libraries(video_core PRIVATE glad)
+
 if (ENABLE_VULKAN)
+    target_include_directories(video_core PRIVATE sirit ../../externals/Vulkan-Headers/include)
+    target_compile_definitions(video_core PRIVATE HAS_VULKAN)
     target_link_libraries(video_core PRIVATE sirit)
+endif()
+
+if (ENABLE_NSIGHT_AFTERMATH)
+    if (NOT DEFINED ENV{NSIGHT_AFTERMATH_SDK})
+        message(ERROR "Environment variable NSIGHT_AFTERMATH_SDK has to be provided")
+    endif()
+    if (NOT WIN32)
+        message(ERROR "Nsight Aftermath doesn't support non-Windows platforms")
+    endif()
+    target_compile_definitions(video_core PRIVATE HAS_NSIGHT_AFTERMATH)
+    target_include_directories(video_core PRIVATE "$ENV{NSIGHT_AFTERMATH_SDK}/include")
 endif()
 
 if (MSVC)

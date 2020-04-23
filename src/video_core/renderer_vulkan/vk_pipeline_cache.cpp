@@ -207,7 +207,7 @@ std::array<Shader, Maxwell::MaxShaderProgram> VKPipelineCache::GetShaders() {
         const GPUVAddr program_addr{GetShaderAddress(system, program)};
         const std::optional cpu_addr = memory_manager.GpuToCpuAddress(program_addr);
         ASSERT(cpu_addr);
-        auto shader = cpu_addr ? TryGet(*cpu_addr) : nullptr;
+        auto shader = cpu_addr ? TryGet(*cpu_addr) : null_shader;
         if (!shader) {
             const auto host_ptr{memory_manager.GetPointer(program_addr)};
 
@@ -218,7 +218,11 @@ std::array<Shader, Maxwell::MaxShaderProgram> VKPipelineCache::GetShaders() {
 
             shader = std::make_shared<CachedShader>(system, stage, program_addr, *cpu_addr,
                                                     std::move(code), stage_offset);
-            Register(shader);
+            if (cpu_addr) {
+                Register(shader);
+            } else {
+                null_shader = shader;
+            }
         }
         shaders[index] = std::move(shader);
     }
@@ -261,7 +265,7 @@ VKComputePipeline& VKPipelineCache::GetComputePipeline(const ComputePipelineCach
     const auto cpu_addr = memory_manager.GpuToCpuAddress(program_addr);
     ASSERT(cpu_addr);
 
-    auto shader = cpu_addr ? TryGet(*cpu_addr) : nullptr;
+    auto shader = cpu_addr ? TryGet(*cpu_addr) : null_kernel;
     if (!shader) {
         // No shader found - create a new one
         const auto host_ptr = memory_manager.GetPointer(program_addr);
@@ -271,7 +275,11 @@ VKComputePipeline& VKPipelineCache::GetComputePipeline(const ComputePipelineCach
         shader = std::make_shared<CachedShader>(system, Tegra::Engines::ShaderType::Compute,
                                                 program_addr, *cpu_addr, std::move(code),
                                                 kernel_main_offset);
-        Register(shader);
+        if (cpu_addr) {
+            Register(shader);
+        } else {
+            null_kernel = shader;
+        }
     }
 
     Specialization specialization;
@@ -330,8 +338,10 @@ VKPipelineCache::DecompileShaders(const GraphicsPipelineCacheKey& key) {
 
     Specialization specialization;
     if (fixed_state.rasterizer.Topology() == Maxwell::PrimitiveTopology::Points) {
-        ASSERT(fixed_state.rasterizer.point_size != 0);
-        std::memcpy(&specialization.point_size, &fixed_state.rasterizer.point_size, sizeof(u32));
+        float point_size;
+        std::memcpy(&point_size, &fixed_state.rasterizer.point_size, sizeof(float));
+        specialization.point_size = point_size;
+        ASSERT(point_size != 0.0f);
     }
     for (std::size_t i = 0; i < Maxwell::NumVertexAttributes; ++i) {
         specialization.attribute_types[i] = fixed_state.vertex_input.attributes[i].Type();
