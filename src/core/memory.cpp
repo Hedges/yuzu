@@ -602,17 +602,18 @@ struct Memory::Impl {
             }
 
             if (type == Common::PageType::Memory) {
+                u8* memory = page_table.pointers[beg] + (beg << PAGE_BITS);
                 system.ArmInterface(0).MapBackingMemory(
-                    beg * PAGE_SIZE, size * PAGE_SIZE, (u8*)(page_table.pointers[beg]),
+                    beg * PAGE_SIZE, size * PAGE_SIZE, memory,
                     (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
                 system.ArmInterface(1).MapBackingMemory(
-                    beg * PAGE_SIZE, size * PAGE_SIZE, (u8*)(page_table.pointers[beg]),
+                    beg * PAGE_SIZE, size * PAGE_SIZE, memory,
                     (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
                 system.ArmInterface(2).MapBackingMemory(
-                    beg * PAGE_SIZE, size * PAGE_SIZE, (u8*)(page_table.pointers[beg]),
+                    beg * PAGE_SIZE, size * PAGE_SIZE, memory,
                     (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
                 system.ArmInterface(3).MapBackingMemory(
-                    beg * PAGE_SIZE, size * PAGE_SIZE, (u8*)(page_table.pointers[beg]),
+                    beg * PAGE_SIZE, size * PAGE_SIZE, memory,
                     (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
             } else if (type == Common::PageType::Unmapped) {
                 system.ArmInterface(0).UnmapMemory(beg * PAGE_SIZE, size * PAGE_SIZE);
