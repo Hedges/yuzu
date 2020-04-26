@@ -204,6 +204,8 @@ void ProcessCapabilities::Clear() {
 
     is_debuggable = false;
     can_force_debug = false;
+
+    InitializeForMetadatalessProcess();
 }
 
 ResultCode ProcessCapabilities::HandlePriorityCoreNumFlags(u32 flags) {
