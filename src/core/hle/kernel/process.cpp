@@ -18,6 +18,7 @@
 #include "core/hle/kernel/memory/memory_block_manager.h"
 #include "core/hle/kernel/memory/page_table.h"
 #include "core/hle/kernel/memory/slab_heap.h"
+#include "core/hle/kernel/physical_core.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/resource_limit.h"
 #include "core/hle/kernel/scheduler.h"
@@ -226,6 +227,9 @@ ResultCode Process::LoadFromMetadata(const FileSys::ProgramMetadata& metadata,
     is_64bit_process = metadata.Is64BitProgram();
     system_resource_size = metadata.GetSystemResourceSize();
     image_size = code_size;
+
+    // Prepare Unicorn for memory backing
+    system.Kernel().SetProcessIs64Bit(this, is_64bit_process);
 
     // Initialize proces address space
     if (const ResultCode result{

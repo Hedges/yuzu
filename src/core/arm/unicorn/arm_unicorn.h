@@ -19,7 +19,7 @@ public:
     ~ARM_Unicorn() override;
 
     void MapBackingMemory(VAddr address, std::size_t size, u8* memory,
-                          Kernel::VMAPermission perms) override;
+                          Kernel::Memory::MemoryPermission perms) override;
     void UnmapMemory(VAddr address, std::size_t size) override;
     void SetPC(u64 pc) override;
     u64 GetPC() const override;

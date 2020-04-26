@@ -80,6 +80,9 @@ public:
     /// Adds the given shared pointer to an internal list of active processes.
     void AppendNewProcess(std::shared_ptr<Process> process);
 
+    /// Sets the given process to be 64- or 32-bit.
+    void SetProcessIs64Bit(Process* process, bool is_64_bit);
+
     /// Makes the given process the new current process.
     void MakeCurrentProcess(Process* process);
 

@@ -7,13 +7,10 @@
 #include <array>
 #include <vector>
 #include "common/common_types.h"
+#include "core/hle/kernel/memory/memory_block.h"
 
 namespace Common {
 struct PageTable;
-}
-
-namespace Kernel {
-enum class VMAPermission : u8;
 }
 
 namespace Core {
@@ -61,7 +58,7 @@ public:
 
     /// Maps a backing memory region for the CPU
     virtual void MapBackingMemory(VAddr address, std::size_t size, u8* memory,
-                                  Kernel::VMAPermission perms) = 0;
+                                  Kernel::Memory::MemoryPermission perms) = 0;
 
     /// Unmaps a region of memory that was previously mapped using MapBackingMemory
     virtual void UnmapMemory(VAddr address, std::size_t size) = 0;

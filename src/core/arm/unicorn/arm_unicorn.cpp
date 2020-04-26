@@ -84,7 +84,7 @@ ARM_Unicorn::~ARM_Unicorn() {
 }
 
 void ARM_Unicorn::MapBackingMemory(VAddr address, std::size_t size, u8* memory,
-                                   Kernel::VMAPermission perms) {
+                                   Kernel::Memory::MemoryPermission perms) {
     CHECKED(uc_mem_map_ptr(uc, address, size, static_cast<u32>(perms), memory));
 }
 

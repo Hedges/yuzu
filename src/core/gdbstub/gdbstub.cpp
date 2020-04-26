@@ -203,7 +203,7 @@ void RegisterModule(std::string name, VAddr beg, VAddr end, bool add_elf_ext) {
         }
     }
     module.beg = beg;
-    module.end = end;
+    module.end = end-1;
     modules.push_back(std::move(module));
 }
 

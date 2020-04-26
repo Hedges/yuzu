@@ -190,6 +190,12 @@ struct KernelCore::Impl {
         system.CoreTiming().ScheduleEvent(time_interval, preemption_event);
     }
 
+    void SetProcessIs64Bit(Process* process, bool is_64_bit) {
+        for (auto& core : cores) {
+            core.SetIs64Bit(process->Is64BitProcess());
+        }
+    }
+
     void MakeCurrentProcess(Process* process) {
         current_process = process;
 
@@ -370,6 +376,10 @@ std::shared_ptr<Thread> KernelCore::RetrieveThreadFromGlobalHandleTable(Handle h
 
 void KernelCore::AppendNewProcess(std::shared_ptr<Process> process) {
     impl->process_list.push_back(std::move(process));
+}
+
+void KernelCore::SetProcessIs64Bit(Process* process, bool is_64_bit) {
+    impl->SetProcessIs64Bit(process, is_64_bit);
 }
 
 void KernelCore::MakeCurrentProcess(Process* process) {

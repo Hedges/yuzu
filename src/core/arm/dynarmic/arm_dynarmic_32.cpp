@@ -125,7 +125,7 @@ ARM_Dynarmic_32::ARM_Dynarmic_32(System& system, ExclusiveMonitor& exclusive_mon
 ARM_Dynarmic_32::~ARM_Dynarmic_32() = default;
 
 void ARM_Dynarmic_32::MapBackingMemory(u64 address, std::size_t size, u8* memory,
-                                    Kernel::VMAPermission perms) {
+                                       Kernel::Memory::MemoryPermission perms) {
     inner_unicorn.MapBackingMemory(address, size, memory, perms);
 }
 

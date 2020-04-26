@@ -573,11 +573,11 @@ struct Memory::Impl {
             }
         }
 
+        const VAddr beg = base;
+
         const VAddr end = base + size;
         ASSERT_MSG(end <= page_table.pointers.size(), "out of range mapping at {:016X}",
                    base + page_table.pointers.size());
-
-        const VAddr beg = base;
 
         if (!target) {
             while (base != end) {
@@ -600,27 +600,25 @@ struct Memory::Impl {
                 base += 1;
                 target += PAGE_SIZE;
             }
+        }
 
-            if (type == Common::PageType::Memory) {
-                u8* memory = page_table.pointers[beg] + (beg << PAGE_BITS);
-                system.ArmInterface(0).MapBackingMemory(
-                    beg * PAGE_SIZE, size * PAGE_SIZE, memory,
-                    (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
-                system.ArmInterface(1).MapBackingMemory(
-                    beg * PAGE_SIZE, size * PAGE_SIZE, memory,
-                    (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
-                system.ArmInterface(2).MapBackingMemory(
-                    beg * PAGE_SIZE, size * PAGE_SIZE, memory,
-                    (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
-                system.ArmInterface(3).MapBackingMemory(
-                    beg * PAGE_SIZE, size * PAGE_SIZE, memory,
-                    (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
-            } else if (type == Common::PageType::Unmapped) {
-                system.ArmInterface(0).UnmapMemory(beg * PAGE_SIZE, size * PAGE_SIZE);
-                system.ArmInterface(1).UnmapMemory(beg * PAGE_SIZE, size * PAGE_SIZE);
-                system.ArmInterface(2).UnmapMemory(beg * PAGE_SIZE, size * PAGE_SIZE);
-                system.ArmInterface(3).UnmapMemory(beg * PAGE_SIZE, size * PAGE_SIZE);
-            }
+        VAddr address = beg * PAGE_SIZE;
+        size_t num_bytes = size * PAGE_SIZE;
+        if (type == Common::PageType::Memory) {
+            u8* memory = page_table.pointers[beg] + (beg << PAGE_BITS);
+            system.ArmInterface(0).MapBackingMemory(address, num_bytes, memory,
+                                                    Kernel::Memory::MemoryPermission::UserMask);
+            system.ArmInterface(1).MapBackingMemory(address, num_bytes, memory,
+                                                    Kernel::Memory::MemoryPermission::UserMask);
+            system.ArmInterface(2).MapBackingMemory(address, num_bytes, memory,
+                                                    Kernel::Memory::MemoryPermission::UserMask);
+            system.ArmInterface(3).MapBackingMemory(address, num_bytes, memory,
+                                                    Kernel::Memory::MemoryPermission::UserMask);
+        } else if ((type == Common::PageType::Unmapped) || !target) {
+            system.ArmInterface(0).UnmapMemory(address, num_bytes);
+            system.ArmInterface(1).UnmapMemory(address, num_bytes);
+            system.ArmInterface(2).UnmapMemory(address, num_bytes);
+            system.ArmInterface(3).UnmapMemory(address, num_bytes);
         }
     }
 
