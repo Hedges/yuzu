@@ -25,6 +25,7 @@ PhysicalCore::PhysicalCore(Core::System& system, std::size_t id,
         std::make_unique<Core::ARM_Dynarmic_32>(system, exclusive_monitor, core_index);
     arm_interface_64 =
         std::make_unique<Core::ARM_Dynarmic_64>(system, exclusive_monitor, core_index);
+    arm_interface = arm_interface_64.get();
 
 #else
     arm_interface = std::make_shared<Core::ARM_Unicorn>(system);

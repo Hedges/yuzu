@@ -15,6 +15,7 @@
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
 #include "core/device_memory.h"
+#include "core/hle/kernel/memory/memory_block.h"
 #include "core/hle/kernel/memory/page_table.h"
 #include "core/hle/kernel/physical_memory.h"
 #include "core/hle/kernel/process.h"
@@ -576,6 +577,8 @@ struct Memory::Impl {
         ASSERT_MSG(end <= page_table.pointers.size(), "out of range mapping at {:016X}",
                    base + page_table.pointers.size());
 
+        const VAddr beg = base;
+
         if (!target) {
             while (base != end) {
                 page_table.pointers[base] = nullptr;
@@ -596,6 +599,26 @@ struct Memory::Impl {
 
                 base += 1;
                 target += PAGE_SIZE;
+            }
+
+            if (type == Common::PageType::Memory) {
+                system.ArmInterface(0).MapBackingMemory(
+                    beg * PAGE_SIZE, size * PAGE_SIZE, (u8*)(page_table.pointers[beg]),
+                    (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
+                system.ArmInterface(1).MapBackingMemory(
+                    beg * PAGE_SIZE, size * PAGE_SIZE, (u8*)(page_table.pointers[beg]),
+                    (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
+                system.ArmInterface(2).MapBackingMemory(
+                    beg * PAGE_SIZE, size * PAGE_SIZE, (u8*)(page_table.pointers[beg]),
+                    (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
+                system.ArmInterface(3).MapBackingMemory(
+                    beg * PAGE_SIZE, size * PAGE_SIZE, (u8*)(page_table.pointers[beg]),
+                    (Kernel::VMAPermission)Kernel::Memory::MemoryPermission::UserMask);
+            } else if (type == Common::PageType::Unmapped) {
+                system.ArmInterface(0).UnmapMemory(beg * PAGE_SIZE, size * PAGE_SIZE);
+                system.ArmInterface(1).UnmapMemory(beg * PAGE_SIZE, size * PAGE_SIZE);
+                system.ArmInterface(2).UnmapMemory(beg * PAGE_SIZE, size * PAGE_SIZE);
+                system.ArmInterface(3).UnmapMemory(beg * PAGE_SIZE, size * PAGE_SIZE);
             }
         }
     }

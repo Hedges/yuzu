@@ -6,9 +6,11 @@
 #include <unicorn/arm64.h>
 #include "common/assert.h"
 #include "common/microprofile.h"
+#include "common/page_table.h"
 #include "core/arm/unicorn/arm_unicorn.h"
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "core/hle/kernel/memory/memory_block.h"
 #include "core/hle/kernel/scheduler.h"
 #include "core/hle/kernel/svc.h"
 #include "core/memory.h"
@@ -182,15 +184,15 @@ MICROPROFILE_DEFINE(ARM_Jit_Unicorn, "ARM JIT", "Unicorn", MP_RGB(255, 64, 64));
 void ARM_Unicorn::ExecuteInstructions(std::size_t num_instructions) {
     MICROPROFILE_SCOPE(ARM_Jit_Unicorn);
 
-    // Temporarily map the code page for Unicorn
-    u64 map_addr{GetPC() & ~Memory::PAGE_MASK};
-    std::vector<u8> page_buffer(Memory::PAGE_SIZE);
-    system.Memory().ReadBlock(map_addr, page_buffer.data(), page_buffer.size());
+    //// Temporarily map the code page for Unicorn
+    //u64 map_addr{GetPC() & ~Memory::PAGE_MASK};
+    //std::vector<u8> page_buffer(Memory::PAGE_SIZE);
+    //system.Memory().ReadBlock(map_addr, page_buffer.data(), page_buffer.size());
 
-    CHECKED(uc_mem_map_ptr(uc, map_addr, page_buffer.size(),
-                           UC_PROT_READ | UC_PROT_WRITE | UC_PROT_EXEC, page_buffer.data()));
+    //CHECKED(uc_mem_map_ptr(uc, map_addr, page_buffer.size(),
+    //                       UC_PROT_READ | UC_PROT_WRITE | UC_PROT_EXEC, page_buffer.data()));
     CHECKED(uc_emu_start(uc, GetPC(), 1ULL << 63, 0, num_instructions));
-    CHECKED(uc_mem_unmap(uc, map_addr, page_buffer.size()));
+    //CHECKED(uc_mem_unmap(uc, map_addr, page_buffer.size()));
 
     system.CoreTiming().AddTicks(num_instructions);
     if (GDBStub::IsServerEnabled()) {
