@@ -39,7 +39,7 @@ void KeplerCompute::CallMethod(const GPU::MethodCall& method_call) {
         const bool is_last_call = method_call.IsLastCall();
         upload_state.ProcessData(method_call.argument, is_last_call);
         if (is_last_call) {
-            system.GPU().Maxwell3D().dirty.OnMemoryWrite();
+            system.GPU().Maxwell3D().OnMemoryWrite();
         }
         break;
     }
@@ -48,6 +48,13 @@ void KeplerCompute::CallMethod(const GPU::MethodCall& method_call) {
         break;
     default:
         break;
+    }
+}
+
+void KeplerCompute::CallMultiMethod(u32 method, const u32* base_start, u32 amount,
+                                    u32 methods_pending) {
+    for (std::size_t i = 0; i < amount; i++) {
+        CallMethod({method, base_start[i], 0, methods_pending - static_cast<u32>(i)});
     }
 }
 
@@ -89,9 +96,17 @@ SamplerDescriptor KeplerCompute::AccessBindlessSampler(ShaderType stage, u64 con
 
     const Texture::TextureHandle tex_handle{memory_manager.Read<u32>(tex_info_address)};
     const Texture::FullTextureInfo tex_info = GetTextureInfo(tex_handle);
-    SamplerDescriptor result = SamplerDescriptor::FromTicTexture(tex_info.tic.texture_type.Value());
+    SamplerDescriptor result = SamplerDescriptor::FromTIC(tex_info.tic);
     result.is_shadow.Assign(tex_info.tsc.depth_compare_enabled.Value());
     return result;
+}
+
+VideoCore::GuestDriverProfile& KeplerCompute::AccessGuestDriverProfile() {
+    return rasterizer.AccessGuestDriverProfile();
+}
+
+const VideoCore::GuestDriverProfile& KeplerCompute::AccessGuestDriverProfile() const {
+    return rasterizer.AccessGuestDriverProfile();
 }
 
 void KeplerCompute::ProcessLaunch() {
@@ -110,14 +125,6 @@ Texture::TICEntry KeplerCompute::GetTICEntry(u32 tic_index) const {
 
     Texture::TICEntry tic_entry;
     memory_manager.ReadBlockUnsafe(tic_address_gpu, &tic_entry, sizeof(Texture::TICEntry));
-
-    const auto r_type{tic_entry.r_type.Value()};
-    const auto g_type{tic_entry.g_type.Value()};
-    const auto b_type{tic_entry.b_type.Value()};
-    const auto a_type{tic_entry.a_type.Value()};
-
-    // TODO(Subv): Different data types for separate components are not supported
-    DEBUG_ASSERT(r_type == g_type && r_type == b_type && r_type == a_type);
 
     return tic_entry;
 }

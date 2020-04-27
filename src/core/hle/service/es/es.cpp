@@ -4,6 +4,7 @@
 
 #include "core/crypto/key_manager.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/service/es/es.h"
 #include "core/hle/service/service.h"
 
 namespace Service::ES {
@@ -76,7 +77,6 @@ private:
     }
 
     void ImportTicket(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx};
         const auto ticket = ctx.ReadBuffer();
         const auto cert = ctx.ReadBuffer(1);
 

@@ -6,6 +6,7 @@
 #include "audio_core/audio_out.h"
 #include "audio_core/audio_renderer.h"
 #include "audio_core/codec.h"
+#include "audio_core/common.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/core.h"
@@ -36,9 +37,9 @@ public:
     }
 
     void SetWaveIndex(std::size_t index);
-    std::vector<s16> DequeueSamples(std::size_t sample_count, Memory::Memory& memory);
+    std::vector<s16> DequeueSamples(std::size_t sample_count, Core::Memory::Memory& memory);
     void UpdateState();
-    void RefreshBuffer(Memory::Memory& memory);
+    void RefreshBuffer(Core::Memory::Memory& memory);
 
 private:
     bool is_in_use{};
@@ -66,19 +67,20 @@ public:
         return info;
     }
 
-    void UpdateState(Memory::Memory& memory);
+    void UpdateState(Core::Memory::Memory& memory);
 
 private:
     EffectOutStatus out_status{};
     EffectInStatus info{};
 };
-AudioRenderer::AudioRenderer(Core::Timing::CoreTiming& core_timing, Memory::Memory& memory_,
+
+AudioRenderer::AudioRenderer(Core::Timing::CoreTiming& core_timing, Core::Memory::Memory& memory_,
                              AudioRendererParameter params,
                              std::shared_ptr<Kernel::WritableEvent> buffer_event,
                              std::size_t instance_number)
     : worker_params{params}, buffer_event{buffer_event}, voices(params.voice_count),
       effects(params.effect_count), memory{memory_} {
-
+    behavior_info.SetUserRevision(params.revision);
     audio_out = std::make_unique<AudioCore::AudioOut>();
     stream = audio_out->OpenStream(core_timing, STREAM_SAMPLE_RATE, STREAM_NUM_CHANNELS,
                                    fmt::format("AudioRenderer-Instance{}", instance_number),
@@ -108,16 +110,16 @@ Stream::State AudioRenderer::GetStreamState() const {
     return stream->GetState();
 }
 
-static constexpr u32 VersionFromRevision(u32_le rev) {
-    // "REV7" -> 7
-    return ((rev >> 24) & 0xff) - 0x30;
-}
-
-std::vector<u8> AudioRenderer::UpdateAudioRenderer(const std::vector<u8>& input_params) {
+ResultVal<std::vector<u8>> AudioRenderer::UpdateAudioRenderer(const std::vector<u8>& input_params) {
     // Copy UpdateDataHeader struct
     UpdateDataHeader config{};
     std::memcpy(&config, input_params.data(), sizeof(UpdateDataHeader));
     u32 memory_pool_count = worker_params.effect_count + (worker_params.voice_count * 4);
+
+    if (!behavior_info.UpdateInput(input_params, sizeof(UpdateDataHeader))) {
+        LOG_ERROR(Audio, "Failed to update behavior info input parameters");
+        return Audren::ERR_INVALID_PARAMETERS;
+    }
 
     // Copy MemoryPoolInfo structs
     std::vector<MemoryPoolInfo> mem_pool_info(memory_pool_count);
@@ -172,8 +174,7 @@ std::vector<u8> AudioRenderer::UpdateAudioRenderer(const std::vector<u8>& input_
     // Copy output header
     UpdateDataHeader response_data{worker_params};
     std::vector<u8> output_params(response_data.total_size);
-    const auto audren_revision = VersionFromRevision(config.revision);
-    if (audren_revision >= 5) {
+    if (behavior_info.IsElapsedFrameCountSupported()) {
         response_data.frame_count = 0x10;
         response_data.total_size += 0x10;
     }
@@ -199,7 +200,19 @@ std::vector<u8> AudioRenderer::UpdateAudioRenderer(const std::vector<u8>& input_
                     sizeof(EffectOutStatus));
         effect_out_status_offset += sizeof(EffectOutStatus);
     }
-    return output_params;
+
+    // Update behavior info output
+    const std::size_t behavior_out_status_offset{
+        sizeof(UpdateDataHeader) + response_data.memory_pools_size + response_data.voices_size +
+        response_data.effects_size + response_data.sinks_size +
+        response_data.performance_manager_size};
+
+    if (!behavior_info.UpdateOutput(output_params, behavior_out_status_offset)) {
+        LOG_ERROR(Audio, "Failed to update behavior info output parameters");
+        return Audren::ERR_INVALID_PARAMETERS;
+    }
+
+    return MakeResult(output_params);
 }
 
 void AudioRenderer::VoiceState::SetWaveIndex(std::size_t index) {
@@ -208,7 +221,7 @@ void AudioRenderer::VoiceState::SetWaveIndex(std::size_t index) {
 }
 
 std::vector<s16> AudioRenderer::VoiceState::DequeueSamples(std::size_t sample_count,
-                                                           Memory::Memory& memory) {
+                                                           Core::Memory::Memory& memory) {
     if (!IsPlaying()) {
         return {};
     }
@@ -258,7 +271,7 @@ void AudioRenderer::VoiceState::UpdateState() {
     is_in_use = info.is_in_use;
 }
 
-void AudioRenderer::VoiceState::RefreshBuffer(Memory::Memory& memory) {
+void AudioRenderer::VoiceState::RefreshBuffer(Core::Memory::Memory& memory) {
     const auto wave_buffer_address = info.wave_buffer[wave_index].buffer_addr;
     const auto wave_buffer_size = info.wave_buffer[wave_index].buffer_sz;
     std::vector<s16> new_samples(wave_buffer_size / sizeof(s16));
@@ -310,7 +323,7 @@ void AudioRenderer::VoiceState::RefreshBuffer(Memory::Memory& memory) {
     is_refresh_pending = false;
 }
 
-void AudioRenderer::EffectState::UpdateState(Memory::Memory& memory) {
+void AudioRenderer::EffectState::UpdateState(Core::Memory::Memory& memory) {
     if (info.is_new) {
         out_status.state = EffectStatus::New;
     } else {

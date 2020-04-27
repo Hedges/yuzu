@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <array>
+#include <QApplication>
 #include <QKeySequence>
 #include <QSettings>
 #include "common/file_util.h"
@@ -10,8 +11,10 @@
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/hid/controllers/npad.h"
 #include "input_common/main.h"
+#include "input_common/udp/client.h"
 #include "yuzu/configuration/config.h"
-#include "yuzu/uisettings.h"
+
+extern int use_gdbstub_override;
 
 Config::Config() {
     // TODO: Don't hardcode the path; let the frontend decide where to put the config files.
@@ -211,12 +214,13 @@ const std::array<int, Settings::NativeKeyboard::NumKeyboardMods> Config::default
 // This must be in alphabetical order according to action name as it must have the same order as
 // UISetting::values.shortcuts, which is alphabetically ordered.
 // clang-format off
-const std::array<UISettings::Shortcut, 15> default_hotkeys{{
+const std::array<UISettings::Shortcut, 15> Config::default_hotkeys{{
     {QStringLiteral("Capture Screenshot"),       QStringLiteral("Main Window"), {QStringLiteral("Ctrl+P"), Qt::ApplicationShortcut}},
+    {QStringLiteral("Change Docked Mode"),       QStringLiteral("Main Window"), {QStringLiteral("F10"), Qt::ApplicationShortcut}},
     {QStringLiteral("Continue/Pause Emulation"), QStringLiteral("Main Window"), {QStringLiteral("F4"), Qt::WindowShortcut}},
     {QStringLiteral("Decrease Speed Limit"),     QStringLiteral("Main Window"), {QStringLiteral("-"), Qt::ApplicationShortcut}},
-    {QStringLiteral("Exit yuzu"),                QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Q"), Qt::WindowShortcut}},
     {QStringLiteral("Exit Fullscreen"),          QStringLiteral("Main Window"), {QStringLiteral("Esc"), Qt::WindowShortcut}},
+    {QStringLiteral("Exit yuzu"),                QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Q"), Qt::WindowShortcut}},
     {QStringLiteral("Fullscreen"),               QStringLiteral("Main Window"), {QStringLiteral("F11"), Qt::WindowShortcut}},
     {QStringLiteral("Increase Speed Limit"),     QStringLiteral("Main Window"), {QStringLiteral("+"), Qt::ApplicationShortcut}},
     {QStringLiteral("Load Amiibo"),              QStringLiteral("Main Window"), {QStringLiteral("F2"), Qt::ApplicationShortcut}},
@@ -226,7 +230,6 @@ const std::array<UISettings::Shortcut, 15> default_hotkeys{{
     {QStringLiteral("Toggle Filter Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+F"), Qt::WindowShortcut}},
     {QStringLiteral("Toggle Speed Limit"),       QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Z"), Qt::ApplicationShortcut}},
     {QStringLiteral("Toggle Status Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+S"), Qt::WindowShortcut}},
-    {QStringLiteral("Change Docked Mode"),       QStringLiteral("Main Window"), {QStringLiteral("F10"), Qt::ApplicationShortcut}},
 }};
 // clang-format on
 
@@ -429,6 +432,16 @@ void Config::ReadControlValues() {
                     QStringLiteral("engine:motion_emu,update_period:100,sensitivity:0.01"))
             .toString()
             .toStdString();
+    Settings::values.udp_input_address =
+        ReadSetting(QStringLiteral("udp_input_address"),
+                    QString::fromUtf8(InputCommon::CemuhookUDP::DEFAULT_ADDR))
+            .toString()
+            .toStdString();
+    Settings::values.udp_input_port = static_cast<u16>(
+        ReadSetting(QStringLiteral("udp_input_port"), InputCommon::CemuhookUDP::DEFAULT_PORT)
+            .toInt());
+    Settings::values.udp_pad_index =
+        static_cast<u8>(ReadSetting(QStringLiteral("udp_pad_index"), 0).toUInt());
 
     qt_config->endGroup();
 }
@@ -513,7 +526,9 @@ void Config::ReadDebuggingValues() {
     Settings::values.record_frame_times =
         qt_config->value(QStringLiteral("record_frame_times"), false).toBool();
     Settings::values.use_gdbstub = ReadSetting(QStringLiteral("use_gdbstub"), false).toBool();
+    Settings::values.gdbstub_toggle = Settings::values.use_gdbstub;
     Settings::values.gdbstub_port = ReadSetting(QStringLiteral("gdbstub_port"), 24689).toInt();
+    Settings::values.gdbstub_loops = ReadSetting(QStringLiteral("gdbstub_loops"), 1).toInt();
     Settings::values.program_args =
         ReadSetting(QStringLiteral("program_args"), QStringLiteral("")).toString().toStdString();
     Settings::values.dump_exefs = ReadSetting(QStringLiteral("dump_exefs"), false).toBool();
@@ -521,6 +536,8 @@ void Config::ReadDebuggingValues() {
     Settings::values.reporting_services =
         ReadSetting(QStringLiteral("reporting_services"), false).toBool();
     Settings::values.quest_flag = ReadSetting(QStringLiteral("quest_flag"), false).toBool();
+    Settings::values.disable_cpu_opt =
+        ReadSetting(QStringLiteral("disable_cpu_opt"), false).toBool();
 
     qt_config->endGroup();
 }
@@ -528,7 +545,7 @@ void Config::ReadDebuggingValues() {
 void Config::ReadServiceValues() {
     qt_config->beginGroup(QStringLiteral("Services"));
     Settings::values.bcat_backend =
-        ReadSetting(QStringLiteral("bcat_backend"), QStringLiteral("boxcat"))
+        ReadSetting(QStringLiteral("bcat_backend"), QStringLiteral("null"))
             .toString()
             .toStdString();
     Settings::values.bcat_boxcat_local =
@@ -613,17 +630,26 @@ void Config::ReadPathValues() {
 void Config::ReadRendererValues() {
     qt_config->beginGroup(QStringLiteral("Renderer"));
 
+    Settings::values.renderer_backend =
+        static_cast<Settings::RendererBackend>(ReadSetting(QStringLiteral("backend"), 0).toInt());
+    Settings::values.renderer_debug = ReadSetting(QStringLiteral("debug"), false).toBool();
+    Settings::values.vulkan_device = ReadSetting(QStringLiteral("vulkan_device"), 0).toInt();
     Settings::values.resolution_factor =
         ReadSetting(QStringLiteral("resolution_factor"), 1.0).toFloat();
+    Settings::values.aspect_ratio = ReadSetting(QStringLiteral("aspect_ratio"), 0).toInt();
+    Settings::values.max_anisotropy = ReadSetting(QStringLiteral("max_anisotropy"), 0).toInt();
     Settings::values.use_frame_limit =
         ReadSetting(QStringLiteral("use_frame_limit"), true).toBool();
     Settings::values.frame_limit = ReadSetting(QStringLiteral("frame_limit"), 100).toInt();
     Settings::values.use_disk_shader_cache =
         ReadSetting(QStringLiteral("use_disk_shader_cache"), true).toBool();
-    Settings::values.use_accurate_gpu_emulation =
-        ReadSetting(QStringLiteral("use_accurate_gpu_emulation"), false).toBool();
+    const int gpu_accuracy_level = ReadSetting(QStringLiteral("gpu_accuracy"), 0).toInt();
+    Settings::values.gpu_accuracy = static_cast<Settings::GPUAccuracy>(gpu_accuracy_level);
     Settings::values.use_asynchronous_gpu_emulation =
         ReadSetting(QStringLiteral("use_asynchronous_gpu_emulation"), false).toBool();
+    Settings::values.use_vsync = ReadSetting(QStringLiteral("use_vsync"), true).toBool();
+    Settings::values.use_fast_gpu_time =
+        ReadSetting(QStringLiteral("use_fast_gpu_time"), true).toBool();
     Settings::values.force_30fps_mode =
         ReadSetting(QStringLiteral("force_30fps_mode"), false).toBool();
 
@@ -664,6 +690,8 @@ void Config::ReadSystemValues() {
 
     Settings::values.language_index = ReadSetting(QStringLiteral("language_index"), 1).toInt();
 
+    Settings::values.region_index = ReadSetting(QStringLiteral("region_index"), 1).toInt();
+
     const auto rng_seed_enabled = ReadSetting(QStringLiteral("rng_seed_enabled"), false).toBool();
     if (rng_seed_enabled) {
         Settings::values.rng_seed = ReadSetting(QStringLiteral("rng_seed"), 0).toULongLong();
@@ -679,6 +707,8 @@ void Config::ReadSystemValues() {
     } else {
         Settings::values.custom_rtc = std::nullopt;
     }
+
+    Settings::values.sound_index = ReadSetting(QStringLiteral("sound_index"), 1).toInt();
 
     qt_config->endGroup();
 }
@@ -727,7 +757,6 @@ void Config::ReadUIValues() {
 void Config::ReadUIGamelistValues() {
     qt_config->beginGroup(QStringLiteral("UIGameList"));
 
-    UISettings::values.show_unknown = ReadSetting(QStringLiteral("show_unknown"), true).toBool();
     UISettings::values.show_add_ons = ReadSetting(QStringLiteral("show_add_ons"), true).toBool();
     UISettings::values.icon_size = ReadSetting(QStringLiteral("icon_size"), 64).toUInt();
     UISettings::values.row_1_text_id = ReadSetting(QStringLiteral("row_1_text_id"), 3).toUInt();
@@ -785,6 +814,15 @@ void Config::ReadValues() {
     ReadServiceValues();
     ReadDisabledAddOnValues();
     ReadUIValues();
+    QStringList args = QApplication::arguments();
+    for (int i = 0; i < args.length(); i++) {
+        if (args[i].contains(QStringLiteral("--gdb"), Qt::CaseSensitivity::CaseInsensitive)) {
+            Settings::values.gdbstub_toggle = true;
+        }
+        if (args[i].contains(QStringLiteral("--nogdb"), Qt::CaseSensitivity::CaseInsensitive)) {
+            Settings::values.gdbstub_toggle = false;
+        }
+    }
 }
 
 void Config::SavePlayerValues() {
@@ -911,6 +949,12 @@ void Config::SaveControlValues() {
                  QString::fromStdString(Settings::values.motion_device),
                  QStringLiteral("engine:motion_emu,update_period:100,sensitivity:0.01"));
     WriteSetting(QStringLiteral("keyboard_enabled"), Settings::values.keyboard_enabled, false);
+    WriteSetting(QStringLiteral("udp_input_address"),
+                 QString::fromStdString(Settings::values.udp_input_address),
+                 QString::fromUtf8(InputCommon::CemuhookUDP::DEFAULT_ADDR));
+    WriteSetting(QStringLiteral("udp_input_port"), Settings::values.udp_input_port,
+                 InputCommon::CemuhookUDP::DEFAULT_PORT);
+    WriteSetting(QStringLiteral("udp_pad_index"), Settings::values.udp_pad_index, 0);
 
     qt_config->endGroup();
 }
@@ -969,11 +1013,13 @@ void Config::SaveDebuggingValues() {
     qt_config->setValue(QStringLiteral("record_frame_times"), Settings::values.record_frame_times);
     WriteSetting(QStringLiteral("use_gdbstub"), Settings::values.use_gdbstub, false);
     WriteSetting(QStringLiteral("gdbstub_port"), Settings::values.gdbstub_port, 24689);
+    WriteSetting(QStringLiteral("gdbstub_loops"), Settings::values.gdbstub_loops, 1);
     WriteSetting(QStringLiteral("program_args"),
                  QString::fromStdString(Settings::values.program_args), QStringLiteral(""));
     WriteSetting(QStringLiteral("dump_exefs"), Settings::values.dump_exefs, false);
     WriteSetting(QStringLiteral("dump_nso"), Settings::values.dump_nso, false);
     WriteSetting(QStringLiteral("quest_flag"), Settings::values.quest_flag, false);
+    WriteSetting(QStringLiteral("disable_cpu_opt"), Settings::values.disable_cpu_opt, false);
 
     qt_config->endGroup();
 }
@@ -1039,16 +1085,23 @@ void Config::SavePathValues() {
 void Config::SaveRendererValues() {
     qt_config->beginGroup(QStringLiteral("Renderer"));
 
+    WriteSetting(QStringLiteral("backend"), static_cast<int>(Settings::values.renderer_backend), 0);
+    WriteSetting(QStringLiteral("debug"), Settings::values.renderer_debug, false);
+    WriteSetting(QStringLiteral("vulkan_device"), Settings::values.vulkan_device, 0);
     WriteSetting(QStringLiteral("resolution_factor"),
                  static_cast<double>(Settings::values.resolution_factor), 1.0);
+    WriteSetting(QStringLiteral("aspect_ratio"), Settings::values.aspect_ratio, 0);
+    WriteSetting(QStringLiteral("max_anisotropy"), Settings::values.max_anisotropy, 0);
     WriteSetting(QStringLiteral("use_frame_limit"), Settings::values.use_frame_limit, true);
     WriteSetting(QStringLiteral("frame_limit"), Settings::values.frame_limit, 100);
     WriteSetting(QStringLiteral("use_disk_shader_cache"), Settings::values.use_disk_shader_cache,
                  true);
-    WriteSetting(QStringLiteral("use_accurate_gpu_emulation"),
-                 Settings::values.use_accurate_gpu_emulation, false);
+    WriteSetting(QStringLiteral("gpu_accuracy"), static_cast<int>(Settings::values.gpu_accuracy),
+                 0);
     WriteSetting(QStringLiteral("use_asynchronous_gpu_emulation"),
                  Settings::values.use_asynchronous_gpu_emulation, false);
+    WriteSetting(QStringLiteral("use_vsync"), Settings::values.use_vsync, true);
+    WriteSetting(QStringLiteral("use_fast_gpu_time"), Settings::values.use_fast_gpu_time, true);
     WriteSetting(QStringLiteral("force_30fps_mode"), Settings::values.force_30fps_mode, false);
 
     // Cast to double because Qt's written float values are not human-readable
@@ -1085,6 +1138,7 @@ void Config::SaveSystemValues() {
     WriteSetting(QStringLiteral("use_docked_mode"), Settings::values.use_docked_mode, false);
     WriteSetting(QStringLiteral("current_user"), Settings::values.current_user, 0);
     WriteSetting(QStringLiteral("language_index"), Settings::values.language_index, 1);
+    WriteSetting(QStringLiteral("region_index"), Settings::values.region_index, 1);
 
     WriteSetting(QStringLiteral("rng_seed_enabled"), Settings::values.rng_seed.has_value(), false);
     WriteSetting(QStringLiteral("rng_seed"), Settings::values.rng_seed.value_or(0), 0);
@@ -1095,6 +1149,8 @@ void Config::SaveSystemValues() {
                  QVariant::fromValue<long long>(
                      Settings::values.custom_rtc.value_or(std::chrono::seconds{}).count()),
                  0);
+
+    WriteSetting(QStringLiteral("sound_index"), Settings::values.sound_index, 1);
 
     qt_config->endGroup();
 }
@@ -1135,7 +1191,6 @@ void Config::SaveUIValues() {
 void Config::SaveUIGamelistValues() {
     qt_config->beginGroup(QStringLiteral("UIGameList"));
 
-    WriteSetting(QStringLiteral("show_unknown"), UISettings::values.show_unknown, true);
     WriteSetting(QStringLiteral("show_add_ons"), UISettings::values.show_add_ons, true);
     WriteSetting(QStringLiteral("icon_size"), UISettings::values.icon_size, 64);
     WriteSetting(QStringLiteral("row_1_text_id"), UISettings::values.row_1_text_id, 3);

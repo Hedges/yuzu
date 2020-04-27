@@ -19,7 +19,7 @@ public:
     ~ARM_Unicorn() override;
 
     void MapBackingMemory(VAddr address, std::size_t size, u8* memory,
-                          Kernel::VMAPermission perms) override;
+                          Kernel::Memory::MemoryPermission perms) override;
     void UnmapMemory(VAddr address, std::size_t size) override;
     void SetPC(u64 pc) override;
     u64 GetPC() const override;
@@ -33,8 +33,6 @@ public:
     void SetTlsAddress(VAddr address) override;
     void SetTPIDR_EL0(u64 value) override;
     u64 GetTPIDR_EL0() const override;
-    void SaveContext(ThreadContext& ctx) override;
-    void LoadContext(const ThreadContext& ctx) override;
     void PrepareReschedule() override;
     void ClearExclusiveState() override;
     void ExecuteInstructions(std::size_t num_instructions);
@@ -43,6 +41,11 @@ public:
     void ClearInstructionCache() override;
     void PageTableChanged(Common::PageTable&, std::size_t) override {}
     void RecordBreak(GDBStub::BreakpointAddress bkpt);
+
+    void SaveContext(ThreadContext32& ctx) override {}
+    void SaveContext(ThreadContext64& ctx) override;
+    void LoadContext(const ThreadContext32& ctx) override {}
+    void LoadContext(const ThreadContext64& ctx) override;
 
 private:
     static void InterruptHook(uc_engine* uc, u32 int_no, void* user_data);

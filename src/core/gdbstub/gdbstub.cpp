@@ -35,13 +35,14 @@
 #include "common/swap.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
-#include "core/core_cpu.h"
+#include "core/core_manager.h"
 #include "core/gdbstub/gdbstub.h"
+#include "core/hle/kernel/memory/page_table.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/scheduler.h"
-#include "core/hle/kernel/vm_manager.h"
 #include "core/loader/loader.h"
 #include "core/memory.h"
+#include "core/settings.h"
 
 namespace GDBStub {
 namespace {
@@ -141,6 +142,7 @@ constexpr char target_xml[] =
 )";
 
 int gdbserver_socket = -1;
+bool defer_start = false;
 
 u8 command_buffer[GDB_BUFFER_SIZE];
 u32 command_length;
@@ -222,7 +224,7 @@ static u64 RegRead(std::size_t id, Kernel::Thread* thread = nullptr) {
         return 0;
     }
 
-    const auto& thread_context = thread->GetContext();
+    const auto& thread_context = thread->GetContext64();
 
     if (id < SP_REGISTER) {
         return thread_context.cpu_registers[id];
@@ -244,7 +246,7 @@ static void RegWrite(std::size_t id, u64 val, Kernel::Thread* thread = nullptr) 
         return;
     }
 
-    auto& thread_context = thread->GetContext();
+    auto& thread_context = thread->GetContext64();
 
     if (id < SP_REGISTER) {
         thread_context.cpu_registers[id] = val;
@@ -264,7 +266,7 @@ static u128 FpuRead(std::size_t id, Kernel::Thread* thread = nullptr) {
         return u128{0};
     }
 
-    auto& thread_context = thread->GetContext();
+    auto& thread_context = thread->GetContext64();
 
     if (id >= UC_ARM64_REG_Q0 && id < FPCR_REGISTER) {
         return thread_context.vector_registers[id - UC_ARM64_REG_Q0];
@@ -280,7 +282,7 @@ static void FpuWrite(std::size_t id, u128 val, Kernel::Thread* thread = nullptr)
         return;
     }
 
-    auto& thread_context = thread->GetContext();
+    auto& thread_context = thread->GetContext64();
 
     if (id >= UC_ARM64_REG_Q0 && id < FPCR_REGISTER) {
         thread_context.vector_registers[id - UC_ARM64_REG_Q0] = val;
@@ -465,7 +467,7 @@ static u8 ReadByte() {
     std::size_t received_size = recv(gdbserver_socket, reinterpret_cast<char*>(&c), 1, MSG_WAITALL);
     if (received_size != 1) {
         LOG_ERROR(Debug_GDBStub, "recv failed: {}", received_size);
-        Shutdown();
+        Shutdown(128 + 6 /*SIGABRT*/);
     }
 
     return c;
@@ -619,7 +621,7 @@ static void SendReply(const char* reply) {
         int sent_size = send(gdbserver_socket, reinterpret_cast<char*>(ptr), left, 0);
         if (sent_size < 0) {
             LOG_ERROR(Debug_GDBStub, "gdb: send failed");
-            return Shutdown();
+            return Shutdown(128 + 6 /*SIGABRT*/);
         }
 
         left -= sent_size;
@@ -646,7 +648,10 @@ static void HandleQuery() {
                        strlen("Xfer:features:read:target.xml:")) == 0) {
         SendReply(target_xml);
     } else if (strncmp(query, "Offsets", strlen("Offsets")) == 0) {
-        const VAddr base_address = (modules.size() > 1) ? modules[1].beg : Core::System::GetInstance().CurrentProcess()->VMManager().GetCodeRegionBaseAddress();
+        const VAddr base_address =
+            (modules.size() > 1)
+                ? modules[1].beg
+                : Core::System::GetInstance().CurrentProcess()->PageTable().GetCodeRegionStart();
         std::string buffer = fmt::format("TextSeg={:0x}", base_address);
         SendReply(buffer.c_str());
     } else if (strncmp(query, "fThreadInfo", strlen("fThreadInfo")) == 0) {
@@ -920,7 +925,7 @@ static void WriteRegister() {
     // Update ARM context, skipping scheduler - no running threads at this point
     Core::System::GetInstance()
         .ArmInterface(current_core)
-        .LoadContext(current_thread->GetContext());
+        .LoadContext(current_thread->GetContext64());
 
     SendReply("OK");
 }
@@ -951,7 +956,7 @@ static void WriteRegisters() {
     // Update ARM context, skipping scheduler - no running threads at this point
     Core::System::GetInstance()
         .ArmInterface(current_core)
-        .LoadContext(current_thread->GetContext());
+        .LoadContext(current_thread->GetContext64());
 
     SendReply("OK");
 }
@@ -974,10 +979,8 @@ static void ReadMemory() {
         SendReply("E01");
     }
 
-    const auto& vm_manager = Core::System::GetInstance().CurrentProcess()->VMManager();
-    if (addr < vm_manager.GetAddressSpaceBaseAddress() ||
-       addr >= vm_manager.GetAddressSpaceEndAddress())
-    {
+    const auto& page_table = Core::System::GetInstance().CurrentProcess()->PageTable();
+    if (addr < page_table.GetAddressSpaceStart() || addr >= page_table.GetAddressSpaceEnd()) {
         return SendReply("E00");
     }
 
@@ -1030,7 +1033,7 @@ static void Step() {
         // Update ARM context, skipping scheduler - no running threads at this point
         Core::System::GetInstance()
             .ArmInterface(current_core)
-            .LoadContext(current_thread->GetContext());
+            .LoadContext(current_thread->GetContext64());
     }
     step_loop = true;
     halt_loop = false;
@@ -1174,6 +1177,9 @@ static void RemoveBreakpoint() {
 
 void HandlePacket() {
     if (!IsConnected()) {
+        if (defer_start) {
+            ToggleServer(true);
+        }
         return;
     }
 
@@ -1199,7 +1205,7 @@ void HandlePacket() {
         SendSignal(current_thread, latest_signal);
         break;
     case 'k':
-        Shutdown();
+        Shutdown(128 + 9 /*SIGKILL*/);
         LOG_INFO(Debug_GDBStub, "killed by gdb");
         return;
     case 'g':
@@ -1247,6 +1253,7 @@ void SetServerPort(u16 port) {
 }
 
 void ToggleServer(bool status) {
+    status = Settings::values.gdbstub_toggle;
     if (status) {
         server_enabled = status;
 
@@ -1262,6 +1269,10 @@ void ToggleServer(bool status) {
 
         server_enabled = status;
     }
+}
+
+void DeferStart() {
+    defer_start = true;
 }
 
 static void Init(u16 port) {
@@ -1281,7 +1292,7 @@ static void Init(u16 port) {
     breakpoints_read.clear();
     breakpoints_write.clear();
 
-    modules.clear();
+    // modules.clear();
 
     // Start gdb server
     LOG_INFO(Debug_GDBStub, "Starting GDB server on port {}...", port);
@@ -1345,10 +1356,15 @@ void Init() {
     Init(gdbstub_port);
 }
 
-void Shutdown() {
+void Shutdown(int status) {
     if (!server_enabled) {
         return;
     }
+    defer_start = false;
+
+    std::string buffer;
+    buffer = fmt::format("W{:02x}", status);
+    SendReply(buffer.c_str());
 
     LOG_INFO(Debug_GDBStub, "Stopping GDB ...");
     if (gdbserver_socket != -1) {

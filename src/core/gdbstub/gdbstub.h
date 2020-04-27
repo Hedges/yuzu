@@ -43,8 +43,15 @@ void ToggleServer(bool status);
 /// Start the gdbstub server.
 void Init();
 
+/**
+ * Defer initialization of the gdbstub to the first packet processing functions.
+ * This avoids a case where the gdbstub thread is frozen after initialization
+ * and fails to respond in time to packets.
+ */
+void DeferStart();
+
 /// Stop gdbstub server.
-void Shutdown();
+void Shutdown(int status = 0);
 
 /// Checks if the gdbstub server is enabled.
 bool IsServerEnabled();

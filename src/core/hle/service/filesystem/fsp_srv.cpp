@@ -420,7 +420,7 @@ public:
             return;
         }
 
-        IFile file(result.Unwrap());
+        auto file = std::make_shared<IFile>(result.Unwrap());
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
@@ -445,7 +445,7 @@ public:
             return;
         }
 
-        IDirectory directory(result.Unwrap());
+        auto directory = std::make_shared<IDirectory>(result.Unwrap());
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
@@ -575,6 +575,7 @@ private:
                                 0,
                                 user_id->GetSize(),
                                 {},
+                                {},
                             });
 
                             continue;
@@ -594,6 +595,7 @@ private:
                                 save_id_numeric,
                                 stoull_be(title_id->GetName()),
                                 title_id->GetSize(),
+                                {},
                                 {},
                             });
                         }
@@ -618,6 +620,7 @@ private:
                                 stoull_be(type->GetName()),
                                 stoull_be(title_id->GetName()),
                                 title_id->GetSize(),
+                                {},
                                 {},
                             });
                         }
@@ -694,12 +697,14 @@ FSP_SRV::FSP_SRV(FileSystemController& fsc, const Core::Reporter& reporter)
         {68, nullptr, "OpenSaveDataInfoReaderBySaveDataFilter"},
         {69, nullptr, "ReadSaveDataFileSystemExtraDataBySaveDataAttribute"},
         {70, nullptr, "WriteSaveDataFileSystemExtraDataBySaveDataAttribute"},
+        {71, nullptr, "ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute"},
         {80, nullptr, "OpenSaveDataMetaFile"},
         {81, nullptr, "OpenSaveDataTransferManager"},
         {82, nullptr, "OpenSaveDataTransferManagerVersion2"},
         {83, nullptr, "OpenSaveDataTransferProhibiterForCloudBackUp"},
         {84, nullptr, "ListApplicationAccessibleSaveDataOwnerId"},
         {85, nullptr, "OpenSaveDataTransferManagerForSaveDataRepair"},
+        {86, nullptr, "OpenSaveDataMover"},
         {100, nullptr, "OpenImageDirectoryFileSystem"},
         {110, nullptr, "OpenContentStorageFileSystem"},
         {120, nullptr, "OpenCloudBackupWorkStorageFileSystem"},
@@ -759,9 +764,11 @@ FSP_SRV::FSP_SRV(FileSystemController& fsc, const Core::Reporter& reporter)
         {1011, &FSP_SRV::GetAccessLogVersionInfo, "GetAccessLogVersionInfo"},
         {1012, nullptr, "GetFsStackUsage"},
         {1013, nullptr, "UnsetSaveDataRootPath"},
+        {1014, nullptr, "OutputMultiProgramTagAccessLog"},
         {1100, nullptr, "OverrideSaveDataTransferTokenSignVerificationKey"},
         {1110, nullptr, "CorruptSaveDataFileSystemBySaveDataSpaceId2"},
         {1200, nullptr, "OpenMultiCommitManager"},
+        {1300, nullptr, "OpenBisWiper"},
     };
     // clang-format on
     RegisterHandlers(functions);
@@ -794,8 +801,8 @@ void FSP_SRV::OpenFileSystemWithPatch(Kernel::HLERequestContext& ctx) {
 void FSP_SRV::OpenSdCardFileSystem(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service_FS, "called");
 
-    IFileSystem filesystem(fsc.OpenSDMC().Unwrap(),
-                           SizeGetter::FromStorageId(fsc, FileSys::StorageId::SdCard));
+    auto filesystem = std::make_shared<IFileSystem>(
+        fsc.OpenSDMC().Unwrap(), SizeGetter::FromStorageId(fsc, FileSys::StorageId::SdCard));
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
@@ -846,7 +853,8 @@ void FSP_SRV::OpenSaveDataFileSystem(Kernel::HLERequestContext& ctx) {
         id = FileSys::StorageId::NandSystem;
     }
 
-    IFileSystem filesystem(std::move(dir.Unwrap()), SizeGetter::FromStorageId(fsc, id));
+    auto filesystem =
+        std::make_shared<IFileSystem>(std::move(dir.Unwrap()), SizeGetter::FromStorageId(fsc, id));
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
@@ -898,7 +906,7 @@ void FSP_SRV::OpenDataStorageByCurrentProcess(Kernel::HLERequestContext& ctx) {
         return;
     }
 
-    IStorage storage(std::move(romfs.Unwrap()));
+    auto storage = std::make_shared<IStorage>(std::move(romfs.Unwrap()));
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
@@ -937,7 +945,8 @@ void FSP_SRV::OpenDataStorageByDataId(Kernel::HLERequestContext& ctx) {
 
     FileSys::PatchManager pm{title_id};
 
-    IStorage storage(pm.PatchRomFS(std::move(data.Unwrap()), 0, FileSys::ContentRecordType::Data));
+    auto storage = std::make_shared<IStorage>(
+        pm.PatchRomFS(std::move(data.Unwrap()), 0, FileSys::ContentRecordType::Data));
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
