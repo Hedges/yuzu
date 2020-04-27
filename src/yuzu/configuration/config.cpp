@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <array>
+#include <QApplication>
 #include <QKeySequence>
 #include <QSettings>
 #include "common/file_util.h"
@@ -12,6 +13,8 @@
 #include "input_common/main.h"
 #include "input_common/udp/client.h"
 #include "yuzu/configuration/config.h"
+
+extern int use_gdbstub_override;
 
 Config::Config() {
     // TODO: Don't hardcode the path; let the frontend decide where to put the config files.
@@ -523,6 +526,7 @@ void Config::ReadDebuggingValues() {
     Settings::values.record_frame_times =
         qt_config->value(QStringLiteral("record_frame_times"), false).toBool();
     Settings::values.use_gdbstub = ReadSetting(QStringLiteral("use_gdbstub"), false).toBool();
+    Settings::values.gdbstub_toggle = Settings::values.use_gdbstub;
     Settings::values.gdbstub_port = ReadSetting(QStringLiteral("gdbstub_port"), 24689).toInt();
     Settings::values.gdbstub_loops = ReadSetting(QStringLiteral("gdbstub_loops"), 1).toInt();
     Settings::values.program_args =
@@ -810,6 +814,15 @@ void Config::ReadValues() {
     ReadServiceValues();
     ReadDisabledAddOnValues();
     ReadUIValues();
+    QStringList args = QApplication::arguments();
+    for (int i = 0; i < args.length(); i++) {
+        if (args[i].contains(QStringLiteral("--gdb"), Qt::CaseSensitivity::CaseInsensitive)) {
+            Settings::values.gdbstub_toggle = true;
+        }
+        if (args[i].contains(QStringLiteral("--nogdb"), Qt::CaseSensitivity::CaseInsensitive)) {
+            Settings::values.gdbstub_toggle = false;
+        }
+    }
 }
 
 void Config::SavePlayerValues() {

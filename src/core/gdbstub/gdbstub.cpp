@@ -42,6 +42,7 @@
 #include "core/hle/kernel/scheduler.h"
 #include "core/loader/loader.h"
 #include "core/memory.h"
+#include "core/settings.h"
 
 namespace GDBStub {
 namespace {
@@ -1252,6 +1253,7 @@ void SetServerPort(u16 port) {
 }
 
 void ToggleServer(bool status) {
+    status = Settings::values.gdbstub_toggle;
     if (status) {
         server_enabled = status;
 

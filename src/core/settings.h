@@ -465,6 +465,7 @@ struct Values {
     // Debugging
     bool record_frame_times;
     bool use_gdbstub;
+    bool gdbstub_toggle;
     u16 gdbstub_port;
     u32 gdbstub_loops;
     std::string program_args;
