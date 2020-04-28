@@ -80,7 +80,11 @@ ResultCode ProcessCapabilities::InitializeForKernelProcess(const u32* capabiliti
 ResultCode ProcessCapabilities::InitializeForUserProcess(const u32* capabilities,
                                                          std::size_t num_capabilities,
                                                          Memory::PageTable& page_table) {
-    Clear();
+    if (num_capabilities) {
+        Clear();
+    } else {
+        InitializeForMetadatalessProcess();
+    }
 
     return ParseCapabilities(capabilities, num_capabilities, page_table);
 }
@@ -204,8 +208,6 @@ void ProcessCapabilities::Clear() {
 
     is_debuggable = false;
     can_force_debug = false;
-
-    InitializeForMetadatalessProcess();
 }
 
 ResultCode ProcessCapabilities::HandlePriorityCoreNumFlags(u32 flags) {
