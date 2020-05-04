@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -88,10 +87,6 @@ public:
             if (!map->IsWritten()) {
                 map->MarkAsWritten(true);
                 MarkRegionAsWritten(map->GetStart(), map->GetEnd() - 1);
-            }
-        } else {
-            if (map->IsWritten()) {
-                WriteBarrier();
             }
         }
 
@@ -253,8 +248,6 @@ protected:
     ~BufferCache() = default;
 
     virtual BufferType ToHandle(const OwnerBuffer& storage) = 0;
-
-    virtual void WriteBarrier() = 0;
 
     virtual OwnerBuffer CreateBlock(VAddr cpu_addr, std::size_t size) = 0;
 

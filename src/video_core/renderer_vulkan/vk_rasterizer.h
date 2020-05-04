@@ -14,7 +14,6 @@
 #include <boost/functional/hash.hpp>
 
 #include "common/common_types.h"
-#include "video_core/memory_manager.h"
 #include "video_core/rasterizer_accelerated.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
@@ -127,6 +126,7 @@ public:
     void SignalSyncPoint(u32 value) override;
     void ReleaseFences() override;
     void FlushAndInvalidateRegion(VAddr addr, u64 size) override;
+    void WaitForIdle() override;
     void FlushCommands() override;
     void TickFrame() override;
     bool AccelerateSurfaceCopy(const Tegra::Engines::Fermi2D::Regs::Surface& src,
@@ -276,6 +276,7 @@ private:
 
     vk::Buffer default_buffer;
     VKMemoryCommit default_buffer_commit;
+    vk::Event wfi_event;
 
     std::array<View, Maxwell::NumRenderTargets> color_attachments;
     View zeta_attachment;
