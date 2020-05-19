@@ -746,13 +746,13 @@ void GMainWindow::InitializeHotkeys() {
 }
 
 void GMainWindow::SetDefaultUIGeometry() {
-    // geometry: 55% of the window contents are in the upper screen half, 45% in the lower half
+    // geometry: 53% of the window contents are in the upper screen half, 47% in the lower half
     const QRect screenRect = QApplication::desktop()->screenGeometry(this);
 
     const int w = screenRect.width() * 2 / 3;
-    const int h = screenRect.height() / 2;
+    const int h = screenRect.height() * 2 / 3;
     const int x = (screenRect.x() + screenRect.width()) / 2 - w / 2;
-    const int y = (screenRect.y() + screenRect.height()) / 2 - h * 55 / 100;
+    const int y = (screenRect.y() + screenRect.height()) / 2 - h * 53 / 100;
 
     setGeometry(x, y, w, h);
 }
@@ -853,6 +853,7 @@ void GMainWindow::ConnectMenuEvents() {
             &GMainWindow::OnDisplayTitleBars);
     connect(ui.action_Show_Filter_Bar, &QAction::triggered, this, &GMainWindow::OnToggleFilterBar);
     connect(ui.action_Show_Status_Bar, &QAction::triggered, statusBar(), &QStatusBar::setVisible);
+    connect(ui.action_Reset_Window_Size, &QAction::triggered, this, &GMainWindow::ResetWindowSize);
 
     // Fullscreen
     ui.action_Fullscreen->setShortcut(
@@ -1180,39 +1181,61 @@ void GMainWindow::OnGameListLoadFile(QString game_path) {
     BootGame(game_path);
 }
 
-void GMainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target) {
+void GMainWindow::OnGameListOpenFolder(GameListOpenTarget target, const std::string& game_path) {
     std::string path;
     QString open_target;
+
+    const auto v_file = Core::GetGameFileFromPath(vfs, game_path);
+    const auto loader = Loader::GetLoader(v_file);
+    FileSys::NACP control{};
+    u64 program_id{};
+
+    loader->ReadControlData(control);
+    loader->ReadProgramId(program_id);
+
+    const bool has_user_save{control.GetDefaultNormalSaveSize() > 0};
+    const bool has_device_save{control.GetDeviceSaveDataSize() > 0};
+
+    ASSERT_MSG(has_user_save != has_device_save, "Game uses both user and device savedata?");
+
     switch (target) {
     case GameListOpenTarget::SaveData: {
         open_target = tr("Save Data");
         const std::string nand_dir = FileUtil::GetUserPath(FileUtil::UserPath::NANDDir);
         ASSERT(program_id != 0);
 
-        const auto select_profile = [this] {
-            QtProfileSelectionDialog dialog(this);
-            dialog.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
-                                  Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
-            dialog.setWindowModality(Qt::WindowModal);
+        if (has_user_save) {
+            // User save data
+            const auto select_profile = [this] {
+                QtProfileSelectionDialog dialog(this);
+                dialog.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
+                                      Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
+                dialog.setWindowModality(Qt::WindowModal);
 
-            if (dialog.exec() == QDialog::Rejected) {
-                return -1;
+                if (dialog.exec() == QDialog::Rejected) {
+                    return -1;
+                }
+
+                return dialog.GetIndex();
+            };
+
+            const auto index = select_profile();
+            if (index == -1) {
+                return;
             }
 
-            return dialog.GetIndex();
-        };
-
-        const auto index = select_profile();
-        if (index == -1) {
-            return;
+            Service::Account::ProfileManager manager;
+            const auto user_id = manager.GetUser(static_cast<std::size_t>(index));
+            ASSERT(user_id);
+            path = nand_dir + FileSys::SaveDataFactory::GetFullPath(
+                                  FileSys::SaveDataSpaceId::NandUser,
+                                  FileSys::SaveDataType::SaveData, program_id, user_id->uuid, 0);
+        } else {
+            // Device save data
+            path = nand_dir + FileSys::SaveDataFactory::GetFullPath(
+                                  FileSys::SaveDataSpaceId::NandUser,
+                                  FileSys::SaveDataType::SaveData, program_id, {}, 0);
         }
-
-        Service::Account::ProfileManager manager;
-        const auto user_id = manager.GetUser(static_cast<std::size_t>(index));
-        ASSERT(user_id);
-        path = nand_dir + FileSys::SaveDataFactory::GetFullPath(FileSys::SaveDataSpaceId::NandUser,
-                                                                FileSys::SaveDataType::SaveData,
-                                                                program_id, user_id->uuid, 0);
 
         if (!FileUtil::Exists(path)) {
             FileUtil::CreateFullPath(path);
@@ -1852,6 +1875,20 @@ void GMainWindow::ToggleWindowMode() {
             render_window->RestoreGeometry();
             game_list->show();
         }
+    }
+}
+
+void GMainWindow::ResetWindowSize() {
+    const auto aspect_ratio = Layout::EmulationAspectRatio(
+        static_cast<Layout::AspectRatio>(Settings::values.aspect_ratio),
+        static_cast<float>(Layout::ScreenUndocked::Height) / Layout::ScreenUndocked::Width);
+    if (!ui.action_Single_Window_Mode->isChecked()) {
+        render_window->resize(Layout::ScreenUndocked::Height / aspect_ratio,
+                              Layout::ScreenUndocked::Height);
+    } else {
+        resize(Layout::ScreenUndocked::Height / aspect_ratio,
+               Layout::ScreenUndocked::Height + menuBar()->height() +
+                   (ui.action_Show_Status_Bar->isChecked() ? statusBar()->height() : 0));
     }
 }
 
