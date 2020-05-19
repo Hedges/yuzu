@@ -50,12 +50,12 @@ void MaxwellDMA::HandleCopy() {
     const GPUVAddr dest = regs.dst_address.Address();
 
     // TODO(Subv): Perform more research and implement all features of this engine.
-    ASSERT(regs.exec.enable_swizzle == 0);
-    ASSERT(regs.exec.query_mode == Regs::QueryMode::None);
-    ASSERT(regs.exec.query_intr == Regs::QueryIntr::None);
-    ASSERT(regs.exec.copy_mode == Regs::CopyMode::Unk2);
-    ASSERT(regs.dst_params.pos_x == 0);
-    ASSERT(regs.dst_params.pos_y == 0);
+    //ASSERT(regs.exec.enable_swizzle == 0);
+    //ASSERT(regs.exec.query_mode == Regs::QueryMode::None);
+    //ASSERT(regs.exec.query_intr == Regs::QueryIntr::None);
+    //ASSERT(regs.exec.copy_mode == Regs::CopyMode::Unk2);
+    //ASSERT(regs.dst_params.pos_x == 0);
+    //ASSERT(regs.dst_params.pos_y == 0);
 
     if (!regs.exec.is_dst_linear && !regs.exec.is_src_linear) {
         // If both the source and the destination are in block layout, assert.

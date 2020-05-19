@@ -85,7 +85,7 @@ GLuint LoadProgram(bool separable_program, bool hint_retrievable, T... shaders) 
         LogShaderSource(shaders...);
     }
 
-    ASSERT_MSG(result == GL_TRUE, "Shader not linked");
+    //ASSERT_MSG(result == GL_TRUE, "Shader not linked");
 
     ((shaders == 0 ? (void)0 : glDetachShader(program_id, shaders)), ...);
 

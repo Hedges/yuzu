@@ -577,8 +577,10 @@ void RendererOpenGL::DrawScreen(const Layout::FramebufferLayout& layout) {
         }
     }
 
-    ASSERT_MSG(framebuffer_crop_rect.top == 0, "Unimplemented");
-    ASSERT_MSG(framebuffer_crop_rect.left == 0, "Unimplemented");
+    //ASSERT_MSG(framebuffer_crop_rect.top == 0, "Unimplemented");
+    //ASSERT_MSG(framebuffer_crop_rect.left == 0, "Unimplemented");
+    f32 u0 = framebuffer_crop_rect.left / (f32)screen_info.texture.width;
+    f32 v0 = framebuffer_crop_rect.top / (f32)screen_info.texture.height;
 
     // Scale the output by the crop width/height. This is commonly used with 1280x720 rendering
     // (e.g. handheld mode) on a 1920x1080 framebuffer.
@@ -594,10 +596,14 @@ void RendererOpenGL::DrawScreen(const Layout::FramebufferLayout& layout) {
 
     const auto& screen = layout.screen;
     const std::array vertices = {
-        ScreenRectVertex(screen.left, screen.top, texcoords.top * scale_u, left * scale_v),
-        ScreenRectVertex(screen.right, screen.top, texcoords.bottom * scale_u, left * scale_v),
-        ScreenRectVertex(screen.left, screen.bottom, texcoords.top * scale_u, right * scale_v),
-        ScreenRectVertex(screen.right, screen.bottom, texcoords.bottom * scale_u, right * scale_v),
+        ScreenRectVertex(screen.left, screen.top, u0 + texcoords.top * scale_u,
+                         v0 + left * scale_v),
+        ScreenRectVertex(screen.right, screen.top, u0 + texcoords.bottom * scale_u,
+                         v0 + left * scale_v),
+        ScreenRectVertex(screen.left, screen.bottom, u0 + texcoords.top * scale_u,
+                         v0 + right * scale_v),
+        ScreenRectVertex(screen.right, screen.bottom, u0 + texcoords.bottom * scale_u,
+                         v0 + right * scale_v),
     };
     glNamedBufferSubData(vertex_buffer.handle, 0, sizeof(vertices), std::data(vertices));
 

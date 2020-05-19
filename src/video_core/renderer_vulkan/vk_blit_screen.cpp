@@ -790,8 +790,10 @@ void VKBlitScreen::SetVertexData(BufferData& data,
         break;
     }
 
-    UNIMPLEMENTED_IF(framebuffer_crop_rect.top != 0);
-    UNIMPLEMENTED_IF(framebuffer_crop_rect.left != 0);
+    //UNIMPLEMENTED_IF(framebuffer_crop_rect.top != 0);
+    //UNIMPLEMENTED_IF(framebuffer_crop_rect.left != 0);
+    f32 u0 = framebuffer_crop_rect.left / (f32)screen_info.width;
+    f32 v0 = framebuffer_crop_rect.top / (f32)screen_info.height;
 
     // Scale the output by the crop width/height. This is commonly used with 1280x720 rendering
     // (e.g. handheld mode) on a 1920x1080 framebuffer.
@@ -811,10 +813,13 @@ void VKBlitScreen::SetVertexData(BufferData& data,
     const auto y = static_cast<f32>(screen.top);
     const auto w = static_cast<f32>(screen.GetWidth());
     const auto h = static_cast<f32>(screen.GetHeight());
-    data.vertices[0] = ScreenRectVertex(x, y, texcoords.top * scale_u, left * scale_v);
-    data.vertices[1] = ScreenRectVertex(x + w, y, texcoords.bottom * scale_u, left * scale_v);
-    data.vertices[2] = ScreenRectVertex(x, y + h, texcoords.top * scale_u, right * scale_v);
-    data.vertices[3] = ScreenRectVertex(x + w, y + h, texcoords.bottom * scale_u, right * scale_v);
+    data.vertices[0] = ScreenRectVertex(x, y, u0 + texcoords.top * scale_u, v0 + left * scale_v);
+    data.vertices[1] =
+        ScreenRectVertex(x + w, y, u0 + texcoords.bottom * scale_u, v0 + left * scale_v);
+    data.vertices[2] =
+        ScreenRectVertex(x, y + h, u0 + texcoords.top * scale_u, v0 + right * scale_v);
+    data.vertices[3] =
+        ScreenRectVertex(x + w, y + h, u0 + texcoords.bottom * scale_u, v0 + right * scale_v);
 }
 
 u64 VKBlitScreen::CalculateBufferSize(const Tegra::FramebufferConfig& framebuffer) const {

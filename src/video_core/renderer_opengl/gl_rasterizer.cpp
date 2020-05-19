@@ -1083,7 +1083,21 @@ void RasterizerOpenGL::SyncCullMode() {
 
     if (flags[Dirty::FrontFace]) {
         flags[Dirty::FrontFace] = false;
-        glFrontFace(MaxwellToGL::FrontFace(regs.front_face));
+        GLenum front_face = MaxwellToGL::FrontFace(regs.front_face);
+        bool flip_y = false;
+        if (regs.viewport_transform[0].scale_y < 0.0) {
+            flip_y = !flip_y;
+        }
+        if (regs.screen_y_control.y_negate != 0) {
+            flip_y = !flip_y;
+        }
+        if (!flip_y) {
+            if (front_face == GL_CCW)
+                front_face = GL_CW;
+            else if (front_face == GL_CW)
+                front_face = GL_CCW;
+        }
+        glFrontFace(front_face);
     }
 }
 
@@ -1399,7 +1413,7 @@ void RasterizerOpenGL::SyncLineState() {
 
     const auto& regs = gpu.regs;
     oglEnable(GL_LINE_SMOOTH, regs.line_smooth_enable);
-    glLineWidth(regs.line_smooth_enable ? regs.line_width_smooth : regs.line_width_aliased);
+    glLineWidth(regs.line_smooth_enable ? std::max(regs.line_width_smooth, 1.0f) : std::max(regs.line_width_aliased, 1.0f));
 }
 
 void RasterizerOpenGL::SyncPolygonOffset() {

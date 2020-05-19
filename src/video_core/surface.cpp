@@ -183,7 +183,7 @@ PixelFormat PixelFormatFromGPUPixelFormat(Tegra::FramebufferConfig::PixelFormat 
     case Tegra::FramebufferConfig::PixelFormat::BGRA8:
         return PixelFormat::BGRA8;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented format={}", static_cast<u32>(format));
+        //UNIMPLEMENTED_MSG("Unimplemented format={}", static_cast<u32>(format));
         return PixelFormat::ABGR8U;
     }
 }
