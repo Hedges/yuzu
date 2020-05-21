@@ -160,6 +160,7 @@ struct FormatTuple {
     {VK_FORMAT_R8G8B8A8_SRGB, Attachable},                      // RGBA8_SRGB
     {VK_FORMAT_R8G8_UNORM, Attachable | Storage},               // RG8U
     {VK_FORMAT_R8G8_SNORM, Attachable | Storage},               // RG8S
+    {VK_FORMAT_R8G8_UINT, Attachable | Storage},                // RG8UI
     {VK_FORMAT_R32G32_UINT, Attachable | Storage},              // RG32UI
     {VK_FORMAT_UNDEFINED},                                      // RGBX16F
     {VK_FORMAT_R32_UINT, Attachable | Storage},                 // R32UI
@@ -345,8 +346,6 @@ VkFormat VertexFormat(Maxwell::VertexAttribute::Type type, Maxwell::VertexAttrib
         break;
     case Maxwell::VertexAttribute::Type::SignedInt:
         switch (size) {
-        case Maxwell::VertexAttribute::Size::Size_16_16_16_16:
-            return VK_FORMAT_R16G16B16A16_SINT;
         case Maxwell::VertexAttribute::Size::Size_8:
             return VK_FORMAT_R8_SINT;
         case Maxwell::VertexAttribute::Size::Size_8_8:
@@ -355,8 +354,22 @@ VkFormat VertexFormat(Maxwell::VertexAttribute::Type type, Maxwell::VertexAttrib
             return VK_FORMAT_R8G8B8_SINT;
         case Maxwell::VertexAttribute::Size::Size_8_8_8_8:
             return VK_FORMAT_R8G8B8A8_SINT;
+        case Maxwell::VertexAttribute::Size::Size_16:
+            return VK_FORMAT_R16_SINT;
+        case Maxwell::VertexAttribute::Size::Size_16_16:
+            return VK_FORMAT_R16G16_SINT;
+        case Maxwell::VertexAttribute::Size::Size_16_16_16:
+            return VK_FORMAT_R16G16B16_SINT;
+        case Maxwell::VertexAttribute::Size::Size_16_16_16_16:
+            return VK_FORMAT_R16G16B16A16_SINT;
         case Maxwell::VertexAttribute::Size::Size_32:
             return VK_FORMAT_R32_SINT;
+        case Maxwell::VertexAttribute::Size::Size_32_32:
+            return VK_FORMAT_R32G32_SINT;
+        case Maxwell::VertexAttribute::Size::Size_32_32_32:
+            return VK_FORMAT_R32G32B32_SINT;
+        case Maxwell::VertexAttribute::Size::Size_32_32_32_32:
+            return VK_FORMAT_R32G32B32A32_SINT;
         default:
             break;
         }
@@ -669,6 +682,29 @@ VkComponentSwizzle SwizzleSource(Tegra::Texture::SwizzleSource swizzle) {
         return VK_COMPONENT_SWIZZLE_ONE;
     }
     UNIMPLEMENTED_MSG("Unimplemented swizzle source={}", static_cast<u32>(swizzle));
+    return {};
+}
+
+VkViewportCoordinateSwizzleNV ViewportSwizzle(Maxwell::ViewportSwizzle swizzle) {
+    switch (swizzle) {
+    case Maxwell::ViewportSwizzle::PositiveX:
+        return VK_VIEWPORT_COORDINATE_SWIZZLE_POSITIVE_X_NV;
+    case Maxwell::ViewportSwizzle::NegativeX:
+        return VK_VIEWPORT_COORDINATE_SWIZZLE_NEGATIVE_X_NV;
+    case Maxwell::ViewportSwizzle::PositiveY:
+        return VK_VIEWPORT_COORDINATE_SWIZZLE_POSITIVE_Y_NV;
+    case Maxwell::ViewportSwizzle::NegativeY:
+        return VK_VIEWPORT_COORDINATE_SWIZZLE_NEGATIVE_Y_NV;
+    case Maxwell::ViewportSwizzle::PositiveZ:
+        return VK_VIEWPORT_COORDINATE_SWIZZLE_POSITIVE_Z_NV;
+    case Maxwell::ViewportSwizzle::NegativeZ:
+        return VK_VIEWPORT_COORDINATE_SWIZZLE_NEGATIVE_Z_NV;
+    case Maxwell::ViewportSwizzle::PositiveW:
+        return VK_VIEWPORT_COORDINATE_SWIZZLE_POSITIVE_W_NV;
+    case Maxwell::ViewportSwizzle::NegativeW:
+        return VK_VIEWPORT_COORDINATE_SWIZZLE_NEGATIVE_W_NV;
+    }
+    UNREACHABLE_MSG("Invalid swizzle={}", static_cast<int>(swizzle));
     return {};
 }
 

@@ -94,6 +94,7 @@ std::unordered_map<VkFormat, VkFormatProperties> GetFormatProperties(
                                         VK_FORMAT_R8G8B8A8_SRGB,
                                         VK_FORMAT_R8G8_UNORM,
                                         VK_FORMAT_R8G8_SNORM,
+                                        VK_FORMAT_R8G8_UINT,
                                         VK_FORMAT_R8_UNORM,
                                         VK_FORMAT_R8_UINT,
                                         VK_FORMAT_B10G11R11_UFLOAT_PACK32,
@@ -258,6 +259,10 @@ bool VKDevice::Create() {
         SetNext(next, float16_int8);
     } else {
         LOG_INFO(Render_Vulkan, "Device doesn't support float16 natively");
+    }
+
+    if (!nv_viewport_swizzle) {
+        LOG_INFO(Render_Vulkan, "Device doesn't support viewport swizzles");
     }
 
     VkPhysicalDeviceUniformBufferStandardLayoutFeaturesKHR std430_layout;
@@ -533,6 +538,7 @@ std::vector<const char*> VKDevice::LoadExtensions() {
     bool has_ext_transform_feedback{};
     bool has_ext_custom_border_color{};
     for (const auto& extension : physical.EnumerateDeviceExtensionProperties()) {
+        Test(extension, nv_viewport_swizzle, VK_NV_VIEWPORT_SWIZZLE_EXTENSION_NAME, true);
         Test(extension, khr_uniform_buffer_standard_layout,
              VK_KHR_UNIFORM_BUFFER_STANDARD_LAYOUT_EXTENSION_NAME, true);
         Test(extension, has_khr_shader_float16_int8, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME,

@@ -148,6 +148,8 @@ add_library(common STATIC
     thread.h
     thread_queue_list.h
     threadsafe_queue.h
+    time_zone.cpp
+    time_zone.h
     timer.cpp
     timer.h
     uint128.cpp
@@ -172,5 +174,5 @@ endif()
 
 create_target_directory_groups(common)
 
-target_link_libraries(common PUBLIC Boost::boost fmt microprofile)
-target_link_libraries(common PRIVATE lz4_static libzstd_static)
+target_link_libraries(common PUBLIC Boost::boost fmt::fmt microprofile)
+target_link_libraries(common PRIVATE lz4::lz4 zstd::zstd)
