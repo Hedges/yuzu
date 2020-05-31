@@ -1538,7 +1538,9 @@ private:
         Expression target;
         if (const auto gpr = std::get_if<GprNode>(&*dest)) {
             if (gpr->GetIndex() == Register::ZeroIndex) {
-                // Writing to Register::ZeroIndex is a no op
+                // Writing to Register::ZeroIndex is a no op but we still have to visit the source
+                // as it might have side effects.
+                code.AddLine("{};", Visit(src).GetCode());
                 return {};
             }
             target = {GetRegister(gpr->GetIndex()), Type::Float};
@@ -2333,6 +2335,15 @@ private:
         return {fmt::format("readInvocationARB({}, {})", value, index), Type::Float};
     }
 
+    Expression Barrier(Operation) {
+        if (!ir.IsDecompiled()) {
+            LOG_ERROR(Render_OpenGL, "barrier() used but shader is not decompiled");
+            return {};
+        }
+        code.AddLine("barrier();");
+        return {};
+    }
+
     Expression MemoryBarrierGL(Operation) {
         code.AddLine("memoryBarrier();");
         return {};
@@ -2579,6 +2590,7 @@ private:
         &GLSLDecompiler::ThreadMask<Func::Lt>,
         &GLSLDecompiler::ShuffleIndexed,
 
+        &GLSLDecompiler::Barrier,
         &GLSLDecompiler::MemoryBarrierGL,
     };
     static_assert(operation_decompilers.size() == static_cast<std::size_t>(OperationCode::Amount));
