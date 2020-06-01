@@ -152,13 +152,8 @@ void RasterizerOpenGL::SetupVertexFormat() {
         const auto attrib = gpu.regs.vertex_attrib_format[index];
         const auto gl_index = static_cast<GLuint>(index);
 
-        //// Disable constant attributes.
-        //if (attrib.IsConstant()) {
-        //    glDisableVertexAttribArray(gl_index);
-        //    continue;
-        //}
-        // Ignore invalid attributes.
-        if (!attrib.IsValid()) {
+        // Disable constant attributes.
+        if (attrib.IsConstant()) {
             glDisableVertexAttribArray(gl_index);
             continue;
         }
@@ -1455,7 +1450,7 @@ void RasterizerOpenGL::SyncLineState() {
 
     const auto& regs = gpu.regs;
     oglEnable(GL_LINE_SMOOTH, regs.line_smooth_enable);
-    glLineWidth(regs.line_smooth_enable ? std::max(regs.line_width_smooth, 1.0f) : std::max(regs.line_width_aliased, 1.0f));
+    glLineWidth(regs.line_smooth_enable ? regs.line_width_smooth : regs.line_width_aliased);
 }
 
 void RasterizerOpenGL::SyncPolygonOffset() {
