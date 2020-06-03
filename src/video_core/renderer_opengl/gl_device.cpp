@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -26,24 +27,27 @@ constexpr u32 ReservedUniformBlocks = 1;
 
 constexpr u32 NumStages = 5;
 
-constexpr std::array LimitUBOs = {GL_MAX_VERTEX_UNIFORM_BLOCKS, GL_MAX_TESS_CONTROL_UNIFORM_BLOCKS,
-                                  GL_MAX_TESS_EVALUATION_UNIFORM_BLOCKS,
-                                  GL_MAX_GEOMETRY_UNIFORM_BLOCKS, GL_MAX_FRAGMENT_UNIFORM_BLOCKS};
+constexpr std::array LimitUBOs = {
+    GL_MAX_VERTEX_UNIFORM_BLOCKS,          GL_MAX_TESS_CONTROL_UNIFORM_BLOCKS,
+    GL_MAX_TESS_EVALUATION_UNIFORM_BLOCKS, GL_MAX_GEOMETRY_UNIFORM_BLOCKS,
+    GL_MAX_FRAGMENT_UNIFORM_BLOCKS,        GL_MAX_COMPUTE_UNIFORM_BLOCKS};
 
 constexpr std::array LimitSSBOs = {
-    GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS,
+    GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS,          GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS,
     GL_MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS, GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS,
-    GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS};
+    GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS,        GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS};
 
-constexpr std::array LimitSamplers = {
-    GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, GL_MAX_TESS_CONTROL_TEXTURE_IMAGE_UNITS,
-    GL_MAX_TESS_EVALUATION_TEXTURE_IMAGE_UNITS, GL_MAX_GEOMETRY_TEXTURE_IMAGE_UNITS,
-    GL_MAX_TEXTURE_IMAGE_UNITS};
+constexpr std::array LimitSamplers = {GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS,
+                                      GL_MAX_TESS_CONTROL_TEXTURE_IMAGE_UNITS,
+                                      GL_MAX_TESS_EVALUATION_TEXTURE_IMAGE_UNITS,
+                                      GL_MAX_GEOMETRY_TEXTURE_IMAGE_UNITS,
+                                      GL_MAX_TEXTURE_IMAGE_UNITS,
+                                      GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS};
 
-constexpr std::array LimitImages = {GL_MAX_VERTEX_IMAGE_UNIFORMS,
-                                    GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS,
-                                    GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS,
-                                    GL_MAX_GEOMETRY_IMAGE_UNIFORMS, GL_MAX_FRAGMENT_IMAGE_UNIFORMS};
+constexpr std::array LimitImages = {
+    GL_MAX_VERTEX_IMAGE_UNIFORMS,          GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS,
+    GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS, GL_MAX_GEOMETRY_IMAGE_UNIFORMS,
+    GL_MAX_FRAGMENT_IMAGE_UNIFORMS,        GL_MAX_COMPUTE_IMAGE_UNIFORMS};
 
 template <typename T>
 T GetInteger(GLenum pname) {
@@ -83,6 +87,13 @@ u32 Extract(u32& base, u32& num, u32 amount, std::optional<GLenum> limit = {}) {
     }
     num -= amount;
     return std::exchange(base, base + amount);
+}
+
+std::array<u32, Tegra::Engines::MaxShaderTypes> BuildMaxUniformBuffers() noexcept {
+    std::array<u32, Tegra::Engines::MaxShaderTypes> max;
+    std::transform(LimitUBOs.begin(), LimitUBOs.end(), max.begin(),
+                   [](GLenum pname) { return GetInteger<u32>(pname); });
+    return max;
 }
 
 std::array<Device::BaseBindings, Tegra::Engines::MaxShaderTypes> BuildBaseBindings() noexcept {
@@ -133,6 +144,7 @@ std::array<Device::BaseBindings, Tegra::Engines::MaxShaderTypes> BuildBaseBindin
 }
 
 bool IsASTCSupported() {
+    static constexpr std::array targets = {GL_TEXTURE_2D, GL_TEXTURE_2D_ARRAY};
     static constexpr std::array formats = {
         GL_COMPRESSED_RGBA_ASTC_4x4_KHR,           GL_COMPRESSED_RGBA_ASTC_5x4_KHR,
         GL_COMPRESSED_RGBA_ASTC_5x5_KHR,           GL_COMPRESSED_RGBA_ASTC_6x5_KHR,
@@ -149,17 +161,29 @@ bool IsASTCSupported() {
         GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8_KHR,  GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR,
         GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10_KHR, GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR,
     };
-    return std::find_if_not(formats.begin(), formats.end(), [](GLenum format) {
-               GLint supported;
-               glGetInternalformativ(GL_TEXTURE_2D, format, GL_INTERNALFORMAT_SUPPORTED, 1,
-                                     &supported);
-               return supported == GL_TRUE;
-           }) == formats.end();
+    static constexpr std::array required_support = {
+        GL_VERTEX_TEXTURE,   GL_TESS_CONTROL_TEXTURE, GL_TESS_EVALUATION_TEXTURE,
+        GL_GEOMETRY_TEXTURE, GL_FRAGMENT_TEXTURE,     GL_COMPUTE_TEXTURE,
+    };
+
+    for (const GLenum target : targets) {
+        for (const GLenum format : formats) {
+            for (const GLenum support : required_support) {
+                GLint value;
+                glGetInternalformativ(GL_TEXTURE_2D, format, support, 1, &value);
+                if (value != GL_FULL_SUPPORT) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
 }
 
 } // Anonymous namespace
 
-Device::Device() : base_bindings{BuildBaseBindings()} {
+Device::Device()
+    : max_uniform_buffers{BuildMaxUniformBuffers()}, base_bindings{BuildBaseBindings()} {
     const std::string_view vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
     const auto renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
     const std::vector extensions = GetExtensions();
@@ -194,7 +218,9 @@ Device::Device() : base_bindings{BuildBaseBindings()} {
 }
 
 Device::Device(std::nullptr_t) {
-    uniform_buffer_alignment = 0;
+    max_uniform_buffers.fill(std::numeric_limits<u32>::max());
+    uniform_buffer_alignment = 4;
+    shader_storage_alignment = 4;
     max_vertex_attributes = 16;
     max_varyings = 15;
     has_warp_intrinsics = true;
@@ -202,8 +228,6 @@ Device::Device(std::nullptr_t) {
     has_vertex_viewport_layer = true;
     has_image_load_formatted = true;
     has_variable_aoffi = true;
-    has_component_indexing_bug = false;
-    has_precise_bug = false;
 }
 
 bool Device::TestVariableAoffi() {
