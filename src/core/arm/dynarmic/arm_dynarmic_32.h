@@ -23,6 +23,7 @@ class Memory;
 namespace Core {
 
 class DynarmicCallbacks32;
+class DynarmicCP15;
 class DynarmicExclusiveMonitor;
 class System;
 
@@ -70,14 +71,15 @@ private:
         std::unordered_map<JitCacheKey, std::shared_ptr<Dynarmic::A32::Jit>, Common::PairHash>;
 
     friend class DynarmicCallbacks32;
+    friend class DynarmicCP15;
+
     std::unique_ptr<DynarmicCallbacks32> cb;
     JitCacheType jit_cache;
     std::shared_ptr<Dynarmic::A32::Jit> jit;
     ARM_Unicorn inner_unicorn;
-
+    std::shared_ptr<DynarmicCP15> cp15;
     std::size_t core_index;
     DynarmicExclusiveMonitor& exclusive_monitor;
-    std::array<u32, 84> CP15_regs{};
 };
 
 } // namespace Core

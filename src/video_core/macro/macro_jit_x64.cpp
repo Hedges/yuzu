@@ -14,22 +14,16 @@ MICROPROFILE_DEFINE(MacroJitCompile, "GPU", "Compile macro JIT", MP_RGB(173, 255
 MICROPROFILE_DEFINE(MacroJitExecute, "GPU", "Execute macro JIT", MP_RGB(255, 255, 0));
 
 namespace Tegra {
-static const Xbyak::Reg64 PARAMETERS = Xbyak::util::r9;
-static const Xbyak::Reg64 REGISTERS = Xbyak::util::r10;
-static const Xbyak::Reg64 STATE = Xbyak::util::r11;
-static const Xbyak::Reg64 NEXT_PARAMETER = Xbyak::util::r12;
-static const Xbyak::Reg32 RESULT = Xbyak::util::r13d;
-static const Xbyak::Reg64 RESULT_64 = Xbyak::util::r13;
+static const Xbyak::Reg64 STATE = Xbyak::util::rbx;
+static const Xbyak::Reg32 RESULT = Xbyak::util::ebp;
+static const Xbyak::Reg64 PARAMETERS = Xbyak::util::r12;
 static const Xbyak::Reg32 METHOD_ADDRESS = Xbyak::util::r14d;
-static const Xbyak::Reg64 METHOD_ADDRESS_64 = Xbyak::util::r14;
 static const Xbyak::Reg64 BRANCH_HOLDER = Xbyak::util::r15;
 
 static const std::bitset<32> PERSISTENT_REGISTERS = Common::X64::BuildRegSet({
-    PARAMETERS,
-    REGISTERS,
     STATE,
-    NEXT_PARAMETER,
     RESULT,
+    PARAMETERS,
     METHOD_ADDRESS,
     BRANCH_HOLDER,
 });
@@ -53,8 +47,7 @@ void MacroJITx64Impl::Execute(const std::vector<u32>& parameters, u32 method) {
     JITState state{};
     state.maxwell3d = &maxwell3d;
     state.registers = {};
-    state.parameters = parameters.data();
-    program(&state);
+    program(&state, parameters.data());
 }
 
 void MacroJITx64Impl::Compile_ALU(Macro::Opcode opcode) {
@@ -63,19 +56,21 @@ void MacroJITx64Impl::Compile_ALU(Macro::Opcode opcode) {
     const bool valid_operation = !is_a_zero && !is_b_zero;
     const bool is_move_operation = !is_a_zero && is_b_zero;
     const bool has_zero_register = is_a_zero || is_b_zero;
+    const bool no_zero_reg_skip = opcode.alu_operation == Macro::ALUOperation::AddWithCarry ||
+                                  opcode.alu_operation == Macro::ALUOperation::SubtractWithBorrow;
 
-    Xbyak::Reg64 src_a;
+    Xbyak::Reg32 src_a;
     Xbyak::Reg32 src_b;
 
-    if (!optimizer.zero_reg_skip) {
-        src_a = Compile_GetRegister(opcode.src_a, RESULT_64);
-        src_b = Compile_GetRegister(opcode.src_b, ebx);
+    if (!optimizer.zero_reg_skip || no_zero_reg_skip) {
+        src_a = Compile_GetRegister(opcode.src_a, RESULT);
+        src_b = Compile_GetRegister(opcode.src_b, eax);
     } else {
         if (!is_a_zero) {
-            src_a = Compile_GetRegister(opcode.src_a, RESULT_64);
+            src_a = Compile_GetRegister(opcode.src_a, RESULT);
         }
         if (!is_b_zero) {
-            src_b = Compile_GetRegister(opcode.src_b, ebx);
+            src_b = Compile_GetRegister(opcode.src_b, eax);
         }
     }
     Xbyak::Label skip_carry{};
@@ -190,7 +185,8 @@ void MacroJITx64Impl::Compile_AddImmediate(Macro::Opcode opcode) {
         opcode.result_operation == Macro::ResultOperation::MoveAndSetMethod) {
         if (next_opcode.has_value()) {
             const auto next = *next_opcode;
-            if (next.result_operation == Macro::ResultOperation::MoveAndSetMethod) {
+            if (next.result_operation == Macro::ResultOperation::MoveAndSetMethod &&
+                opcode.dst == next.dst) {
                 return;
             }
         }
@@ -302,22 +298,22 @@ void MacroJITx64Impl::Compile_Read(Macro::Opcode opcode) {
             sub(result, opcode.immediate * -1);
         }
     }
-    Common::X64::ABI_PushRegistersAndAdjustStackGPS(*this, PersistentCallerSavedRegs(), 0);
+    Common::X64::ABI_PushRegistersAndAdjustStack(*this, PersistentCallerSavedRegs(), 0);
     mov(Common::X64::ABI_PARAM1, qword[STATE]);
     mov(Common::X64::ABI_PARAM2, RESULT);
     Common::X64::CallFarFunction(*this, &Read);
-    Common::X64::ABI_PopRegistersAndAdjustStackGPS(*this, PersistentCallerSavedRegs(), 0);
+    Common::X64::ABI_PopRegistersAndAdjustStack(*this, PersistentCallerSavedRegs(), 0);
     mov(RESULT, Common::X64::ABI_RETURN.cvt32());
     Compile_ProcessResult(opcode.result_operation, opcode.dst);
 }
 
 void Tegra::MacroJITx64Impl::Compile_Send(Xbyak::Reg32 value) {
-    Common::X64::ABI_PushRegistersAndAdjustStackGPS(*this, PersistentCallerSavedRegs(), 0);
+    Common::X64::ABI_PushRegistersAndAdjustStack(*this, PersistentCallerSavedRegs(), 0);
     mov(Common::X64::ABI_PARAM1, qword[STATE]);
     mov(Common::X64::ABI_PARAM2, METHOD_ADDRESS);
     mov(Common::X64::ABI_PARAM3, value);
     Common::X64::CallFarFunction(*this, &Send);
-    Common::X64::ABI_PopRegistersAndAdjustStackGPS(*this, PersistentCallerSavedRegs(), 0);
+    Common::X64::ABI_PopRegistersAndAdjustStack(*this, PersistentCallerSavedRegs(), 0);
 
     Xbyak::Label dont_process{};
     // Get increment
@@ -329,7 +325,7 @@ void Tegra::MacroJITx64Impl::Compile_Send(Xbyak::Reg32 value) {
     and_(METHOD_ADDRESS, 0xfff);
     shr(ecx, 12);
     and_(ecx, 0x3f);
-    lea(eax, ptr[rcx + METHOD_ADDRESS_64]);
+    lea(eax, ptr[rcx + METHOD_ADDRESS.cvt64()]);
     sal(ecx, 12);
     or_(eax, ecx);
 
@@ -421,19 +417,15 @@ void MacroJITx64Impl::Compile() {
     bool keep_executing = true;
     labels.fill(Xbyak::Label());
 
-    Common::X64::ABI_PushRegistersAndAdjustStackGPS(*this, Common::X64::ABI_ALL_CALLEE_SAVED, 8);
+    Common::X64::ABI_PushRegistersAndAdjustStack(*this, Common::X64::ABI_ALL_CALLEE_SAVED, 8);
     // JIT state
     mov(STATE, Common::X64::ABI_PARAM1);
-    mov(PARAMETERS, qword[Common::X64::ABI_PARAM1 +
-                          static_cast<Xbyak::uint32>(offsetof(JITState, parameters))]);
-    mov(REGISTERS, Common::X64::ABI_PARAM1);
-    add(REGISTERS, static_cast<Xbyak::uint32>(offsetof(JITState, registers)));
+    mov(PARAMETERS, Common::X64::ABI_PARAM2);
     xor_(RESULT, RESULT);
     xor_(METHOD_ADDRESS, METHOD_ADDRESS);
-    xor_(NEXT_PARAMETER, NEXT_PARAMETER);
     xor_(BRANCH_HOLDER, BRANCH_HOLDER);
 
-    mov(dword[REGISTERS + 4], Compile_FetchParameter());
+    mov(dword[STATE + offsetof(JITState, registers) + 4], Compile_FetchParameter());
 
     // Track get register for zero registers and mark it as no-op
     optimizer.zero_reg_skip = true;
@@ -463,7 +455,7 @@ void MacroJITx64Impl::Compile() {
 
     L(end_of_code);
 
-    Common::X64::ABI_PopRegistersAndAdjustStackGPS(*this, Common::X64::ABI_ALL_CALLEE_SAVED, 8);
+    Common::X64::ABI_PopRegistersAndAdjustStack(*this, Common::X64::ABI_ALL_CALLEE_SAVED, 8);
     ret();
     ready();
     program = getCode<ProgramType>();
@@ -537,8 +529,8 @@ bool MacroJITx64Impl::Compile_NextInstruction() {
 }
 
 Xbyak::Reg32 Tegra::MacroJITx64Impl::Compile_FetchParameter() {
-    mov(eax, dword[PARAMETERS + NEXT_PARAMETER * sizeof(u32)]);
-    inc(NEXT_PARAMETER);
+    mov(eax, dword[PARAMETERS]);
+    add(PARAMETERS, sizeof(u32));
     return eax;
 }
 
@@ -547,29 +539,10 @@ Xbyak::Reg32 MacroJITx64Impl::Compile_GetRegister(u32 index, Xbyak::Reg32 dst) {
         // Register 0 is always zero
         xor_(dst, dst);
     } else {
-        mov(dst, dword[REGISTERS + index * sizeof(u32)]);
+        mov(dst, dword[STATE + offsetof(JITState, registers) + index * sizeof(u32)]);
     }
 
     return dst;
-}
-
-Xbyak::Reg64 Tegra::MacroJITx64Impl::Compile_GetRegister(u32 index, Xbyak::Reg64 dst) {
-    if (index == 0) {
-        // Register 0 is always zero
-        xor_(dst, dst);
-    } else {
-        mov(dst, dword[REGISTERS + index * sizeof(u32)]);
-    }
-
-    return dst;
-}
-
-void Tegra::MacroJITx64Impl::Compile_WriteCarry(Xbyak::Reg64 dst) {
-    Xbyak::Label zero{}, end{};
-    xor_(ecx, ecx);
-    shr(dst, 32);
-    setne(cl);
-    mov(dword[STATE + offsetof(JITState, carry_flag)], ecx);
 }
 
 void MacroJITx64Impl::Compile_ProcessResult(Macro::ResultOperation operation, u32 reg) {
@@ -579,7 +552,7 @@ void MacroJITx64Impl::Compile_ProcessResult(Macro::ResultOperation operation, u3
         if (reg == 0) {
             return;
         }
-        mov(dword[REGISTERS + reg * sizeof(u32)], result);
+        mov(dword[STATE + offsetof(JITState, registers) + reg * sizeof(u32)], result);
     };
     auto SetMethodAddress = [=](Xbyak::Reg32 reg) { mov(METHOD_ADDRESS, reg); };
 
