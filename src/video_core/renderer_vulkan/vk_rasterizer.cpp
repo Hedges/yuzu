@@ -870,7 +870,7 @@ void RasterizerVulkan::BeginTransformFeedback() {
     UNIMPLEMENTED_IF(binding.buffer_offset != 0);
 
     const GPUVAddr gpu_addr = binding.Address();
-    const std::size_t size = binding.buffer_size;
+    const auto size = static_cast<VkDeviceSize>(binding.buffer_size);
     const auto [buffer, offset] = buffer_cache.UploadMemory(gpu_addr, size, 4, true);
 
     scheduler.Record([buffer = buffer, offset = offset, size](vk::CommandBuffer cmdbuf) {
@@ -1154,7 +1154,7 @@ void RasterizerVulkan::SetupTexture(const Tegra::Texture::FullTextureInfo& textu
     const auto sampler = sampler_cache.GetSampler(texture.tsc);
     update_descriptor_queue.AddSampledImage(sampler, image_view);
 
-    const auto image_layout = update_descriptor_queue.GetLastImageLayout();
+    VkImageLayout* const image_layout = update_descriptor_queue.LastImageLayout();
     *image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     sampled_views.push_back(ImageView{std::move(view), image_layout});
 }
@@ -1180,7 +1180,7 @@ void RasterizerVulkan::SetupImage(const Tegra::Texture::TICEntry& tic, const Ima
         view->GetImageView(tic.x_source, tic.y_source, tic.z_source, tic.w_source);
     update_descriptor_queue.AddImage(image_view);
 
-    const auto image_layout = update_descriptor_queue.GetLastImageLayout();
+    VkImageLayout* const image_layout = update_descriptor_queue.LastImageLayout();
     *image_layout = VK_IMAGE_LAYOUT_GENERAL;
     image_views.push_back(ImageView{std::move(view), image_layout});
 }

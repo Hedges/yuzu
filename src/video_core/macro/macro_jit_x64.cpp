@@ -54,7 +54,7 @@ void MacroJITx64Impl::Compile_ALU(Macro::Opcode opcode) {
     const bool is_a_zero = opcode.src_a == 0;
     const bool is_b_zero = opcode.src_b == 0;
     const bool valid_operation = !is_a_zero && !is_b_zero;
-    const bool is_move_operation = !is_a_zero && is_b_zero;
+    [[maybe_unused]] const bool is_move_operation = !is_a_zero && is_b_zero;
     const bool has_zero_register = is_a_zero || is_b_zero;
     const bool no_zero_reg_skip = opcode.alu_operation == Macro::ALUOperation::AddWithCarry ||
                                   opcode.alu_operation == Macro::ALUOperation::SubtractWithBorrow;
@@ -73,7 +73,6 @@ void MacroJITx64Impl::Compile_ALU(Macro::Opcode opcode) {
             src_b = Compile_GetRegister(opcode.src_b, eax);
         }
     }
-    Xbyak::Label skip_carry{};
 
     bool has_emitted = false;
 
@@ -240,10 +239,10 @@ void MacroJITx64Impl::Compile_ExtractInsert(Macro::Opcode opcode) {
 }
 
 void MacroJITx64Impl::Compile_ExtractShiftLeftImmediate(Macro::Opcode opcode) {
-    auto dst = Compile_GetRegister(opcode.src_a, eax);
-    auto src = Compile_GetRegister(opcode.src_b, RESULT);
+    const auto dst = Compile_GetRegister(opcode.src_a, ecx);
+    const auto src = Compile_GetRegister(opcode.src_b, RESULT);
 
-    shr(src, al);
+    shr(src, dst.cvt8());
     if (opcode.bf_size != 0 && opcode.bf_size != 31) {
         and_(src, opcode.GetBitfieldMask());
     } else if (opcode.bf_size == 0) {
@@ -259,8 +258,8 @@ void MacroJITx64Impl::Compile_ExtractShiftLeftImmediate(Macro::Opcode opcode) {
 }
 
 void MacroJITx64Impl::Compile_ExtractShiftLeftRegister(Macro::Opcode opcode) {
-    auto dst = Compile_GetRegister(opcode.src_a, eax);
-    auto src = Compile_GetRegister(opcode.src_b, RESULT);
+    const auto dst = Compile_GetRegister(opcode.src_a, ecx);
+    const auto src = Compile_GetRegister(opcode.src_b, RESULT);
 
     if (opcode.bf_src_bit != 0) {
         shr(src, opcode.bf_src_bit);
@@ -269,16 +268,9 @@ void MacroJITx64Impl::Compile_ExtractShiftLeftRegister(Macro::Opcode opcode) {
     if (opcode.bf_size != 31) {
         and_(src, opcode.GetBitfieldMask());
     }
-    shl(src, al);
+    shl(src, dst.cvt8());
+
     Compile_ProcessResult(opcode.result_operation, opcode.dst);
-}
-
-static u32 Read(Engines::Maxwell3D* maxwell3d, u32 method) {
-    return maxwell3d->GetRegisterValue(method);
-}
-
-static void Send(Engines::Maxwell3D* maxwell3d, Macro::MethodAddress method_address, u32 value) {
-    maxwell3d->CallMethodFromMME(method_address.address, value);
 }
 
 void MacroJITx64Impl::Compile_Read(Macro::Opcode opcode) {
@@ -298,13 +290,25 @@ void MacroJITx64Impl::Compile_Read(Macro::Opcode opcode) {
             sub(result, opcode.immediate * -1);
         }
     }
-    Common::X64::ABI_PushRegistersAndAdjustStack(*this, PersistentCallerSavedRegs(), 0);
-    mov(Common::X64::ABI_PARAM1, qword[STATE]);
-    mov(Common::X64::ABI_PARAM2, RESULT);
-    Common::X64::CallFarFunction(*this, &Read);
-    Common::X64::ABI_PopRegistersAndAdjustStack(*this, PersistentCallerSavedRegs(), 0);
-    mov(RESULT, Common::X64::ABI_RETURN.cvt32());
+
+    // Equivalent to Engines::Maxwell3D::GetRegisterValue:
+    if (optimizer.enable_asserts) {
+        Xbyak::Label pass_range_check;
+        cmp(RESULT, static_cast<u32>(Engines::Maxwell3D::Regs::NUM_REGS));
+        jb(pass_range_check);
+        int3();
+        L(pass_range_check);
+    }
+    mov(rax, qword[STATE]);
+    mov(RESULT,
+        dword[rax + offsetof(Engines::Maxwell3D, regs) +
+              offsetof(Engines::Maxwell3D::Regs, reg_array) + RESULT.cvt64() * sizeof(u32)]);
+
     Compile_ProcessResult(opcode.result_operation, opcode.dst);
+}
+
+static void Send(Engines::Maxwell3D* maxwell3d, Macro::MethodAddress method_address, u32 value) {
+    maxwell3d->CallMethodFromMME(method_address.address, value);
 }
 
 void Tegra::MacroJITx64Impl::Compile_Send(Xbyak::Reg32 value) {
@@ -438,6 +442,9 @@ void MacroJITx64Impl::Compile() {
     // one if our register isn't "dirty"
     optimizer.optimize_for_method_move = true;
 
+    // Enable run-time assertions in JITted code
+    optimizer.enable_asserts = false;
+
     // Check to see if we can skip emitting certain instructions
     Optimizer_ScanFlags();
 
@@ -546,7 +553,7 @@ Xbyak::Reg32 MacroJITx64Impl::Compile_GetRegister(u32 index, Xbyak::Reg32 dst) {
 }
 
 void MacroJITx64Impl::Compile_ProcessResult(Macro::ResultOperation operation, u32 reg) {
-    auto SetRegister = [=](u32 reg, Xbyak::Reg32 result) {
+    const auto SetRegister = [this](u32 reg, const Xbyak::Reg32& result) {
         // Register 0 is supposed to always return 0. NOP is implemented as a store to the zero
         // register.
         if (reg == 0) {
@@ -554,7 +561,7 @@ void MacroJITx64Impl::Compile_ProcessResult(Macro::ResultOperation operation, u3
         }
         mov(dword[STATE + offsetof(JITState, registers) + reg * sizeof(u32)], result);
     };
-    auto SetMethodAddress = [=](Xbyak::Reg32 reg) { mov(METHOD_ADDRESS, reg); };
+    const auto SetMethodAddress = [this](const Xbyak::Reg32& reg) { mov(METHOD_ADDRESS, reg); };
 
     switch (operation) {
     case Macro::ResultOperation::IgnoreAndFetch:
