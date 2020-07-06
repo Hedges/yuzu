@@ -136,10 +136,9 @@ public:
         // device a way so that timing is consistent across all cores without increasing the ticks 4
         // times.
         u64 amortized_ticks =
-            ticks > num_interpreted_instructions ? (ticks - num_interpreted_instructions) /
-                        Core::NUM_CPU_CORES : 0;
-        u64 amortized_ticks =
-            (ticks - num_interpreted_instructions) / Core::Hardware::NUM_CPU_CORES;
+            ticks > num_interpreted_instructions
+                ? (ticks - num_interpreted_instructions) / Core::Hardware::NUM_CPU_CORES
+                : 0;
         // Always execute at least one tick.
         amortized_ticks = std::max<u64>(amortized_ticks, 1);
 

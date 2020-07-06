@@ -163,13 +163,17 @@ ARM_Dynarmic_32::ARM_Dynarmic_32(System& system, CPUInterrupts& interrupt_handle
                                  bool uses_wall_clock, ExclusiveMonitor& exclusive_monitor,
                                  std::size_t core_index)
     : ARM_Interface{system, interrupt_handlers, uses_wall_clock},
-      cb(std::make_unique<DynarmicCallbacks32>(*this)),
-      cp15(std::make_shared<DynarmicCP15>(*this)), core_index{core_index},
+      cb(std::make_unique<DynarmicCallbacks32>(*this)), inner_unicorn{system, interrupt_handlers,
+                                                                      uses_wall_clock,
+                                                                      ARM_Unicorn::Arch::AArch32,
+                                                                      core_index},
+      cp15(std::make_shared<DynarmicCP15>(*this)),
+      core_index{core_index},
       exclusive_monitor{dynamic_cast<DynarmicExclusiveMonitor&>(exclusive_monitor)} {}
 
 ARM_Dynarmic_32::~ARM_Dynarmic_32() = default;
 
-void ARM_Dynarmic_32::MapBackingMemory(u64 address, std::size_t size, u8* memory,
+void ARM_Dynarmic_32::MapBackingMemory(VAddr address, std::size_t size, u8* memory,
                                        Kernel::Memory::MemoryPermission perms) {
     inner_unicorn.MapBackingMemory(address, size, memory, perms);
 }
