@@ -20,7 +20,8 @@ public:
         AArch64, // 64-bit ARM
     };
 
-    explicit ARM_Unicorn(System& system, Arch architecture);
+    explicit ARM_Unicorn(System& system, CPUInterrupts& interrupt_handlers, bool uses_wall_clock,
+                         Arch architecture, std::size_t core_index);
     ~ARM_Unicorn() override;
 
     void MapBackingMemory(VAddr address, std::size_t size, u8* memory,
@@ -38,6 +39,7 @@ public:
     void SetTlsAddress(VAddr address) override;
     void SetTPIDR_EL0(u64 value) override;
     u64 GetTPIDR_EL0() const override;
+    void ChangeProcessorID(std::size_t new_core_id) override;
     void PrepareReschedule() override;
     void ClearExclusiveState() override;
     void ExecuteInstructions(std::size_t num_instructions);
@@ -58,6 +60,7 @@ private:
     uc_engine* uc{};
     GDBStub::BreakpointAddress last_bkpt{};
     bool last_bkpt_hit = false;
+    std::size_t core_index;
 };
 
 } // namespace Core
