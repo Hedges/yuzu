@@ -74,7 +74,7 @@ private:
     std::unique_ptr<DynarmicCallbacks64> cb;
     JitCacheType jit_cache;
     std::shared_ptr<Dynarmic::A64::Jit> jit;
-    ARM_Unicorn inner_unicorn;
+    static std::shared_ptr<ARM_Unicorn> inner_unicorn;
 
     std::size_t core_index;
     DynarmicExclusiveMonitor& exclusive_monitor;

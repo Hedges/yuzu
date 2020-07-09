@@ -24,6 +24,7 @@
 #include "core/core_timing_util.h"
 #include "core/cpu_manager.h"
 #include "core/device_memory.h"
+#include "core/gdbstub/gdbstub.h"
 #include "core/hardware_properties.h"
 #include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/errors.h"
@@ -164,7 +165,7 @@ struct KernelCore::Impl {
                 system.GetCpuManager().GetSuspendThreadStartFunc();
             void* init_func_parameter = system.GetCpuManager().GetStartFuncParamater();
             ThreadType type =
-                static_cast<ThreadType>(THREADTYPE_KERNEL | THREADTYPE_HLE | THREADTYPE_SUSPEND);
+                static_cast<ThreadType>(THREADTYPE_KERNEL/* | THREADTYPE_HLE*/ | THREADTYPE_SUSPEND);
             auto thread_res = Thread::Create(system, type, name, 0, 0, 0, static_cast<u32>(i), 0,
                                              nullptr, std::move(init_func), init_func_parameter);
             suspend_threads[i] = std::move(thread_res).Unwrap();
@@ -486,7 +487,7 @@ const Core::ExclusiveMonitor& KernelCore::GetExclusiveMonitor() const {
 void KernelCore::InvalidateAllInstructionCaches() {
     auto& threads = GlobalScheduler().GetThreadList();
     for (auto& thread : threads) {
-        if (!thread->IsHLEThread()) {
+        if (GDBStub::IsServerEnabled() || !thread->IsHLEThread()) {
             auto& arm_interface = thread->ArmInterface();
             arm_interface.ClearInstructionCache();
     }

@@ -87,12 +87,12 @@ public:
 
         ARM_Interface::ThreadContext64 ctx;
         parent.SaveContext(ctx);
-        parent.inner_unicorn.LoadContext(ctx);
+        parent.inner_unicorn->LoadContext(ctx);
         Kernel::Thread* thread = Kernel::GetCurrentThread();
-        parent.inner_unicorn.SetTlsAddress(thread->GetTLSAddress());
-        parent.inner_unicorn.SetTPIDR_EL0(thread->GetTPIDR_EL0());
-        parent.inner_unicorn.ExecuteInstructions(static_cast<int>(num_instructions));
-        parent.inner_unicorn.SaveContext(ctx);
+        parent.inner_unicorn->SetTlsAddress(thread->GetTLSAddress());
+        parent.inner_unicorn->SetTPIDR_EL0(thread->GetTPIDR_EL0());
+        parent.inner_unicorn->ExecuteInstructions(static_cast<int>(num_instructions));
+        parent.inner_unicorn->SaveContext(ctx);
         parent.LoadContext(ctx);
         num_interpreted_instructions += num_instructions;
     }
@@ -216,26 +216,32 @@ void ARM_Dynarmic_64::Step() {
     cb->InterpreterFallback(jit->GetPC(), 1);
 }
 
+std::shared_ptr<ARM_Unicorn> ARM_Dynarmic_64::inner_unicorn = nullptr;
+
 ARM_Dynarmic_64::ARM_Dynarmic_64(System& system, CPUInterrupts& interrupt_handlers,
                                  bool uses_wall_clock, ExclusiveMonitor& exclusive_monitor,
                            std::size_t core_index)
     : ARM_Interface{system, interrupt_handlers, uses_wall_clock},
-      cb(std::make_unique<DynarmicCallbacks64>(*this)), inner_unicorn{system, interrupt_handlers,
-                                                                      uses_wall_clock,
-                                                                      ARM_Unicorn::Arch::AArch64,
-                                                                      core_index},
-      core_index{core_index}, exclusive_monitor{
-                                  dynamic_cast<DynarmicExclusiveMonitor&>(exclusive_monitor)} {}
+      cb(std::make_unique<DynarmicCallbacks64>(*this)), core_index{core_index}, exclusive_monitor{
+                                  dynamic_cast<DynarmicExclusiveMonitor&>(exclusive_monitor)} {
+    if(inner_unicorn == nullptr) {
+        inner_unicorn = std::make_shared<ARM_Unicorn>(system, interrupt_handlers, uses_wall_clock,
+                                                      ARM_Unicorn::Arch::AArch64, core_index);
+    }
+}
 
 ARM_Dynarmic_64::~ARM_Dynarmic_64() = default;
 
 void ARM_Dynarmic_64::MapBackingMemory(u64 address, std::size_t size, u8* memory,
                                        Kernel::Memory::MemoryPermission perms) {
-    inner_unicorn.MapBackingMemory(address, size, memory, perms);
+    inner_unicorn->MapBackingMemory(address, size, memory, perms);
+    char szTemp[256];
+    sprintf(szTemp, "MapBackingMemory: %p %p %u %p %d\n", this, address, size, memory, perms);
+    OutputDebugStringA(szTemp);
 }
 
 void ARM_Dynarmic_64::UnmapMemory(u64 address, std::size_t size) {
-    inner_unicorn.UnmapMemory(address, size);
+    inner_unicorn->UnmapMemory(address, size);
 }
 
 void ARM_Dynarmic_64::SetPC(u64 pc) {

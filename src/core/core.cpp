@@ -528,13 +528,13 @@ const Kernel::Process* System::CurrentProcess() const {
 
 ARM_Interface& System::ArmInterface(std::size_t core_index) {
     auto* thread = impl->kernel.Scheduler(core_index).GetCurrentThread();
-    //ASSERT(thread && !thread->IsHLEThread());
+    ASSERT(thread && !thread->IsHLEThread());
     return thread->ArmInterface();
 }
 
 const ARM_Interface& System::ArmInterface(std::size_t core_index) const {
     auto* thread = impl->kernel.Scheduler(core_index).GetCurrentThread();
-    //ASSERT(thread && !thread->IsHLEThread());
+    ASSERT(thread && !thread->IsHLEThread());
     return thread->ArmInterface();
 }
 

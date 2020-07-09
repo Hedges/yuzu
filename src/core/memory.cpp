@@ -622,17 +622,17 @@ struct Memory::Impl {
             u8* memory = page_table.pointers[beg] + (beg << PAGE_BITS);
             system.ArmInterface(0).MapBackingMemory(address, num_bytes, memory,
                                                     Kernel::Memory::MemoryPermission::UserMask);
-            system.ArmInterface(1).MapBackingMemory(address, num_bytes, memory,
-                                                    Kernel::Memory::MemoryPermission::UserMask);
-            system.ArmInterface(2).MapBackingMemory(address, num_bytes, memory,
-                                                    Kernel::Memory::MemoryPermission::UserMask);
-            system.ArmInterface(3).MapBackingMemory(address, num_bytes, memory,
-                                                    Kernel::Memory::MemoryPermission::UserMask);
+            //system.ArmInterface(1).MapBackingMemory(address, num_bytes, memory,
+            //                                        Kernel::Memory::MemoryPermission::UserMask);
+            //system.ArmInterface(2).MapBackingMemory(address, num_bytes, memory,
+            //                                        Kernel::Memory::MemoryPermission::UserMask);
+            //system.ArmInterface(3).MapBackingMemory(address, num_bytes, memory,
+            //                                        Kernel::Memory::MemoryPermission::UserMask);
         } else if ((type == Common::PageType::Unmapped) || !target) {
             system.ArmInterface(0).UnmapMemory(address, num_bytes);
-            system.ArmInterface(1).UnmapMemory(address, num_bytes);
-            system.ArmInterface(2).UnmapMemory(address, num_bytes);
-            system.ArmInterface(3).UnmapMemory(address, num_bytes);
+            //system.ArmInterface(1).UnmapMemory(address, num_bytes);
+            //system.ArmInterface(2).UnmapMemory(address, num_bytes);
+            //system.ArmInterface(3).UnmapMemory(address, num_bytes);
         }
     }
 

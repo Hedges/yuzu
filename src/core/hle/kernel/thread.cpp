@@ -223,9 +223,9 @@ ResultVal<std::shared_ptr<Thread>> Thread::Create(Core::System& system, ThreadTy
     // TODO(peachum): move to ScheduleThread() when scheduler is added so selected core is used
     // to initialize the context
     thread->arm_interface.reset();
-    if (1)/*((type_flags & THREADTYPE_HLE) == 0)*/ {
+    if ((type_flags & THREADTYPE_HLE) == 0) {
 #ifdef ARCHITECTURE_x86_64
-        if (0)/*(owner_process && !owner_process->Is64BitProcess())*/ {
+        if (owner_process && !owner_process->Is64BitProcess()) {
             thread->arm_interface = std::make_unique<Core::ARM_Dynarmic_32>(
                 system, kernel.Interrupts(), kernel.IsMulticore(), kernel.GetExclusiveMonitor(),
                 processor_id);
