@@ -549,9 +549,9 @@ struct Memory::Impl {
                         // longer exist, and we should just leave the pagetable entry blank.
                         page_type = Common::PageType::Unmapped;
                     } else {
-                        page_type = Common::PageType::Memory;
                         current_page_table->pointers[vaddr >> PAGE_BITS] =
                             pointer - (vaddr & ~PAGE_MASK);
+                        page_type = Common::PageType::Memory;
                     }
                     break;
                 }
@@ -594,9 +594,12 @@ struct Memory::Impl {
                    base + page_table.pointers.size());
 
         if (!target) {
+            ASSERT_MSG(type != Common::PageType::Memory,
+                       "Mapping memory page without a pointer @ {:016x}", base * PAGE_SIZE);
+
             while (base != end) {
-                page_table.pointers[base] = nullptr;
                 page_table.attributes[base] = type;
+                page_table.pointers[base] = nullptr;
                 page_table.backing_addr[base] = 0;
 
                 base += 1;
@@ -620,8 +623,8 @@ struct Memory::Impl {
         size_t num_bytes = size * PAGE_SIZE;
         if (type == Common::PageType::Memory) {
             u8* memory = page_table.pointers[beg] + (beg << PAGE_BITS);
-            system.ArmInterface(0).MapBackingMemory(address, num_bytes, memory,
-                                                    Kernel::Memory::MemoryPermission::UserMask);
+            //system.ArmInterface(0).MapBackingMemory(address, num_bytes, memory,
+            //                                        Kernel::Memory::MemoryPermission::UserMask);
             //system.ArmInterface(1).MapBackingMemory(address, num_bytes, memory,
             //                                        Kernel::Memory::MemoryPermission::UserMask);
             //system.ArmInterface(2).MapBackingMemory(address, num_bytes, memory,
@@ -629,7 +632,7 @@ struct Memory::Impl {
             //system.ArmInterface(3).MapBackingMemory(address, num_bytes, memory,
             //                                        Kernel::Memory::MemoryPermission::UserMask);
         } else if ((type == Common::PageType::Unmapped) || !target) {
-            system.ArmInterface(0).UnmapMemory(address, num_bytes);
+            //system.ArmInterface(0).UnmapMemory(address, num_bytes);
             //system.ArmInterface(1).UnmapMemory(address, num_bytes);
             //system.ArmInterface(2).UnmapMemory(address, num_bytes);
             //system.ArmInterface(3).UnmapMemory(address, num_bytes);

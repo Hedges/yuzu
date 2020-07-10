@@ -226,7 +226,8 @@ void CpuManager::SingleCoreRunGuestLoop() {
         auto& arm_interface = thread->ArmInterface();
         system.EnterDynarmicProfile();
         if (!physical_core->IsInterrupted()) {
-            arm_interface.Step();
+            //arm_interface.Step();
+            arm_interface.Run();
             physical_core = &kernel.CurrentPhysicalCore();
         }
         system.ExitDynarmicProfile();
