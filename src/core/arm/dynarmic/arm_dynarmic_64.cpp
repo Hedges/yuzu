@@ -88,7 +88,7 @@ public:
         ARM_Interface::ThreadContext64 ctx;
         parent.SaveContext(ctx);
         parent.inner_unicorn->LoadContext(ctx);
-        Kernel::Thread* thread = Kernel::GetCurrentThread();
+        Kernel::Thread* thread = parent.system.CurrentScheduler().GetCurrentThread();
         parent.inner_unicorn->SetTlsAddress(thread->GetTLSAddress());
         parent.inner_unicorn->SetTPIDR_EL0(thread->GetTPIDR_EL0());
         parent.inner_unicorn->ExecuteInstructions(static_cast<int>(num_instructions));

@@ -40,13 +40,13 @@ void MaxwellDMA::Launch() {
     LOG_TRACE(Render_OpenGL, "DMA copy 0x{:x} -> 0x{:x}", static_cast<GPUVAddr>(regs.offset_in),
               static_cast<GPUVAddr>(regs.offset_out));
 
-    // TODO(Subv): Perform more research and implement all features of this engine.
-    //ASSERT(regs.exec.enable_swizzle == 0);
-    //ASSERT(regs.exec.query_mode == Regs::QueryMode::None);
-    //ASSERT(regs.exec.query_intr == Regs::QueryIntr::None);
-    //ASSERT(regs.exec.copy_mode == Regs::CopyMode::Unk2);
-    //ASSERT(regs.dst_params.pos_x == 0);
-    //ASSERT(regs.dst_params.pos_y == 0);
+    const LaunchDMA& launch = regs.launch_dma;
+    //ASSERT(launch.remap_enable == 0);
+    //ASSERT(launch.semaphore_type == LaunchDMA::SemaphoreType::NONE);
+    //ASSERT(launch.interrupt_type == LaunchDMA::InterruptType::NONE);
+    //ASSERT(launch.data_transfer_type == LaunchDMA::DataTransferType::NON_PIPELINED);
+    //ASSERT(regs.dst_params.origin.x == 0);
+    //ASSERT(regs.dst_params.origin.y == 0);
 
     const bool is_src_pitch = launch.src_memory_layout == LaunchDMA::MemoryLayout::PITCH;
     const bool is_dst_pitch = launch.dst_memory_layout == LaunchDMA::MemoryLayout::PITCH;
