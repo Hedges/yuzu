@@ -434,7 +434,7 @@ void RasterizerOpenGL::ConfigureFramebuffers() {
     View depth_surface = texture_cache.GetDepthBufferSurface(true);
 
     const auto& regs = gpu.regs;
-    UNIMPLEMENTED_IF(regs.rt_separate_frag_data == 0);
+    //UNIMPLEMENTED_IF(regs.rt_separate_frag_data == 0);
 
     // Bind the framebuffer surfaces
     FramebufferCacheKey key;
