@@ -17,12 +17,6 @@ struct libusb_device_handle;
 
 namespace GCAdapter {
 
-enum {
-    PAD_USE_ORIGIN = 0x0080,
-    PAD_GET_ORIGIN = 0x2000,
-    PAD_ERR_STATUS = 0x8000,
-};
-
 enum class PadButton {
     PAD_BUTTON_LEFT = 0x0001,
     PAD_BUTTON_RIGHT = 0x0002,
@@ -100,14 +94,19 @@ public:
     void BeginConfiguration();
     void EndConfiguration();
 
+    /// Returns true if there is a device connected to port
+    bool DeviceConnected(std::size_t port);
+
     std::array<Common::SPSCQueue<GCPadStatus>, 4>& GetPadQueue();
     const std::array<Common::SPSCQueue<GCPadStatus>, 4>& GetPadQueue() const;
 
     std::array<GCState, 4>& GetPadState();
     const std::array<GCState, 4>& GetPadState() const;
 
+    int GetOriginValue(int port, int axis) const;
+
 private:
-    GCPadStatus GetPadStatus(int port, const std::array<u8, 37>& adapter_payload);
+    GCPadStatus GetPadStatus(std::size_t port, const std::array<u8, 37>& adapter_payload);
 
     void PadToState(const GCPadStatus& pad, GCState& state);
 
@@ -119,11 +118,8 @@ private:
     /// Stop scanning for the adapter
     void StopScanThread();
 
-    /// Returns true if there is a device connected to port
-    bool DeviceConnected(int port);
-
     /// Resets status of device connected to port
-    void ResetDeviceType(int port);
+    void ResetDeviceType(std::size_t port);
 
     /// Returns true if we successfully gain access to GC Adapter
     bool CheckDeviceAccess(libusb_device* device);
@@ -159,6 +155,8 @@ private:
 
     std::array<Common::SPSCQueue<GCPadStatus>, 4> pad_queue;
     std::array<GCState, 4> state;
+    std::array<bool, 4> get_origin;
+    std::array<GCPadStatus, 4> origin_status;
 };
 
 } // namespace GCAdapter

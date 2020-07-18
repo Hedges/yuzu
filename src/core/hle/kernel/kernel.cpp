@@ -51,7 +51,8 @@ namespace Kernel {
 
 struct KernelCore::Impl {
     explicit Impl(Core::System& system, KernelCore& kernel)
-        : global_scheduler{kernel}, synchronization{system}, time_manager{system}, system{system} {}
+        : global_scheduler{kernel}, synchronization{system}, time_manager{system},
+          global_handle_table{kernel}, system{system} {}
 
     void SetMulticore(bool is_multicore) {
         this->is_multicore = is_multicore;
@@ -145,37 +146,34 @@ struct KernelCore::Impl {
 
     void InitializePreemption(KernelCore& kernel) {
         preemption_event = Core::Timing::CreateEvent(
-            "PreemptionCallback", [this, &kernel](u64 userdata, s64 cycles_late) {
+            "PreemptionCallback", [this, &kernel](u64, std::chrono::nanoseconds) {
                 {
                     SchedulerLock lock(kernel);
                     global_scheduler.PreemptThreads();
-    }
-                s64 time_interval = Core::Timing::msToCycles(std::chrono::milliseconds(10));
+                }
+                const auto time_interval = std::chrono::nanoseconds{
+                    Core::Timing::msToCycles(std::chrono::milliseconds(10))};
                 system.CoreTiming().ScheduleEvent(time_interval, preemption_event);
             });
 
-        s64 time_interval = Core::Timing::msToCycles(std::chrono::milliseconds(10));
+        const auto time_interval =
+            std::chrono::nanoseconds{Core::Timing::msToCycles(std::chrono::milliseconds(10))};
         system.CoreTiming().ScheduleEvent(time_interval, preemption_event);
     }
 
     void InitializeSuspendThreads() {
         for (std::size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {
             std::string name = "Suspend Thread Id:" + std::to_string(i);
-            std::function<void(void*)> init_func =
-                system.GetCpuManager().GetSuspendThreadStartFunc();
+            std::function<void(void*)> init_func = Core::CpuManager::GetSuspendThreadStartFunc();
             void* init_func_parameter = system.GetCpuManager().GetStartFuncParamater();
-            ThreadType type =
+            const auto type =
                 static_cast<ThreadType>(THREADTYPE_KERNEL | THREADTYPE_HLE | THREADTYPE_SUSPEND);
-            auto thread_res = Thread::Create(system, type, name, 0, 0, 0, static_cast<u32>(i), 0,
-                                             nullptr, std::move(init_func), init_func_parameter);
+            auto thread_res =
+                Thread::Create(system, type, std::move(name), 0, 0, 0, static_cast<u32>(i), 0,
+                               nullptr, std::move(init_func), init_func_parameter);
+
             suspend_threads[i] = std::move(thread_res).Unwrap();
         }
-    }
-
-    void SetProcessIs64Bit(Process* process, bool is_64_bit) {
-        //for (auto& core : cores) {
-        //    core.SetIs64Bit(process->Is64BitProcess());
-        //}
     }
 
     void MakeCurrentProcess(Process* process) {
@@ -184,8 +182,6 @@ struct KernelCore::Impl {
         if (process == nullptr) {
             return;
         }
-
-        SetProcessIs64Bit(process, process->Is64BitProcess());
 
         u32 core_id = GetCurrentHostThreadID();
         if (core_id < Core::Hardware::NUM_CPU_CORES) {
@@ -316,7 +312,7 @@ struct KernelCore::Impl {
 
     // This is the kernel's handle table or supervisor handle table which
     // stores all the objects in place.
-    Kernel::HandleTable global_handle_table;
+    HandleTable global_handle_table;
 
     /// Map of named ports managed by the kernel, which can be retrieved using
     /// the ConnectToPort SVC.
@@ -381,12 +377,6 @@ std::shared_ptr<Thread> KernelCore::RetrieveThreadFromGlobalHandleTable(Handle h
 
 void KernelCore::AppendNewProcess(std::shared_ptr<Process> process) {
     impl->process_list.push_back(std::move(process));
-}
-
-void KernelCore::SetProcessIs64Bit(Process* process, bool is_64_bit) {
-    impl->SetProcessIs64Bit(process, is_64_bit);
-}
-
 void KernelCore::MakeCurrentProcess(Process* process) {
     impl->MakeCurrentProcess(process);
 }
@@ -487,16 +477,16 @@ const Core::ExclusiveMonitor& KernelCore::GetExclusiveMonitor() const {
 void KernelCore::InvalidateAllInstructionCaches() {
     auto& threads = GlobalScheduler().GetThreadList();
     for (auto& thread : threads) {
-        if (GDBStub::IsServerEnabled() || !thread->IsHLEThread()) {
+        if (!thread->IsHLEThread()) {
             auto& arm_interface = thread->ArmInterface();
             arm_interface.ClearInstructionCache();
+        }
     }
-}
 }
 
 void KernelCore::PrepareReschedule(std::size_t id) {
     // TODO: Reimplement, this
-    }
+}
 
 void KernelCore::AddNamedPort(std::string name, std::shared_ptr<ClientPort> port) {
     impl->named_ports.emplace(std::move(name), std::move(port));
