@@ -167,11 +167,11 @@ void HLERequestContext::ParseCommandBuffer(const HandleTable& handle_table, u32_
         return;
     }
 
-    if (incoming) {
-        ASSERT(data_payload_header->magic == Common::MakeMagic('S', 'F', 'C', 'I'));
-    } else {
-        ASSERT(data_payload_header->magic == Common::MakeMagic('S', 'F', 'C', 'O'));
-    }
+    //if (incoming) {
+    //    ASSERT(data_payload_header->magic == Common::MakeMagic('S', 'F', 'C', 'I'));
+    //} else {
+    //    ASSERT(data_payload_header->magic == Common::MakeMagic('S', 'F', 'C', 'O'));
+    //}
 
     rp.SetCurrentOffset(buffer_c_offset);
 
@@ -268,7 +268,7 @@ ResultCode HLERequestContext::WriteToOutgoingCommandBuffer(Thread& thread) {
     // TODO(Subv): Translate the X/A/B/W buffers.
 
     if (Session()->IsDomain() && domain_message_header) {
-        ASSERT(domain_message_header->num_objects == domain_objects.size());
+        //ASSERT(domain_message_header->num_objects == domain_objects.size());
         // Write the domain objects to the command buffer, these go after the raw untranslated data.
         // TODO(Subv): This completely ignores C buffers.
         std::size_t domain_offset = size - domain_message_header->num_objects;

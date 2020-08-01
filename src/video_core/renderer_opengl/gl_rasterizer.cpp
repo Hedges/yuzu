@@ -1169,26 +1169,6 @@ void RasterizerOpenGL::SyncViewport() {
     const auto& regs = gpu.regs;
 
     const bool dirty_viewport = flags[Dirty::Viewports];
-    const bool dirty_clip_control = flags[Dirty::ClipControl];
-
-    if (dirty_clip_control || flags[Dirty::FrontFace]) {
-        flags[Dirty::FrontFace] = false;
-
-        GLenum mode = MaxwellToGL::FrontFace(regs.front_face);
-        if (regs.screen_y_control.triangle_rast_flip != 0 &&
-            regs.viewport_transform[0].scale_y < 0.0f) {
-            switch (mode) {
-            case GL_CW:
-                mode = GL_CCW;
-                break;
-            case GL_CCW:
-                mode = GL_CW;
-                break;
-            }
-        }
-        glFrontFace(mode);
-    }
-
     if (dirty_viewport || flags[Dirty::ClipControl]) {
         flags[Dirty::ClipControl] = false;
 
@@ -1285,6 +1265,25 @@ void RasterizerOpenGL::SyncCullMode() {
         } else {
             glDisable(GL_CULL_FACE);
         }
+    }
+
+    if (flags[Dirty::FrontFace]) {
+        flags[Dirty::FrontFace] = false;
+        GLenum front_face = MaxwellToGL::FrontFace(regs.front_face);
+        bool flip_y = false;
+        if (regs.viewport_transform[0].scale_y < 0.0) {
+            flip_y = !flip_y;
+        }
+        if (regs.screen_y_control.y_negate != 0) {
+            flip_y = !flip_y;
+        }
+        if (!flip_y) {
+            if (front_face == GL_CCW)
+                front_face = GL_CW;
+            else if (front_face == GL_CW)
+                front_face = GL_CCW;
+        }
+        glFrontFace(front_face);
     }
 }
 

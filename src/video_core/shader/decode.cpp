@@ -274,7 +274,7 @@ u32 ShaderIR::DecodeInstr(NodeBlock& bb, u32 pc) {
 
     // Decoding failure
     if (!opcode) {
-        UNIMPLEMENTED_MSG("Unhandled instruction: {0:x}", instr.value);
+        //UNIMPLEMENTED_MSG("Unhandled instruction: {0:x}", instr.value);
         bb.push_back(Comment(fmt::format("{:05x} Unimplemented Shader instruction (0x{:016x})",
                                          nv_address, instr.value)));
         return pc + 1;
