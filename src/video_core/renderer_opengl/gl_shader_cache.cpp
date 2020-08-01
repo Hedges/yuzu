@@ -126,7 +126,7 @@ std::shared_ptr<Registry> MakeRegistry(const ShaderDiskCacheEntry& entry) {
     const VideoCore::GuestDriverProfile guest_profile{entry.texture_handler_size};
     const VideoCommon::Shader::SerializedRegistryInfo info{guest_profile, entry.bound_buffer,
                                                            entry.graphics_info, entry.compute_info};
-    const auto registry = std::make_shared<Registry>(entry.type, info);
+    auto registry = std::make_shared<Registry>(entry.type, info);
     for (const auto& [address, value] : entry.keys) {
         const auto [buffer, offset] = address;
         registry->InsertKey(buffer, offset, value);
@@ -237,7 +237,6 @@ std::unique_ptr<Shader> Shader::CreateStageFromMemory(
     const ShaderParameters& params, Maxwell::ShaderProgram program_type, ProgramCode code,
     ProgramCode code_b, VideoCommon::Shader::AsyncShaders& async_shaders, VAddr cpu_addr) {
     const auto shader_type = GetShaderType(program_type);
-    const std::size_t size_in_bytes = code.size() * sizeof(u64);
 
     auto& gpu = params.system.GPU();
     gpu.ShaderNotify().MarkSharderBuilding();
@@ -287,8 +286,6 @@ std::unique_ptr<Shader> Shader::CreateStageFromMemory(
 
 std::unique_ptr<Shader> Shader::CreateKernelFromMemory(const ShaderParameters& params,
                                                        ProgramCode code) {
-    const std::size_t size_in_bytes = code.size() * sizeof(u64);
-
     auto& gpu = params.system.GPU();
     gpu.ShaderNotify().MarkSharderBuilding();
 

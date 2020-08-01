@@ -602,8 +602,15 @@ private:
             return;
         }
         const auto& info = registry.GetComputeInfo();
-        if (const u32 size = info.shared_memory_size_in_words; size > 0) {
-            code.AddLine("shared uint smem[{}];", size);
+        if (u32 size = info.shared_memory_size_in_words * 4; size > 0) {
+            const u32 limit = device.GetMaxComputeSharedMemorySize();
+            if (size > limit) {
+                LOG_ERROR(Render_OpenGL, "Shared memory size {} is clamped to host's limit {}",
+                          size, limit);
+                size = limit;
+            }
+
+            code.AddLine("shared uint smem[{}];", size / 4);
             code.AddNewLine();
         }
         code.AddLine("layout (local_size_x = {}, local_size_y = {}, local_size_z = {}) in;",
@@ -1912,7 +1919,7 @@ private:
     Expression Comparison(Operation operation) {
         static_assert(!unordered || type == Type::Float);
 
-        const Expression expr = GenerateBinaryInfix(operation, op, Type::Bool, type, type);
+        Expression expr = GenerateBinaryInfix(operation, op, Type::Bool, type, type);
 
         if constexpr (op.compare("!=") == 0 && type == Type::Float && !unordered) {
             // GLSL's operator!=(float, float) doesn't seem be ordered. This happens on both AMD's
@@ -1950,10 +1957,6 @@ private:
         code.AddLine("uaddCarry({}, {}, {});", VisitOperand(operation, 0).AsUint(),
                      VisitOperand(operation, 1).AsUint(), carry);
         return {fmt::format("({} != 0)", carry), Type::Bool};
-    }
-
-    Expression LogicalFIsNan(Operation operation) {
-        return GenerateUnary(operation, "isnan", Type::Bool, Type::Float);
     }
 
     Expression LogicalAssign(Operation operation) {
@@ -2769,15 +2772,6 @@ private:
 
     u32 GetNumPhysicalVaryings() const {
         return std::min<u32>(device.GetMaxVaryings(), Maxwell::NumVaryings);
-    }
-
-    bool IsRenderTargetEnabled(u32 render_target) const {
-        for (u32 component = 0; component < 4; ++component) {
-            if (header.ps.IsColorComponentOutputEnabled(render_target, component)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     const Device& device;
