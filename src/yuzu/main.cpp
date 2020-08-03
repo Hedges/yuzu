@@ -1823,7 +1823,7 @@ void GMainWindow::OnMenuInstallToNAND() {
 
     ui.action_Install_File_NAND->setEnabled(false);
 
-    install_progress = new QProgressDialog(QStringLiteral(""), tr("Cancel"), 0, total_size, this);
+    install_progress = new QProgressDialog(QString{}, tr("Cancel"), 0, total_size, this);
     install_progress->setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint &
                                      ~Qt::WindowMaximizeButtonHint);
     install_progress->setAttribute(Qt::WA_DeleteOnClose, true);
@@ -1873,12 +1873,12 @@ void GMainWindow::OnMenuInstallToNAND() {
     install_progress->close();
 
     const QString install_results =
-        (new_files.isEmpty() ? QStringLiteral("")
+        (new_files.isEmpty() ? QString{}
                              : tr("%n file(s) were newly installed\n", "", new_files.size())) +
         (overwritten_files.isEmpty()
-             ? QStringLiteral("")
+             ? QString{}
              : tr("%n file(s) were overwritten\n", "", overwritten_files.size())) +
-        (failed_files.isEmpty() ? QStringLiteral("")
+        (failed_files.isEmpty() ? QString{}
                                 : tr("%n file(s) failed to install\n", "", failed_files.size()));
 
     QMessageBox::information(this, tr("Install Results"), install_results);
@@ -2321,17 +2321,28 @@ void GMainWindow::OnToggleFilterBar() {
 
 void GMainWindow::OnCaptureScreenshot() {
     OnPauseGame();
-    QFileDialog png_dialog(this, tr("Capture Screenshot"), UISettings::values.screenshot_path,
-                           tr("PNG Image (*.png)"));
-    png_dialog.setAcceptMode(QFileDialog::AcceptSave);
-    png_dialog.setDefaultSuffix(QStringLiteral("png"));
-    if (png_dialog.exec()) {
-        const QString path = png_dialog.selectedFiles().first();
-        if (!path.isEmpty()) {
-            UISettings::values.screenshot_path = QFileInfo(path).path();
-            render_window->CaptureScreenshot(UISettings::values.screenshot_resolution_factor, path);
+
+    const u64 title_id = Core::System::GetInstance().CurrentProcess()->GetTitleID();
+    const auto screenshot_path =
+        QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::ScreenshotsDir));
+    const auto date =
+        QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_hh-mm-ss-zzz"));
+    QString filename = QStringLiteral("%1%2_%3.png")
+                           .arg(screenshot_path)
+                           .arg(title_id, 16, 16, QLatin1Char{'0'})
+                           .arg(date);
+
+#ifdef _WIN32
+    if (UISettings::values.enable_screenshot_save_as) {
+        filename = QFileDialog::getSaveFileName(this, tr("Capture Screenshot"), filename,
+                                                tr("PNG Image (*.png)"));
+        if (filename.isEmpty()) {
+            OnStartGame();
+            return;
         }
     }
+#endif
+    render_window->CaptureScreenshot(UISettings::values.screenshot_resolution_factor, filename);
     OnStartGame();
 }
 
@@ -2370,8 +2381,7 @@ void GMainWindow::UpdateStatusBar() {
 
     if (shaders_building != 0) {
         shader_building_label->setText(
-            tr("Building: %1 shader").arg(shaders_building) +
-            (shaders_building != 1 ? QString::fromStdString("s") : QString::fromStdString("")));
+            tr("Building: %n shader(s)", "", static_cast<int>(shaders_building)));
         shader_building_label->setVisible(true);
     } else {
         shader_building_label->setVisible(false);
