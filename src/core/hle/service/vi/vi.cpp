@@ -548,8 +548,8 @@ private:
                 // Wait the current thread until a buffer becomes available
                 ctx.SleepClientThread(
                     "IHOSBinderDriver::DequeueBuffer", UINT64_MAX,
-                    [=](std::shared_ptr<Kernel::Thread> thread, Kernel::HLERequestContext& ctx,
-                        Kernel::ThreadWakeupReason reason) {
+                    [=, this](std::shared_ptr<Kernel::Thread> thread,
+                              Kernel::HLERequestContext& ctx, Kernel::ThreadWakeupReason reason) {
                         // Repeat TransactParcel DequeueBuffer when a buffer is available
                         const auto guard = nv_flinger->Lock();
                         auto& buffer_queue = nv_flinger->FindBufferQueue(id);
@@ -1199,6 +1199,23 @@ private:
         }
     }
 
+    void GetIndirectLayerImageRequiredMemoryInfo(Kernel::HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto width = rp.Pop<u64>();
+        const auto height = rp.Pop<u64>();
+        LOG_DEBUG(Service_VI, "called width={}, height={}", width, height);
+
+        constexpr std::size_t base_size = 0x20000;
+        constexpr std::size_t alignment = 0x1000;
+        const auto texture_size = width * height * 4;
+        const auto out_size = (texture_size + base_size - 1) / base_size * base_size;
+
+        IPC::ResponseBuilder rb{ctx, 6};
+        rb.Push(RESULT_SUCCESS);
+        rb.Push(out_size);
+        rb.Push(alignment);
+    }
+
     static ResultVal<ConvertedScaleMode> ConvertScalingModeImpl(NintendoScaleMode mode) {
         switch (mode) {
         case NintendoScaleMode::None:
@@ -1243,7 +1260,8 @@ IApplicationDisplayService::IApplicationDisplayService(
         {2102, &IApplicationDisplayService::ConvertScalingMode, "ConvertScalingMode"},
         {2450, nullptr, "GetIndirectLayerImageMap"},
         {2451, nullptr, "GetIndirectLayerImageCropMap"},
-        {2460, nullptr, "GetIndirectLayerImageRequiredMemoryInfo"},
+        {2460, &IApplicationDisplayService::GetIndirectLayerImageRequiredMemoryInfo,
+         "GetIndirectLayerImageRequiredMemoryInfo"},
         {5202, &IApplicationDisplayService::GetDisplayVsyncEvent, "GetDisplayVsyncEvent"},
         {5203, nullptr, "GetDisplayVsyncEventForDebug"},
     };
