@@ -10,14 +10,13 @@
 #include <string>
 
 #include <variant>
-#include <boost/container/flat_map.hpp>
 #include <fmt/format.h>
 #include "common/common_funcs.h"
 #include "common/common_types.h"
 #include "core/crypto/partition_data_manager.h"
 #include "core/file_sys/vfs_types.h"
 
-namespace FileUtil {
+namespace Common::FS {
 class IOFile;
 }
 
@@ -293,9 +292,6 @@ private:
 
     void SetKeyWrapped(S128KeyType id, Key128 key, u64 field1 = 0, u64 field2 = 0);
     void SetKeyWrapped(S256KeyType id, Key256 key, u64 field1 = 0, u64 field2 = 0);
-
-    static const boost::container::flat_map<std::string, KeyIndex<S128KeyType>> s128_file_id;
-    static const boost::container::flat_map<std::string, KeyIndex<S256KeyType>> s256_file_id;
 };
 
 Key128 GenerateKeyEncryptionKey(Key128 source, Key128 master, Key128 kek_seed, Key128 key_seed);
@@ -308,7 +304,7 @@ std::array<u8, 0x90> DecryptKeyblob(const std::array<u8, 0xB0>& encrypted_keyblo
 std::optional<Key128> DeriveSDSeed();
 Loader::ResultStatus DeriveSDKeys(std::array<Key256, 2>& sd_keys, KeyManager& keys);
 
-std::vector<Ticket> GetTicketblob(const FileUtil::IOFile& ticket_save);
+std::vector<Ticket> GetTicketblob(const Common::FS::IOFile& ticket_save);
 
 // Returns a pair of {rights_id, titlekey}. Fails if the ticket has no certificate authority
 // (offset 0x140-0x144 is zero)

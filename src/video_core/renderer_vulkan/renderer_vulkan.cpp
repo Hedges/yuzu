@@ -78,7 +78,7 @@ Common::DynamicLibrary OpenVulkanLibrary() {
     if (!libvulkan_env || !library.Open(libvulkan_env)) {
         // Use the libvulkan.dylib from the application bundle.
         const std::string filename =
-            FileUtil::GetBundleDirectory() + "/Contents/Frameworks/libvulkan.dylib";
+            Common::FS::GetBundleDirectory() + "/Contents/Frameworks/libvulkan.dylib";
         library.Open(filename.c_str());
     }
 #else
@@ -237,8 +237,10 @@ std::string BuildCommaSeparatedExtensions(std::vector<std::string> available_ext
 
 } // Anonymous namespace
 
-RendererVulkan::RendererVulkan(Core::Frontend::EmuWindow& window, Core::System& system)
-    : RendererBase(window), system{system} {}
+RendererVulkan::RendererVulkan(Core::System& system_, Core::Frontend::EmuWindow& emu_window,
+                               Tegra::GPU& gpu_,
+                               std::unique_ptr<Core::Frontend::GraphicsContext> context)
+    : RendererBase{emu_window, std::move(context)}, system{system_}, gpu{gpu_} {}
 
 RendererVulkan::~RendererVulkan() {
     ShutDown();
@@ -439,7 +441,7 @@ void RendererVulkan::Report() const {
     LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
 
     auto& telemetry_session = system.TelemetrySession();
-    constexpr auto field = Telemetry::FieldType::UserSystem;
+    constexpr auto field = Common::Telemetry::FieldType::UserSystem;
     telemetry_session.AddField(field, "GPU_Vendor", vendor_name);
     telemetry_session.AddField(field, "GPU_Model", model_name);
     telemetry_session.AddField(field, "GPU_Vulkan_Driver", driver_name);

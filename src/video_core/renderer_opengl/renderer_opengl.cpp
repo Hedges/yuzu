@@ -21,6 +21,8 @@
 #include "core/perf_stats.h"
 #include "core/settings.h"
 #include "core/telemetry_session.h"
+#include "video_core/host_shaders/opengl_present_frag.h"
+#include "video_core/host_shaders/opengl_present_vert.h"
 #include "video_core/morton.h"
 #include "video_core/renderer_opengl/gl_rasterizer.h"
 #include "video_core/renderer_opengl/gl_shader_manager.h"
@@ -43,46 +45,6 @@ struct Frame {
     GLsync present_fence{};           /// Fence created on the presentation thread
     bool is_srgb{};                   /// Framebuffer is sRGB or RGB
 };
-
-constexpr char VERTEX_SHADER[] = R"(
-#version 430 core
-
-out gl_PerVertex {
-    vec4 gl_Position;
-};
-
-layout (location = 0) in vec2 vert_position;
-layout (location = 1) in vec2 vert_tex_coord;
-layout (location = 0) out vec2 frag_tex_coord;
-
-// This is a truncated 3x3 matrix for 2D transformations:
-// The upper-left 2x2 submatrix performs scaling/rotation/mirroring.
-// The third column performs translation.
-// The third row could be used for projection, which we don't need in 2D. It hence is assumed to
-// implicitly be [0, 0, 1]
-layout (location = 0) uniform mat3x2 modelview_matrix;
-
-void main() {
-    // Multiply input position by the rotscale part of the matrix and then manually translate by
-    // the last column. This is equivalent to using a full 3x3 matrix and expanding the vector
-    // to `vec3(vert_position.xy, 1.0)`
-    gl_Position = vec4(mat2(modelview_matrix) * vert_position + modelview_matrix[2], 0.0, 1.0);
-    frag_tex_coord = vert_tex_coord;
-}
-)";
-
-constexpr char FRAGMENT_SHADER[] = R"(
-#version 430 core
-
-layout (location = 0) in vec2 frag_tex_coord;
-layout (location = 0) out vec4 color;
-
-layout (binding = 0) uniform sampler2D color_texture;
-
-void main() {
-    color = vec4(texture(color_texture, frag_tex_coord).rgb, 1.0f);
-}
-)";
 
 constexpr GLint PositionLocation = 0;
 constexpr GLint TexCoordLocation = 1;
@@ -313,10 +275,11 @@ public:
     }
 };
 
-RendererOpenGL::RendererOpenGL(Core::Frontend::EmuWindow& emu_window, Core::System& system,
-                               Core::Frontend::GraphicsContext& context)
-    : RendererBase{emu_window}, emu_window{emu_window}, system{system}, context{context},
-      program_manager{device}, has_debug_tool{HasDebugTool()} {}
+RendererOpenGL::RendererOpenGL(Core::System& system_, Core::Frontend::EmuWindow& emu_window_,
+                               Tegra::GPU& gpu_,
+                               std::unique_ptr<Core::Frontend::GraphicsContext> context_)
+    : RendererBase{emu_window_, std::move(context_)}, system{system_},
+      emu_window{emu_window_}, gpu{gpu_}, program_manager{device}, has_debug_tool{HasDebugTool()} {}
 
 RendererOpenGL::~RendererOpenGL() = default;
 
@@ -384,7 +347,7 @@ void RendererOpenGL::SwapBuffers(const Tegra::FramebufferConfig* framebuffer) {
     if (has_debug_tool) {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         Present(0);
-        context.SwapBuffers();
+        context->SwapBuffers();
     }
 }
 
@@ -460,10 +423,10 @@ void RendererOpenGL::InitOpenGLObjects() {
 
     // Create shader programs
     OGLShader vertex_shader;
-    vertex_shader.Create(VERTEX_SHADER, GL_VERTEX_SHADER);
+    vertex_shader.Create(HostShaders::OPENGL_PRESENT_VERT, GL_VERTEX_SHADER);
 
     OGLShader fragment_shader;
-    fragment_shader.Create(FRAGMENT_SHADER, GL_FRAGMENT_SHADER);
+    fragment_shader.Create(HostShaders::OPENGL_PRESENT_FRAG, GL_FRAGMENT_SHADER);
 
     vertex_program.Create(true, false, vertex_shader.handle);
     fragment_program.Create(true, false, fragment_shader.handle);
@@ -509,9 +472,10 @@ void RendererOpenGL::AddTelemetryFields() {
     LOG_INFO(Render_OpenGL, "GL_RENDERER: {}", gpu_model);
 
     auto& telemetry_session = system.TelemetrySession();
-    telemetry_session.AddField(Telemetry::FieldType::UserSystem, "GPU_Vendor", gpu_vendor);
-    telemetry_session.AddField(Telemetry::FieldType::UserSystem, "GPU_Model", gpu_model);
-    telemetry_session.AddField(Telemetry::FieldType::UserSystem, "GPU_OpenGL_Version", gl_version);
+    constexpr auto user_system = Common::Telemetry::FieldType::UserSystem;
+    telemetry_session.AddField(user_system, "GPU_Vendor", gpu_vendor);
+    telemetry_session.AddField(user_system, "GPU_Model", gpu_model);
+    telemetry_session.AddField(user_system, "GPU_OpenGL_Version", gl_version);
 }
 
 void RendererOpenGL::CreateRasterizer() {

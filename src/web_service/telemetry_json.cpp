@@ -4,11 +4,13 @@
 
 #include <nlohmann/json.hpp>
 #include "common/detached_tasks.h"
-#include "common/web_result.h"
 #include "web_service/telemetry_json.h"
 #include "web_service/web_backend.h"
+#include "web_service/web_result.h"
 
 namespace WebService {
+
+namespace Telemetry = Common::Telemetry;
 
 struct TelemetryJson::Impl {
     Impl(std::string host, std::string username, std::string token)
@@ -123,7 +125,7 @@ bool TelemetryJson::SubmitTestcase() {
     Client client(impl->host, impl->username, impl->token);
     auto value = client.PostJson("/gamedb/testcase", content, false);
 
-    return value.result_code == Common::WebResult::Code::Success;
+    return value.result_code == WebResult::Code::Success;
 }
 
 } // namespace WebService

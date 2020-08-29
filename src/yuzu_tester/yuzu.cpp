@@ -79,8 +79,8 @@ static void InitializeLogging(bool console) {
     if (console)
         Log::AddBackend(std::make_unique<Log::ColorConsoleBackend>());
 
-    const std::string& log_dir = FileUtil::GetUserPath(FileUtil::UserPath::LogDir);
-    FileUtil::CreateFullPath(log_dir);
+    const std::string& log_dir = Common::FS::GetUserPath(Common::FS::UserPath::LogDir);
+    Common::FS::CreateFullPath(log_dir);
     Log::AddBackend(std::make_unique<Log::FileBackend>(log_dir + LOG_FILE));
 #ifdef _WIN32
     Log::AddBackend(std::make_unique<Log::DebuggerBackend>());
@@ -251,7 +251,8 @@ int main(int argc, char** argv) {
 
     Service::Yuzu::InstallInterfaces(system.ServiceManager(), datastring, callback);
 
-    system.TelemetrySession().AddField(Telemetry::FieldType::App, "Frontend", "SDLHideTester");
+    system.TelemetrySession().AddField(Common::Telemetry::FieldType::App, "Frontend",
+                                       "SDLHideTester");
 
     system.GPU().Start();
     system.Renderer().Rasterizer().LoadDiskResources();

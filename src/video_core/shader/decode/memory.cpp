@@ -386,7 +386,8 @@ u32 ShaderIR::DecodeMemory(NodeBlock& bb, u32 pc) {
         break;
     }
     case OpCode::Id::RED: {
-        UNIMPLEMENTED_IF_MSG(instr.red.type != GlobalAtomicType::U32);
+        UNIMPLEMENTED_IF_MSG(instr.red.type != GlobalAtomicType::U32, "type={}",
+                             static_cast<int>(instr.red.type.Value()));
         const auto [real_address, base_address, descriptor] =
             TrackGlobalMemory(bb, instr, true, true);
         if (!real_address || !base_address) {
@@ -471,9 +472,9 @@ std::tuple<Node, Node, GlobalMemoryBase> ShaderIR::TrackGlobalMemory(NodeBlock& 
 
     const auto [base_address, index, offset] =
         TrackCbuf(addr_register, global_code, static_cast<s64>(global_code.size()));
-    ASSERT_OR_EXECUTE_MSG(base_address != nullptr,
-                          { return std::make_tuple(nullptr, nullptr, GlobalMemoryBase{}); },
-                          "Global memory tracking failed");
+    ASSERT_OR_EXECUTE_MSG(
+        base_address != nullptr, { return std::make_tuple(nullptr, nullptr, GlobalMemoryBase{}); },
+        "Global memory tracking failed");
 
     bb.push_back(Comment(fmt::format("Base address is c[0x{:x}][0x{:x}]", index, offset)));
 

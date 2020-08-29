@@ -161,7 +161,7 @@ macro(yuzu_find_packages)
     #    Cmake Pkg Prefix  Version     Conan Pkg
         "Boost             1.73        boost/1.73.0"
         "Catch2            2.13        catch2/2.13.0"
-        "fmt               7.0         fmt/7.0.1"
+        "fmt               7.0         fmt/7.0.3"
     # can't use until https://github.com/bincrafters/community/issues/1173
         #"libzip            1.5         libzip/1.5.2@bincrafters/stable"
         "lz4               1.8         lz4/1.9.2"
@@ -456,7 +456,7 @@ endif()
 # against all the src files. This should be used before making a pull request.
 # =======================================================================
 
-set(CLANG_FORMAT_POSTFIX "-6.0")
+set(CLANG_FORMAT_POSTFIX "-10")
 find_program(CLANG_FORMAT
     NAMES clang-format${CLANG_FORMAT_POSTFIX}
           clang-format

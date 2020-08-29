@@ -40,11 +40,19 @@ namespace Core::Frontend {
 struct SoftwareKeyboardParameters;
 } // namespace Core::Frontend
 
+namespace DiscordRPC {
+class DiscordInterface;
+}
+
 namespace FileSys {
 class ContentProvider;
 class ManualContentProvider;
 class VfsFilesystem;
 } // namespace FileSys
+
+namespace InputCommon {
+class InputSubsystem;
+}
 
 enum class EmulatedDirectoryTarget {
     NAND,
@@ -61,10 +69,6 @@ enum class ReinitializeKeyBehavior {
     NoWarning,
     Warning,
 };
-
-namespace DiscordRPC {
-class DiscordInterface;
-}
 
 class GMainWindow : public QMainWindow {
     Q_OBJECT
@@ -85,8 +89,6 @@ public:
     void UpdateUITheme();
     GMainWindow();
     ~GMainWindow() override;
-
-    std::unique_ptr<DiscordRPC::DiscordInterface> discord_rpc;
 
     bool DropAction(QDropEvent* event);
     void AcceptDropEvent(QDropEvent* event);
@@ -198,7 +200,8 @@ private slots:
     void OnOpenFAQ();
     /// Called whenever a user selects a game in the game list widget.
     void OnGameListLoadFile(QString game_path);
-    void OnGameListOpenFolder(GameListOpenTarget target, const std::string& game_path);
+    void OnGameListOpenFolder(u64 program_id, GameListOpenTarget target,
+                              const std::string& game_path);
     void OnTransferableShaderCacheOpenFile(u64 program_id);
     void OnGameListRemoveInstalledEntry(u64 program_id, InstalledEntryType type);
     void OnGameListRemoveFile(u64 program_id, GameListRemoveTarget target);
@@ -216,6 +219,7 @@ private slots:
     void OnMenuInstallToNAND();
     void OnMenuRecentFile();
     void OnConfigure();
+    void OnConfigurePerGame();
     void OnLoadAmiibo();
     void OnOpenYuzuFolder();
     void OnAbout();
@@ -249,8 +253,12 @@ private:
     void ShowMouseCursor();
     void OpenURL(const QUrl& url);
     void LoadTranslation();
+    void OpenPerGameConfiguration(u64 title_id, const std::string& file_name);
 
     Ui::MainWindow ui;
+
+    std::unique_ptr<DiscordRPC::DiscordInterface> discord_rpc;
+    std::shared_ptr<InputCommon::InputSubsystem> input_subsystem;
 
     GRenderWindow* render_window;
     GameList* game_list;

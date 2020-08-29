@@ -29,14 +29,14 @@ extern const Themes themes;
 
 struct GameDir {
     QString path;
-    bool deep_scan;
-    bool expanded;
+    bool deep_scan = false;
+    bool expanded = false;
     bool operator==(const GameDir& rhs) const {
         return path == rhs.path;
-    };
+    }
     bool operator!=(const GameDir& rhs) const {
         return !operator==(rhs);
-    };
+    }
 };
 
 struct Values {
@@ -87,9 +87,6 @@ struct Values {
     // logging
     bool show_console;
 
-    // Controllers
-    int profile_index;
-
     // Game List
     bool show_add_ons;
     uint32_t icon_size;
@@ -100,6 +97,7 @@ struct Values {
 };
 
 extern Values values;
+
 } // namespace UISettings
 
 Q_DECLARE_METATYPE(UISettings::GameDir*);

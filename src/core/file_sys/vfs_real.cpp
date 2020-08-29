@@ -14,6 +14,8 @@
 
 namespace FileSys {
 
+namespace FS = Common::FS;
+
 static std::string ModeFlagsToString(Mode mode) {
     std::string mode_str;
 
@@ -57,79 +59,82 @@ bool RealVfsFilesystem::IsWritable() const {
 }
 
 VfsEntryType RealVfsFilesystem::GetEntryType(std::string_view path_) const {
-    const auto path = FileUtil::SanitizePath(path_, FileUtil::DirectorySeparator::PlatformDefault);
-    if (!FileUtil::Exists(path))
+    const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
+    if (!FS::Exists(path)) {
         return VfsEntryType::None;
-    if (FileUtil::IsDirectory(path))
+    }
+    if (FS::IsDirectory(path)) {
         return VfsEntryType::Directory;
+    }
 
     return VfsEntryType::File;
 }
 
 VirtualFile RealVfsFilesystem::OpenFile(std::string_view path_, Mode perms) {
-    const auto path = FileUtil::SanitizePath(path_, FileUtil::DirectorySeparator::PlatformDefault);
-    if (cache.find(path) != cache.end()) {
-        auto weak = cache[path];
+    const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
+
+    if (const auto weak_iter = cache.find(path); weak_iter != cache.cend()) {
+        const auto& weak = weak_iter->second;
+
         if (!weak.expired()) {
             return std::shared_ptr<RealVfsFile>(new RealVfsFile(*this, weak.lock(), path, perms));
         }
     }
 
-    if (!FileUtil::Exists(path) && True(perms & Mode::WriteAppend)) {
-        FileUtil::CreateEmptyFile(path);
+    if (!FS::Exists(path) && True(perms & Mode::WriteAppend)) {
+        FS::CreateEmptyFile(path);
     }
 
-    auto backing = std::make_shared<FileUtil::IOFile>(path, ModeFlagsToString(perms).c_str());
-    cache[path] = backing;
+    auto backing = std::make_shared<FS::IOFile>(path, ModeFlagsToString(perms).c_str());
+    cache.insert_or_assign(path, backing);
 
     // Cannot use make_shared as RealVfsFile constructor is private
     return std::shared_ptr<RealVfsFile>(new RealVfsFile(*this, backing, path, perms));
 }
 
 VirtualFile RealVfsFilesystem::CreateFile(std::string_view path_, Mode perms) {
-    const auto path = FileUtil::SanitizePath(path_, FileUtil::DirectorySeparator::PlatformDefault);
-    const auto path_fwd = FileUtil::SanitizePath(path, FileUtil::DirectorySeparator::ForwardSlash);
-    if (!FileUtil::Exists(path)) {
-        FileUtil::CreateFullPath(path_fwd);
-        if (!FileUtil::CreateEmptyFile(path))
+    const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
+    const auto path_fwd = FS::SanitizePath(path, FS::DirectorySeparator::ForwardSlash);
+    if (!FS::Exists(path)) {
+        FS::CreateFullPath(path_fwd);
+        if (!FS::CreateEmptyFile(path)) {
             return nullptr;
+        }
     }
     return OpenFile(path, perms);
 }
 
 VirtualFile RealVfsFilesystem::CopyFile(std::string_view old_path_, std::string_view new_path_) {
-    const auto old_path =
-        FileUtil::SanitizePath(old_path_, FileUtil::DirectorySeparator::PlatformDefault);
-    const auto new_path =
-        FileUtil::SanitizePath(new_path_, FileUtil::DirectorySeparator::PlatformDefault);
+    const auto old_path = FS::SanitizePath(old_path_, FS::DirectorySeparator::PlatformDefault);
+    const auto new_path = FS::SanitizePath(new_path_, FS::DirectorySeparator::PlatformDefault);
 
-    if (!FileUtil::Exists(old_path) || FileUtil::Exists(new_path) ||
-        FileUtil::IsDirectory(old_path) || !FileUtil::Copy(old_path, new_path))
+    if (!FS::Exists(old_path) || FS::Exists(new_path) || FS::IsDirectory(old_path) ||
+        !FS::Copy(old_path, new_path)) {
         return nullptr;
+    }
     return OpenFile(new_path, Mode::ReadWrite);
 }
 
 VirtualFile RealVfsFilesystem::MoveFile(std::string_view old_path_, std::string_view new_path_) {
-    const auto old_path =
-        FileUtil::SanitizePath(old_path_, FileUtil::DirectorySeparator::PlatformDefault);
-    const auto new_path =
-        FileUtil::SanitizePath(new_path_, FileUtil::DirectorySeparator::PlatformDefault);
+    const auto old_path = FS::SanitizePath(old_path_, FS::DirectorySeparator::PlatformDefault);
+    const auto new_path = FS::SanitizePath(new_path_, FS::DirectorySeparator::PlatformDefault);
+    const auto cached_file_iter = cache.find(old_path);
 
-    if (cache.find(old_path) != cache.end()) {
-        auto file = cache[old_path].lock();
+    if (cached_file_iter != cache.cend()) {
+        auto file = cached_file_iter->second.lock();
 
-        if (!cache[old_path].expired()) {
+        if (!cached_file_iter->second.expired()) {
             file->Close();
         }
 
-        if (!FileUtil::Exists(old_path) || FileUtil::Exists(new_path) ||
-            FileUtil::IsDirectory(old_path) || !FileUtil::Rename(old_path, new_path)) {
+        if (!FS::Exists(old_path) || FS::Exists(new_path) || FS::IsDirectory(old_path) ||
+            !FS::Rename(old_path, new_path)) {
             return nullptr;
         }
 
         cache.erase(old_path);
         file->Open(new_path, "r+b");
-        cache[new_path] = file;
+        cache.insert_or_assign(new_path, std::move(file));
     } else {
         UNREACHABLE();
         return nullptr;
@@ -139,28 +144,33 @@ VirtualFile RealVfsFilesystem::MoveFile(std::string_view old_path_, std::string_
 }
 
 bool RealVfsFilesystem::DeleteFile(std::string_view path_) {
-    const auto path = FileUtil::SanitizePath(path_, FileUtil::DirectorySeparator::PlatformDefault);
-    if (cache.find(path) != cache.end()) {
-        if (!cache[path].expired())
-            cache[path].lock()->Close();
+    const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
+    const auto cached_iter = cache.find(path);
+
+    if (cached_iter != cache.cend()) {
+        if (!cached_iter->second.expired()) {
+            cached_iter->second.lock()->Close();
+        }
         cache.erase(path);
     }
-    return FileUtil::Delete(path);
+
+    return FS::Delete(path);
 }
 
 VirtualDir RealVfsFilesystem::OpenDirectory(std::string_view path_, Mode perms) {
-    const auto path = FileUtil::SanitizePath(path_, FileUtil::DirectorySeparator::PlatformDefault);
+    const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
     // Cannot use make_shared as RealVfsDirectory constructor is private
     return std::shared_ptr<RealVfsDirectory>(new RealVfsDirectory(*this, path, perms));
 }
 
 VirtualDir RealVfsFilesystem::CreateDirectory(std::string_view path_, Mode perms) {
-    const auto path = FileUtil::SanitizePath(path_, FileUtil::DirectorySeparator::PlatformDefault);
-    const auto path_fwd = FileUtil::SanitizePath(path, FileUtil::DirectorySeparator::ForwardSlash);
-    if (!FileUtil::Exists(path)) {
-        FileUtil::CreateFullPath(path_fwd);
-        if (!FileUtil::CreateDir(path))
+    const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
+    const auto path_fwd = FS::SanitizePath(path, FS::DirectorySeparator::ForwardSlash);
+    if (!FS::Exists(path)) {
+        FS::CreateFullPath(path_fwd);
+        if (!FS::CreateDir(path)) {
             return nullptr;
+        }
     }
     // Cannot use make_shared as RealVfsDirectory constructor is private
     return std::shared_ptr<RealVfsDirectory>(new RealVfsDirectory(*this, path, perms));
@@ -168,67 +178,75 @@ VirtualDir RealVfsFilesystem::CreateDirectory(std::string_view path_, Mode perms
 
 VirtualDir RealVfsFilesystem::CopyDirectory(std::string_view old_path_,
                                             std::string_view new_path_) {
-    const auto old_path =
-        FileUtil::SanitizePath(old_path_, FileUtil::DirectorySeparator::PlatformDefault);
-    const auto new_path =
-        FileUtil::SanitizePath(new_path_, FileUtil::DirectorySeparator::PlatformDefault);
-    if (!FileUtil::Exists(old_path) || FileUtil::Exists(new_path) ||
-        !FileUtil::IsDirectory(old_path))
+    const auto old_path = FS::SanitizePath(old_path_, FS::DirectorySeparator::PlatformDefault);
+    const auto new_path = FS::SanitizePath(new_path_, FS::DirectorySeparator::PlatformDefault);
+    if (!FS::Exists(old_path) || FS::Exists(new_path) || !FS::IsDirectory(old_path)) {
         return nullptr;
-    FileUtil::CopyDir(old_path, new_path);
+    }
+    FS::CopyDir(old_path, new_path);
     return OpenDirectory(new_path, Mode::ReadWrite);
 }
 
 VirtualDir RealVfsFilesystem::MoveDirectory(std::string_view old_path_,
                                             std::string_view new_path_) {
-    const auto old_path =
-        FileUtil::SanitizePath(old_path_, FileUtil::DirectorySeparator::PlatformDefault);
-    const auto new_path =
-        FileUtil::SanitizePath(new_path_, FileUtil::DirectorySeparator::PlatformDefault);
-    if (!FileUtil::Exists(old_path) || FileUtil::Exists(new_path) ||
-        FileUtil::IsDirectory(old_path) || !FileUtil::Rename(old_path, new_path))
+    const auto old_path = FS::SanitizePath(old_path_, FS::DirectorySeparator::PlatformDefault);
+    const auto new_path = FS::SanitizePath(new_path_, FS::DirectorySeparator::PlatformDefault);
+
+    if (!FS::Exists(old_path) || FS::Exists(new_path) || FS::IsDirectory(old_path) ||
+        !FS::Rename(old_path, new_path)) {
         return nullptr;
+    }
 
     for (auto& kv : cache) {
-        // Path in cache starts with old_path
-        if (kv.first.rfind(old_path, 0) == 0) {
-            const auto file_old_path =
-                FileUtil::SanitizePath(kv.first, FileUtil::DirectorySeparator::PlatformDefault);
-            const auto file_new_path =
-                FileUtil::SanitizePath(new_path + DIR_SEP + kv.first.substr(old_path.size()),
-                                       FileUtil::DirectorySeparator::PlatformDefault);
-            auto cached = cache[file_old_path];
-            if (!cached.expired()) {
-                auto file = cached.lock();
-                file->Open(file_new_path, "r+b");
-                cache.erase(file_old_path);
-                cache[file_new_path] = file;
-            }
+        // If the path in the cache doesn't start with old_path, then bail on this file.
+        if (kv.first.rfind(old_path, 0) != 0) {
+            continue;
         }
+
+        const auto file_old_path =
+            FS::SanitizePath(kv.first, FS::DirectorySeparator::PlatformDefault);
+        auto file_new_path = FS::SanitizePath(new_path + DIR_SEP + kv.first.substr(old_path.size()),
+                                              FS::DirectorySeparator::PlatformDefault);
+        const auto& cached = cache[file_old_path];
+
+        if (cached.expired()) {
+            continue;
+        }
+
+        auto file = cached.lock();
+        file->Open(file_new_path, "r+b");
+        cache.erase(file_old_path);
+        cache.insert_or_assign(std::move(file_new_path), std::move(file));
     }
 
     return OpenDirectory(new_path, Mode::ReadWrite);
 }
 
 bool RealVfsFilesystem::DeleteDirectory(std::string_view path_) {
-    const auto path = FileUtil::SanitizePath(path_, FileUtil::DirectorySeparator::PlatformDefault);
+    const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
+
     for (auto& kv : cache) {
-        // Path in cache starts with old_path
-        if (kv.first.rfind(path, 0) == 0) {
-            if (!cache[kv.first].expired())
-                cache[kv.first].lock()->Close();
-            cache.erase(kv.first);
+        // If the path in the cache doesn't start with path, then bail on this file.
+        if (kv.first.rfind(path, 0) != 0) {
+            continue;
         }
+
+        const auto& entry = cache[kv.first];
+        if (!entry.expired()) {
+            entry.lock()->Close();
+        }
+
+        cache.erase(kv.first);
     }
-    return FileUtil::DeleteDirRecursively(path);
+
+    return FS::DeleteDirRecursively(path);
 }
 
-RealVfsFile::RealVfsFile(RealVfsFilesystem& base_, std::shared_ptr<FileUtil::IOFile> backing_,
+RealVfsFile::RealVfsFile(RealVfsFilesystem& base_, std::shared_ptr<FS::IOFile> backing_,
                          const std::string& path_, Mode perms_)
-    : base(base_), backing(std::move(backing_)), path(path_),
-      parent_path(FileUtil::GetParentPath(path_)),
-      path_components(FileUtil::SplitPathComponents(path_)),
-      parent_components(FileUtil::SliceVector(path_components, 0, path_components.size() - 1)),
+    : base(base_), backing(std::move(backing_)), path(path_), parent_path(FS::GetParentPath(path_)),
+      path_components(FS::SplitPathComponents(path_)),
+      parent_components(FS::SliceVector(path_components, 0, path_components.size() - 1)),
       perms(perms_) {}
 
 RealVfsFile::~RealVfsFile() = default;
@@ -258,14 +276,16 @@ bool RealVfsFile::IsReadable() const {
 }
 
 std::size_t RealVfsFile::Read(u8* data, std::size_t length, std::size_t offset) const {
-    if (!backing->Seek(offset, SEEK_SET))
+    if (!backing->Seek(static_cast<s64>(offset), SEEK_SET)) {
         return 0;
+    }
     return backing->ReadBytes(data, length);
 }
 
 std::size_t RealVfsFile::Write(const u8* data, std::size_t length, std::size_t offset) {
-    if (!backing->Seek(offset, SEEK_SET))
+    if (!backing->Seek(static_cast<s64>(offset), SEEK_SET)) {
         return 0;
+    }
     return backing->WriteBytes(data, length);
 }
 
@@ -282,16 +302,18 @@ bool RealVfsFile::Close() {
 
 template <>
 std::vector<VirtualFile> RealVfsDirectory::IterateEntries<RealVfsFile, VfsFile>() const {
-    if (perms == Mode::Append)
+    if (perms == Mode::Append) {
         return {};
+    }
 
     std::vector<VirtualFile> out;
-    FileUtil::ForeachDirectoryEntry(
+    FS::ForeachDirectoryEntry(
         nullptr, path,
         [&out, this](u64* entries_out, const std::string& directory, const std::string& filename) {
             const std::string full_path = directory + DIR_SEP + filename;
-            if (!FileUtil::IsDirectory(full_path))
+            if (!FS::IsDirectory(full_path)) {
                 out.emplace_back(base.OpenFile(full_path, perms));
+            }
             return true;
         });
 
@@ -300,16 +322,18 @@ std::vector<VirtualFile> RealVfsDirectory::IterateEntries<RealVfsFile, VfsFile>(
 
 template <>
 std::vector<VirtualDir> RealVfsDirectory::IterateEntries<RealVfsDirectory, VfsDirectory>() const {
-    if (perms == Mode::Append)
+    if (perms == Mode::Append) {
         return {};
+    }
 
     std::vector<VirtualDir> out;
-    FileUtil::ForeachDirectoryEntry(
+    FS::ForeachDirectoryEntry(
         nullptr, path,
         [&out, this](u64* entries_out, const std::string& directory, const std::string& filename) {
             const std::string full_path = directory + DIR_SEP + filename;
-            if (FileUtil::IsDirectory(full_path))
+            if (FS::IsDirectory(full_path)) {
                 out.emplace_back(base.OpenDirectory(full_path, perms));
+            }
             return true;
         });
 
@@ -317,29 +341,30 @@ std::vector<VirtualDir> RealVfsDirectory::IterateEntries<RealVfsDirectory, VfsDi
 }
 
 RealVfsDirectory::RealVfsDirectory(RealVfsFilesystem& base_, const std::string& path_, Mode perms_)
-    : base(base_), path(FileUtil::RemoveTrailingSlash(path_)),
-      parent_path(FileUtil::GetParentPath(path)),
-      path_components(FileUtil::SplitPathComponents(path)),
-      parent_components(FileUtil::SliceVector(path_components, 0, path_components.size() - 1)),
+    : base(base_), path(FS::RemoveTrailingSlash(path_)), parent_path(FS::GetParentPath(path)),
+      path_components(FS::SplitPathComponents(path)),
+      parent_components(FS::SliceVector(path_components, 0, path_components.size() - 1)),
       perms(perms_) {
-    if (!FileUtil::Exists(path) && True(perms & Mode::WriteAppend)) {
-        FileUtil::CreateDir(path);
+    if (!FS::Exists(path) && True(perms & Mode::WriteAppend)) {
+        FS::CreateDir(path);
     }
 }
 
 RealVfsDirectory::~RealVfsDirectory() = default;
 
 std::shared_ptr<VfsFile> RealVfsDirectory::GetFileRelative(std::string_view path) const {
-    const auto full_path = FileUtil::SanitizePath(this->path + DIR_SEP + std::string(path));
-    if (!FileUtil::Exists(full_path) || FileUtil::IsDirectory(full_path))
+    const auto full_path = FS::SanitizePath(this->path + DIR_SEP + std::string(path));
+    if (!FS::Exists(full_path) || FS::IsDirectory(full_path)) {
         return nullptr;
+    }
     return base.OpenFile(full_path, perms);
 }
 
 std::shared_ptr<VfsDirectory> RealVfsDirectory::GetDirectoryRelative(std::string_view path) const {
-    const auto full_path = FileUtil::SanitizePath(this->path + DIR_SEP + std::string(path));
-    if (!FileUtil::Exists(full_path) || !FileUtil::IsDirectory(full_path))
+    const auto full_path = FS::SanitizePath(this->path + DIR_SEP + std::string(path));
+    if (!FS::Exists(full_path) || !FS::IsDirectory(full_path)) {
         return nullptr;
+    }
     return base.OpenDirectory(full_path, perms);
 }
 
@@ -352,17 +377,17 @@ std::shared_ptr<VfsDirectory> RealVfsDirectory::GetSubdirectory(std::string_view
 }
 
 std::shared_ptr<VfsFile> RealVfsDirectory::CreateFileRelative(std::string_view path) {
-    const auto full_path = FileUtil::SanitizePath(this->path + DIR_SEP + std::string(path));
+    const auto full_path = FS::SanitizePath(this->path + DIR_SEP + std::string(path));
     return base.CreateFile(full_path, perms);
 }
 
 std::shared_ptr<VfsDirectory> RealVfsDirectory::CreateDirectoryRelative(std::string_view path) {
-    const auto full_path = FileUtil::SanitizePath(this->path + DIR_SEP + std::string(path));
+    const auto full_path = FS::SanitizePath(this->path + DIR_SEP + std::string(path));
     return base.CreateDirectory(full_path, perms);
 }
 
 bool RealVfsDirectory::DeleteSubdirectoryRecursive(std::string_view name) {
-    auto full_path = FileUtil::SanitizePath(this->path + DIR_SEP + std::string(name));
+    const auto full_path = FS::SanitizePath(this->path + DIR_SEP + std::string(name));
     return base.DeleteDirectory(full_path);
 }
 
@@ -387,8 +412,9 @@ std::string RealVfsDirectory::GetName() const {
 }
 
 std::shared_ptr<VfsDirectory> RealVfsDirectory::GetParentDirectory() const {
-    if (path_components.size() <= 1)
+    if (path_components.size() <= 1) {
         return nullptr;
+    }
 
     return base.OpenDirectory(parent_path, perms);
 }
@@ -425,16 +451,17 @@ std::string RealVfsDirectory::GetFullPath() const {
 }
 
 std::map<std::string, VfsEntryType, std::less<>> RealVfsDirectory::GetEntries() const {
-    if (perms == Mode::Append)
+    if (perms == Mode::Append) {
         return {};
+    }
 
     std::map<std::string, VfsEntryType, std::less<>> out;
-    FileUtil::ForeachDirectoryEntry(
+    FS::ForeachDirectoryEntry(
         nullptr, path,
         [&out](u64* entries_out, const std::string& directory, const std::string& filename) {
             const std::string full_path = directory + DIR_SEP + filename;
-            out.emplace(filename, FileUtil::IsDirectory(full_path) ? VfsEntryType::Directory
-                                                                   : VfsEntryType::File);
+            out.emplace(filename,
+                        FS::IsDirectory(full_path) ? VfsEntryType::Directory : VfsEntryType::File);
             return true;
         });
 
