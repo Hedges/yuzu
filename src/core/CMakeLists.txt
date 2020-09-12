@@ -126,6 +126,8 @@ add_library(core STATIC
     file_sys/vfs_vector.h
     file_sys/xts_archive.cpp
     file_sys/xts_archive.h
+    frontend/applets/controller.cpp
+    frontend/applets/controller.h
     frontend/applets/error.cpp
     frontend/applets/error.h
     frontend/applets/general_frontend.cpp
@@ -244,6 +246,8 @@ add_library(core STATIC
     hle/service/am/applet_oe.h
     hle/service/am/applets/applets.cpp
     hle/service/am/applets/applets.h
+    hle/service/am/applets/controller.cpp
+    hle/service/am/applets/controller.h
     hle/service/am/applets/error.cpp
     hle/service/am/applets/error.h
     hle/service/am/applets/general_backend.cpp
@@ -491,6 +495,7 @@ add_library(core STATIC
     hle/service/sm/controller.h
     hle/service/sm/sm.cpp
     hle/service/sm/sm.h
+    hle/service/sockets/blocking_worker.h
     hle/service/sockets/bsd.cpp
     hle/service/sockets/bsd.h
     hle/service/sockets/ethc.cpp
@@ -501,6 +506,8 @@ add_library(core STATIC
     hle/service/sockets/sfdnsres.h
     hle/service/sockets/sockets.cpp
     hle/service/sockets/sockets.h
+    hle/service/sockets/sockets_translate.cpp
+    hle/service/sockets/sockets_translate.h
     hle/service/spl/csrng.cpp
     hle/service/spl/csrng.h
     hle/service/spl/module.cpp
