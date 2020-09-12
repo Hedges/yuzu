@@ -546,7 +546,7 @@ std::pair<s32, Errno> BSD::AcceptImpl(s32 fd, std::vector<u8>& write_buffer) {
     new_descriptor.socket = std::move(result.socket);
     new_descriptor.is_connection_based = descriptor.is_connection_based;
 
-    ASSERT(write_buffer.size() == sizeof(SockAddrIn));
+    //ASSERT(write_buffer.size() == sizeof(SockAddrIn));
     const SockAddrIn guest_addr_in = Translate(result.sockaddr_in);
     std::memcpy(write_buffer.data(), &guest_addr_in, sizeof(guest_addr_in));
 
@@ -651,7 +651,7 @@ Errno BSD::SetSockOptImpl(s32 fd, u32 level, OptName optname, size_t optlen, con
     Network::Socket* const socket = file_descriptors[fd]->socket.get();
 
     if (optname == OptName::LINGER) {
-        ASSERT(optlen == sizeof(Linger));
+        //ASSERT(optlen == sizeof(Linger));
         Linger linger;
         std::memcpy(&linger, optval, sizeof(linger));
         ASSERT(linger.onoff == 0 || linger.onoff == 1);

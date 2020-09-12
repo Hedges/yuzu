@@ -82,7 +82,7 @@ sockaddr TranslateFromSockAddrIn(SockAddrIn input) {
 }
 
 LINGER MakeLinger(bool enable, u32 linger_value) {
-    ASSERT(linger_value <= std::numeric_limits<u_short>::max());
+    //ASSERT(linger_value <= std::numeric_limits<u_short>::max());
 
     LINGER value;
     value.l_onoff = enable ? 1 : 0;
