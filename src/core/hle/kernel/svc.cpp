@@ -8,6 +8,10 @@
 #include <mutex>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/fiber.h"
@@ -688,6 +692,9 @@ static void OutputDebugString([[maybe_unused]] Core::System& system, VAddr addre
 
     std::string str(len, '\0');
     system.Memory().ReadBlock(address, str.data(), str.size());
+#ifdef _WIN32
+    ::OutputDebugStringA((str + "\r\n").c_str());
+#endif
     LOG_DEBUG(Debug_Emulated, "{}", str);
 }
 
