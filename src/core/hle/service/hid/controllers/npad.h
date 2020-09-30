@@ -32,6 +32,10 @@ public:
     // When the controller is requesting an update for the shared memory
     void OnUpdate(const Core::Timing::CoreTiming& core_timing, u8* data, std::size_t size) override;
 
+    // When the controller is requesting a motion update for the shared memory
+    void OnMotionUpdate(const Core::Timing::CoreTiming& core_timing, u8* data,
+                        std::size_t size) override;
+
     // Called when input devices should be loaded
     void OnLoadInputDevices() override;
 
@@ -121,7 +125,7 @@ public:
 
     void SetNpadMode(u32 npad_id, NPadAssignments assignment_mode);
 
-    void VibrateController(const std::vector<u32>& controller_ids,
+    void VibrateController(const std::vector<u32>& controllers,
                            const std::vector<Vibration>& vibrations);
 
     Vibration GetLastVibration() const;
