@@ -18,15 +18,15 @@
 
 namespace {
 
-constexpr std::array<std::array<bool, 4>, 8> led_patterns = {{
-    {1, 0, 0, 0},
-    {1, 1, 0, 0},
-    {1, 1, 1, 0},
-    {1, 1, 1, 1},
-    {1, 0, 0, 1},
-    {1, 0, 1, 0},
-    {1, 0, 1, 1},
-    {0, 1, 1, 0},
+constexpr std::array<std::array<bool, 4>, 8> led_patterns{{
+    {true, false, false, false},
+    {true, true, false, false},
+    {true, true, true, false},
+    {true, true, true, true},
+    {true, false, false, true},
+    {true, false, true, false},
+    {true, false, true, true},
+    {false, true, true, false},
 }};
 
 void UpdateController(Settings::ControllerType controller_type, std::size_t npad_index,
@@ -589,13 +589,13 @@ QtControllerSelector::QtControllerSelector(GMainWindow& parent) {
 QtControllerSelector::~QtControllerSelector() = default;
 
 void QtControllerSelector::ReconfigureControllers(
-    std::function<void()> callback, Core::Frontend::ControllerParameters parameters) const {
+    std::function<void()> callback, const Core::Frontend::ControllerParameters& parameters) const {
     this->callback = std::move(callback);
     emit MainWindowReconfigureControllers(parameters);
 }
 
 void QtControllerSelector::MainWindowReconfigureFinished() {
     // Acquire the HLE mutex
-    std::lock_guard<std::recursive_mutex> lock(HLE::g_hle_lock);
+    std::lock_guard lock(HLE::g_hle_lock);
     callback();
 }
