@@ -9,7 +9,7 @@
 #include "video_core/memory_manager.h"
 
 namespace Tegra::Decoder {
-
+namespace {
 // Default compressed header probabilities once frame context resets
 constexpr Vp9EntropyProbs default_probs{
     .y_mode_prob{
@@ -170,6 +170,89 @@ constexpr Vp9EntropyProbs default_probs{
     .high_precision{128, 128},
 };
 
+constexpr std::array<s32, 256> norm_lut{
+    0, 7, 6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+};
+
+constexpr std::array<s32, 254> map_lut{
+    20,  21,  22,  23,  24,  25,  0,   26,  27,  28,  29,  30,  31,  32,  33,  34,  35,  36,  37,
+    1,   38,  39,  40,  41,  42,  43,  44,  45,  46,  47,  48,  49,  2,   50,  51,  52,  53,  54,
+    55,  56,  57,  58,  59,  60,  61,  3,   62,  63,  64,  65,  66,  67,  68,  69,  70,  71,  72,
+    73,  4,   74,  75,  76,  77,  78,  79,  80,  81,  82,  83,  84,  85,  5,   86,  87,  88,  89,
+    90,  91,  92,  93,  94,  95,  96,  97,  6,   98,  99,  100, 101, 102, 103, 104, 105, 106, 107,
+    108, 109, 7,   110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 8,   122, 123, 124,
+    125, 126, 127, 128, 129, 130, 131, 132, 133, 9,   134, 135, 136, 137, 138, 139, 140, 141, 142,
+    143, 144, 145, 10,  146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 11,  158, 159,
+    160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 12,  170, 171, 172, 173, 174, 175, 176, 177,
+    178, 179, 180, 181, 13,  182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 14,  194,
+    195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 15,  206, 207, 208, 209, 210, 211, 212,
+    213, 214, 215, 216, 217, 16,  218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 17,
+    230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 18,  242, 243, 244, 245, 246, 247,
+    248, 249, 250, 251, 252, 253, 19,
+};
+
+// 6.2.14 Tile size calculation
+
+[[nodiscard]] s32 CalcMinLog2TileCols(s32 frame_width) {
+    const s32 sb64_cols = (frame_width + 63) / 64;
+    s32 min_log2 = 0;
+
+    while ((64 << min_log2) < sb64_cols) {
+        min_log2++;
+    }
+
+    return min_log2;
+}
+
+[[nodiscard]] s32 CalcMaxLog2TileCols(s32 frame_width) {
+    const s32 sb64_cols = (frame_width + 63) / 64;
+    s32 max_log2 = 1;
+
+    while ((sb64_cols >> max_log2) >= 4) {
+        max_log2++;
+    }
+
+    return max_log2 - 1;
+}
+
+// Recenters probability. Based on section 6.3.6 of VP9 Specification
+[[nodiscard]] s32 RecenterNonNeg(s32 new_prob, s32 old_prob) {
+    if (new_prob > old_prob * 2) {
+        return new_prob;
+    }
+
+    if (new_prob >= old_prob) {
+        return (new_prob - old_prob) * 2;
+    }
+
+    return (old_prob - new_prob) * 2 - 1;
+}
+
+// Adjusts old_prob depending on new_prob. Based on section 6.3.5 of VP9 Specification
+[[nodiscard]] s32 RemapProbability(s32 new_prob, s32 old_prob) {
+    new_prob--;
+    old_prob--;
+
+    std::size_t index{};
+
+    if (old_prob * 2 <= 0xff) {
+        index = static_cast<std::size_t>(std::max(0, RecenterNonNeg(new_prob, old_prob) - 1));
+    } else {
+        index = static_cast<std::size_t>(
+            std::max(0, RecenterNonNeg(0xff - 1 - new_prob, 0xff - 1 - old_prob) - 1));
+    }
+
+    return map_lut[index];
+}
+} // Anonymous namespace
+
 VP9::VP9(GPU& gpu) : gpu(gpu) {}
 
 VP9::~VP9() = default;
@@ -205,32 +288,6 @@ void VP9::WriteProbabilityDelta(VpxRangeEncoder& writer, u8 new_prob, u8 old_pro
     const int delta = RemapProbability(new_prob, old_prob);
 
     EncodeTermSubExp(writer, delta);
-}
-
-s32 VP9::RemapProbability(s32 new_prob, s32 old_prob) {
-    new_prob--;
-    old_prob--;
-
-    std::size_t index{};
-
-    if (old_prob * 2 <= 0xff) {
-        index = static_cast<std::size_t>(std::max(0, RecenterNonNeg(new_prob, old_prob) - 1));
-    } else {
-        index = static_cast<std::size_t>(
-            std::max(0, RecenterNonNeg(0xff - 1 - new_prob, 0xff - 1 - old_prob) - 1));
-    }
-
-    return map_lut[index];
-}
-
-s32 VP9::RecenterNonNeg(s32 new_prob, s32 old_prob) {
-    if (new_prob > old_prob * 2) {
-        return new_prob;
-    } else if (new_prob >= old_prob) {
-        return (new_prob - old_prob) * 2;
-    } else {
-        return (old_prob - new_prob) * 2 - 1;
-    }
 }
 
 void VP9::EncodeTermSubExp(VpxRangeEncoder& writer, s32 value) {
@@ -332,28 +389,6 @@ void VP9::WriteMvProbabilityUpdate(VpxRangeEncoder& writer, u8 new_prob, u8 old_
     }
 }
 
-s32 VP9::CalcMinLog2TileCols(s32 frame_width) {
-    const s32 sb64_cols = (frame_width + 63) / 64;
-    s32 min_log2 = 0;
-
-    while ((64 << min_log2) < sb64_cols) {
-        min_log2++;
-    }
-
-    return min_log2;
-}
-
-s32 VP9::CalcMaxLog2TileCols(s32 frameWidth) {
-    const s32 sb64_cols = (frameWidth + 63) / 64;
-    s32 max_log2 = 1;
-
-    while ((sb64_cols >> max_log2) >= 4) {
-        max_log2++;
-    }
-
-    return max_log2 - 1;
-}
-
 Vp9PictureInfo VP9::GetVp9PictureInfo(const NvdecCommon::NvdecRegisters& state) {
     PictureInfo picture_info{};
     gpu.MemoryManager().ReadBlock(state.picture_info_offset, &picture_info, sizeof(PictureInfo));
@@ -379,14 +414,14 @@ Vp9FrameContainer VP9::GetCurrentFrame(const NvdecCommon::NvdecRegisters& state)
     Vp9FrameContainer frame{};
     {
         gpu.SyncGuestHost();
-        frame.info = std::move(GetVp9PictureInfo(state));
+        frame.info = GetVp9PictureInfo(state);
 
         frame.bit_stream.resize(frame.info.bitstream_size);
         gpu.MemoryManager().ReadBlock(state.frame_bitstream_offset, frame.bit_stream.data(),
                                       frame.info.bitstream_size);
     }
     // Buffer two frames, saving the last show frame info
-    if (next_next_frame.bit_stream.size() != 0) {
+    if (!next_next_frame.bit_stream.empty()) {
         Vp9FrameContainer temp{
             .info = frame.info,
             .bit_stream = frame.bit_stream,
@@ -396,15 +431,15 @@ Vp9FrameContainer VP9::GetCurrentFrame(const NvdecCommon::NvdecRegisters& state)
         frame.bit_stream = next_next_frame.bit_stream;
         next_next_frame = std::move(temp);
 
-        if (next_frame.bit_stream.size() != 0) {
-            Vp9FrameContainer temp{
+        if (!next_frame.bit_stream.empty()) {
+            Vp9FrameContainer temp2{
                 .info = frame.info,
                 .bit_stream = frame.bit_stream,
             };
             next_frame.info.show_frame = frame.info.last_frame_shown;
             frame.info = next_frame.info;
             frame.bit_stream = next_frame.bit_stream;
-            next_frame = std::move(temp);
+            next_frame = std::move(temp2);
         } else {
             next_frame.info = frame.info;
             next_frame.bit_stream = frame.bit_stream;
@@ -605,12 +640,6 @@ std::vector<u8> VP9::ComposeCompressedHeader() {
 
     writer.End();
     return writer.GetBuffer();
-
-    const auto writer_bytearray = writer.GetBuffer();
-
-    std::vector<u8> compressed_header(writer_bytearray.size());
-    std::memcpy(compressed_header.data(), writer_bytearray.data(), writer_bytearray.size());
-    return compressed_header;
 }
 
 VpxBitStreamWriter VP9::ComposeUncompressedHeader() {
@@ -648,7 +677,6 @@ VpxBitStreamWriter VP9::ComposeUncompressedHeader() {
         current_frame_info.intra_only = true;
 
     } else {
-        std::array<s32, 3> ref_frame_index;
 
         if (!current_frame_info.show_frame) {
             uncomp_writer.WriteBit(current_frame_info.intra_only);
@@ -663,9 +691,9 @@ VpxBitStreamWriter VP9::ComposeUncompressedHeader() {
         }
 
         // Last, Golden, Altref frames
-        ref_frame_index = std::array<s32, 3>{0, 1, 2};
+        std::array<s32, 3> ref_frame_index{0, 1, 2};
 
-        // set when next frame is hidden
+        // Set when next frame is hidden
         // altref and golden references are swapped
         if (swap_next_golden) {
             ref_frame_index = std::array<s32, 3>{0, 2, 1};
@@ -754,17 +782,19 @@ VpxBitStreamWriter VP9::ComposeUncompressedHeader() {
         for (std::size_t index = 0; index < current_frame_info.ref_deltas.size(); index++) {
             const s8 old_deltas = loop_filter_ref_deltas[index];
             const s8 new_deltas = current_frame_info.ref_deltas[index];
+            const bool differing_delta = old_deltas != new_deltas;
 
-            loop_filter_delta_update |=
-                (update_loop_filter_ref_deltas[index] = old_deltas != new_deltas);
+            update_loop_filter_ref_deltas[index] = differing_delta;
+            loop_filter_delta_update |= differing_delta;
         }
 
         for (std::size_t index = 0; index < current_frame_info.mode_deltas.size(); index++) {
             const s8 old_deltas = loop_filter_mode_deltas[index];
             const s8 new_deltas = current_frame_info.mode_deltas[index];
+            const bool differing_delta = old_deltas != new_deltas;
 
-            loop_filter_delta_update |=
-                (update_loop_filter_mode_deltas[index] = old_deltas != new_deltas);
+            update_loop_filter_mode_deltas[index] = differing_delta;
+            loop_filter_delta_update |= differing_delta;
         }
 
         uncomp_writer.WriteBit(loop_filter_delta_update);
@@ -824,12 +854,12 @@ VpxBitStreamWriter VP9::ComposeUncompressedHeader() {
     return uncomp_writer;
 }
 
-std::vector<u8>& VP9::ComposeFrameHeader(NvdecCommon::NvdecRegisters& state) {
+const std::vector<u8>& VP9::ComposeFrameHeader(NvdecCommon::NvdecRegisters& state) {
     std::vector<u8> bitstream;
     {
         Vp9FrameContainer curr_frame = GetCurrentFrame(state);
         current_frame_info = curr_frame.info;
-        bitstream = curr_frame.bit_stream;
+        bitstream = std::move(curr_frame.bit_stream);
     }
 
     // The uncompressed header routine sets PrevProb parameters needed for the compressed header
