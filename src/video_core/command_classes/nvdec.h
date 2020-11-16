@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <memory>
 #include <vector>
-#include "common/common_funcs.h"
 #include "common/common_types.h"
 #include "video_core/command_classes/codecs/codec.h"
 
@@ -23,17 +23,17 @@ public:
     ~Nvdec();
 
     /// Writes the method into the state, Invoke Execute() if encountered
-    void ProcessMethod(Nvdec::Method method, const std::vector<u32>& arguments);
+    void ProcessMethod(Method method, const std::vector<u32>& arguments);
 
     /// Return most recently decoded frame
-    AVFrame* GetFrame();
-    const AVFrame* GetFrame() const;
+    [[nodiscard]] AVFrame* GetFrame();
+    [[nodiscard]] const AVFrame* GetFrame() const;
 
 private:
     /// Invoke codec to decode a frame
     void Execute();
 
     GPU& gpu;
-    std::unique_ptr<Tegra::Codec> codec;
+    std::unique_ptr<Codec> codec;
 };
 } // namespace Tegra

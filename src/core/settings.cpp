@@ -14,7 +14,7 @@
 namespace Settings {
 
 Values values = {};
-bool configuring_global = true;
+static bool configuring_global = true;
 
 std::string GetTimeZoneString() {
     static constexpr std::array timezones{
@@ -56,6 +56,7 @@ void LogSettings() {
     log_setting("System_RegionIndex", values.region_index.GetValue());
     log_setting("System_TimeZoneIndex", values.time_zone_index.GetValue());
     log_setting("Core_UseMultiCore", values.use_multi_core.GetValue());
+    log_setting("CPU_Accuracy", values.cpu_accuracy);
     log_setting("Renderer_UseResolutionFactor", values.resolution_factor.GetValue());
     log_setting("Renderer_UseFrameLimit", values.use_frame_limit.GetValue());
     log_setting("Renderer_FrameLimit", values.frame_limit.GetValue());
@@ -81,11 +82,12 @@ void LogSettings() {
     log_setting("Services_BCATBoxcatLocal", values.bcat_boxcat_local);
 }
 
-float Volume() {
-    if (values.audio_muted) {
-        return 0.0f;
-    }
-    return values.volume.GetValue();
+bool IsConfiguringGlobal() {
+    return configuring_global;
+}
+
+void SetConfiguringGlobal(bool is_global) {
+    configuring_global = is_global;
 }
 
 bool IsGPULevelExtreme() {
@@ -95,6 +97,13 @@ bool IsGPULevelExtreme() {
 bool IsGPULevelHigh() {
     return values.gpu_accuracy.GetValue() == GPUAccuracy::Extreme ||
            values.gpu_accuracy.GetValue() == GPUAccuracy::High;
+}
+
+float Volume() {
+    if (values.audio_muted) {
+        return 0.0f;
+    }
+    return values.volume.GetValue();
 }
 
 void RestoreGlobalState() {

@@ -14,7 +14,8 @@ namespace Service::Nvidia::Devices {
 
 class nvhost_ctrl final : public nvdevice {
 public:
-    explicit nvhost_ctrl(Core::System& system, EventInterface& events_interface);
+    explicit nvhost_ctrl(Core::System& system, EventInterface& events_interface,
+                         SyncpointManager& syncpoint_manager);
     ~nvhost_ctrl() override;
 
     u32 ioctl(Ioctl command, const std::vector<u8>& input, const std::vector<u8>& input2,
@@ -31,7 +32,7 @@ private:
         IocSyncptWaitexCommand = 0xC0100019,
         IocSyncptReadMaxCommand = 0xC008001A,
         IocGetConfigCommand = 0xC183001B,
-        IocCtrlEventSignalCommand = 0xC004001C,
+        IocCtrlClearEventWaitCommand = 0xC004001C,
         IocCtrlEventWaitCommand = 0xC010001D,
         IocCtrlEventWaitAsyncCommand = 0xC010001E,
         IocCtrlEventRegisterCommand = 0xC004001F,
@@ -94,7 +95,7 @@ private:
     static_assert(sizeof(IocGetConfigParams) == 387, "IocGetConfigParams is incorrect size");
 
     struct IocCtrlEventSignalParams {
-        u32_le user_event_id;
+        u32_le event_id;
     };
     static_assert(sizeof(IocCtrlEventSignalParams) == 4,
                   "IocCtrlEventSignalParams is incorrect size");
@@ -142,9 +143,10 @@ private:
 
     u32 IocCtrlEventUnregister(const std::vector<u8>& input, std::vector<u8>& output);
 
-    u32 IocCtrlEventSignal(const std::vector<u8>& input, std::vector<u8>& output);
+    u32 IocCtrlClearEventWait(const std::vector<u8>& input, std::vector<u8>& output);
 
     EventInterface& events_interface;
+    SyncpointManager& syncpoint_manager;
 };
 
 } // namespace Service::Nvidia::Devices

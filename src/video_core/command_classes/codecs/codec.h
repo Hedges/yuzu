@@ -5,8 +5,6 @@
 #pragma once
 
 #include <memory>
-#include <vector>
-#include "common/common_funcs.h"
 #include "common/common_types.h"
 #include "video_core/command_classes/nvdec_common.h"
 
@@ -44,11 +42,11 @@ public:
     void Decode();
 
     /// Returns most recently decoded frame
-    AVFrame* GetCurrentFrame();
-    const AVFrame* GetCurrentFrame() const;
+    [[nodiscard]] AVFrame* GetCurrentFrame();
+    [[nodiscard]] const AVFrame* GetCurrentFrame() const;
 
     /// Returns the value of current_codec
-    NvdecCommon::VideoCodec GetCurrentCodec() const;
+    [[nodiscard]] NvdecCommon::VideoCodec GetCurrentCodec() const;
 
 private:
     bool initialized{};

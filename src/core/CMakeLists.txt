@@ -13,8 +13,6 @@ add_library(core STATIC
     arm/dynarmic/arm_exclusive_monitor.h
     arm/exclusive_monitor.cpp
     arm/exclusive_monitor.h
-    arm/unicorn/arm_unicorn.cpp
-    arm/unicorn/arm_unicorn.h
     constants.cpp
     constants.h
     core.cpp
@@ -454,6 +452,8 @@ add_library(core STATIC
     hle/service/nvdrv/nvdrv.h
     hle/service/nvdrv/nvmemp.cpp
     hle/service/nvdrv/nvmemp.h
+    hle/service/nvdrv/syncpoint_manager.cpp
+    hle/service/nvdrv/syncpoint_manager.h
     hle/service/nvflinger/buffer_queue.cpp
     hle/service/nvflinger/buffer_queue.h
     hle/service/nvflinger/nvflinger.cpp
@@ -644,7 +644,7 @@ endif()
 create_target_directory_groups(core)
 
 target_link_libraries(core PUBLIC common PRIVATE audio_core video_core)
-target_link_libraries(core PUBLIC Boost::boost PRIVATE fmt::fmt nlohmann_json::nlohmann_json mbedtls opus unicorn zip)
+target_link_libraries(core PUBLIC Boost::boost PRIVATE fmt::fmt nlohmann_json::nlohmann_json mbedtls opus zip)
 
 if (YUZU_ENABLE_BOXCAT)
     target_compile_definitions(core PRIVATE -DYUZU_ENABLE_BOXCAT)
