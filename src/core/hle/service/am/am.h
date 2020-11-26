@@ -121,8 +121,7 @@ public:
 
 class ISelfController final : public ServiceFramework<ISelfController> {
 public:
-    explicit ISelfController(Core::System& system_,
-                             std::shared_ptr<NVFlinger::NVFlinger> nvflinger_);
+    explicit ISelfController(Core::System& system_, NVFlinger::NVFlinger& nvflinger_);
     ~ISelfController() override;
 
 private:
@@ -156,7 +155,7 @@ private:
     };
 
     Core::System& system;
-    std::shared_ptr<NVFlinger::NVFlinger> nvflinger;
+    NVFlinger::NVFlinger& nvflinger;
     Kernel::EventPair launchable_event;
     Kernel::EventPair accumulated_suspended_tick_changed_event;
 
@@ -288,6 +287,9 @@ private:
     void SetApplicationCopyrightVisibility(Kernel::HLERequestContext& ctx);
     void QueryApplicationPlayStatistics(Kernel::HLERequestContext& ctx);
     void QueryApplicationPlayStatisticsByUid(Kernel::HLERequestContext& ctx);
+    void ExecuteProgram(Kernel::HLERequestContext& ctx);
+    void ClearUserChannel(Kernel::HLERequestContext& ctx);
+    void UnpopToUserChannel(Kernel::HLERequestContext& ctx);
     void GetPreviousProgramIndex(Kernel::HLERequestContext& ctx);
     void GetGpuErrorDetectedSystemEvent(Kernel::HLERequestContext& ctx);
     void GetFriendInvitationStorageChannelEvent(Kernel::HLERequestContext& ctx);
@@ -332,7 +334,7 @@ public:
 };
 
 /// Registers all AM services with the specified service manager.
-void InstallInterfaces(SM::ServiceManager& service_manager,
-                       std::shared_ptr<NVFlinger::NVFlinger> nvflinger, Core::System& system);
+void InstallInterfaces(SM::ServiceManager& service_manager, NVFlinger::NVFlinger& nvflinger,
+                       Core::System& system);
 
 } // namespace Service::AM

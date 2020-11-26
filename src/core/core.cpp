@@ -145,7 +145,7 @@ struct System::Impl {
     }
 
     ResultStatus Init(System& system, Frontend::EmuWindow& emu_window) {
-        LOG_DEBUG(HW_Memory, "initialized OK");
+        LOG_DEBUG(Core, "initialized OK");
 
         device_memory = std::make_unique<Core::DeviceMemory>();
 
@@ -187,7 +187,7 @@ struct System::Impl {
 
         service_manager = std::make_shared<Service::SM::ServiceManager>(kernel);
 
-        Service::Init(service_manager, system);
+        services = std::make_unique<Service::Services>(service_manager, system);
         GDBStub::DeferStart();
 
         interrupt_manager = std::make_unique<Core::Hardware::InterruptManager>(system);
@@ -208,9 +208,11 @@ struct System::Impl {
         return ResultStatus::Success;
     }
 
-    ResultStatus Load(System& system, Frontend::EmuWindow& emu_window,
-                      const std::string& filepath) {
-        app_loader = Loader::GetLoader(GetGameFileFromPath(virtual_filesystem, filepath));
+    ResultStatus Load(System& system, Frontend::EmuWindow& emu_window, const std::string& filepath,
+                      std::size_t program_index) {
+        app_loader = Loader::GetLoader(system, GetGameFileFromPath(virtual_filesystem, filepath),
+                                       program_index);
+
         if (!app_loader) {
             LOG_CRITICAL(Core, "Failed to obtain loader for {}!", filepath);
             return ResultStatus::ErrorGetLoader;
@@ -224,7 +226,7 @@ struct System::Impl {
             return init_result;
         }
 
-        telemetry_session->AddInitialInfo(*app_loader);
+        telemetry_session->AddInitialInfo(*app_loader, fs_controller, *content_provider);
         auto main_process =
             Kernel::Process::Create(system, "main", Kernel::Process::ProcessType::Userland);
         const auto [load_result, load_parameters] = app_loader->Load(*main_process, system);
@@ -296,7 +298,7 @@ struct System::Impl {
 
         // Shutdown emulation session
         GDBStub::Shutdown();
-        Service::Shutdown();
+        services.reset();
         service_manager.reset();
         cheat_engine.reset();
         telemetry_session.reset();
@@ -306,8 +308,8 @@ struct System::Impl {
         cpu_manager.Shutdown();
 
         // Shutdown kernel and core timing
-        kernel.Shutdown();
         core_timing.Shutdown();
+        kernel.Shutdown();
 
         // Close app loader
         app_loader.reset();
@@ -338,7 +340,7 @@ struct System::Impl {
         Service::Glue::ApplicationLaunchProperty launch{};
         launch.title_id = process.GetTitleID();
 
-        FileSys::PatchManager pm{launch.title_id};
+        FileSys::PatchManager pm{launch.title_id, fs_controller, *content_provider};
         launch.version = pm.GetGameVersion().value_or(0);
 
         // TODO(DarkLordZach): When FSController/Game Card Support is added, if
@@ -398,6 +400,9 @@ struct System::Impl {
     /// Service manager
     std::shared_ptr<Service::SM::ServiceManager> service_manager;
 
+    /// Services
+    std::unique_ptr<Service::Services> services;
+
     /// Telemetry session for this emulation session
     std::unique_ptr<Core::TelemetrySession> telemetry_session;
 
@@ -412,6 +417,8 @@ struct System::Impl {
 
     bool is_multicore{};
     bool is_async_gpu{};
+
+    ExecuteProgramCallback execute_program_callback;
 
     std::array<u64, Core::Hardware::NUM_CPU_CORES> dynarmic_ticks{};
     std::array<MicroProfileToken, Core::Hardware::NUM_CPU_CORES> microprofile_dynarmic{};
@@ -444,8 +451,13 @@ void System::InvalidateCpuInstructionCaches() {
     impl->kernel.InvalidateAllInstructionCaches();
 }
 
-System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::string& filepath) {
-    return impl->Load(*this, emu_window, filepath);
+void System::Shutdown() {
+    impl->Shutdown();
+}
+
+System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::string& filepath,
+                                  std::size_t program_index) {
+    return impl->Load(*this, emu_window, filepath, program_index);
 }
 
 bool System::IsPoweredOn() const {
@@ -632,7 +644,11 @@ const std::string& System::GetStatusDetails() const {
     return impl->status_details;
 }
 
-Loader::AppLoader& System::GetAppLoader() const {
+Loader::AppLoader& System::GetAppLoader() {
+    return *impl->app_loader;
+}
+
+const Loader::AppLoader& System::GetAppLoader() const {
     return *impl->app_loader;
 }
 
@@ -748,14 +764,6 @@ const System::CurrentBuildProcessID& System::GetCurrentProcessBuildID() const {
     return impl->build_id;
 }
 
-System::ResultStatus System::Init(Frontend::EmuWindow& emu_window) {
-    return impl->Init(*this, emu_window);
-}
-
-void System::Shutdown() {
-    impl->Shutdown();
-}
-
 Service::SM::ServiceManager& System::ServiceManager() {
     return *impl->service_manager;
 }
@@ -784,6 +792,18 @@ void System::ExitDynarmicProfile() {
 
 bool System::IsMulticore() const {
     return impl->is_multicore;
+}
+
+void System::RegisterExecuteProgramCallback(ExecuteProgramCallback&& callback) {
+    impl->execute_program_callback = std::move(callback);
+}
+
+void System::ExecuteProgram(std::size_t program_index) {
+    if (impl->execute_program_callback) {
+        impl->execute_program_callback(program_index);
+    } else {
+        LOG_CRITICAL(Core, "execute_program_callback must be initialized by the frontend");
+    }
 }
 
 } // namespace Core

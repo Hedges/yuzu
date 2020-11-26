@@ -31,6 +31,9 @@ add_library(input_common STATIC
 
 if (MSVC)
     target_compile_options(input_common PRIVATE
+        /W4
+        /WX
+
         # 'expression' : signed/unsigned mismatch
         /we4018
         # 'argument' : conversion from 'type1' to 'type2', possible loss of data (floating-point)
@@ -46,14 +49,15 @@ if (MSVC)
     )
 else()
     target_compile_options(input_common PRIVATE
+        -Werror
         -Werror=conversion
         -Werror=ignored-qualifiers
         -Werror=implicit-fallthrough
         -Werror=reorder
         -Werror=shadow
         -Werror=sign-compare
-        -Werror=unused-but-set-parameter
-        -Werror=unused-but-set-variable
+        $<$<CXX_COMPILER_ID:GNU>:-Werror=unused-but-set-parameter>
+        $<$<CXX_COMPILER_ID:GNU>:-Werror=unused-but-set-variable>
         -Werror=unused-variable
     )
 endif()

@@ -978,7 +978,7 @@ void GMainWindow::AllowOSSleep() {
 #endif
 }
 
-bool GMainWindow::LoadROM(const QString& filename) {
+bool GMainWindow::LoadROM(const QString& filename, std::size_t program_index) {
     // Shutdown previous session if the emu thread is still active...
     if (emu_thread != nullptr)
         ShutdownGame();
@@ -1003,7 +1003,8 @@ bool GMainWindow::LoadROM(const QString& filename) {
 
     system.RegisterHostThread();
 
-    const Core::System::ResultStatus result{system.Load(*render_window, filename.toStdString())};
+    const Core::System::ResultStatus result{
+        system.Load(*render_window, filename.toStdString(), program_index)};
 
     const auto drd_callout =
         (UISettings::values.callout_flags & static_cast<u32>(CalloutFlag::DRDDeprecation)) == 0;
@@ -1085,14 +1086,18 @@ void GMainWindow::SelectAndSetCurrentUser() {
     Settings::values.current_user = dialog.GetIndex();
 }
 
-void GMainWindow::BootGame(const QString& filename) {
+void GMainWindow::BootGame(const QString& filename, std::size_t program_index) {
     LOG_INFO(Frontend, "yuzu starting...");
     StoreRecentFile(filename); // Put the filename on top of the list
 
     u64 title_id{0};
 
+    last_filename_booted = filename;
+
+    auto& system = Core::System::GetInstance();
     const auto v_file = Core::GetGameFileFromPath(vfs, filename.toUtf8().constData());
-    const auto loader = Loader::GetLoader(v_file);
+    const auto loader = Loader::GetLoader(system, v_file, program_index);
+
     if (!(loader == nullptr || loader->ReadProgramId(title_id) != Loader::ResultStatus::Success)) {
         // Load per game settings
         Config per_game_config(fmt::format("{:016X}", title_id), Config::ConfigType::PerGameConfig);
@@ -1106,13 +1111,17 @@ void GMainWindow::BootGame(const QString& filename) {
         SelectAndSetCurrentUser();
     }
 
-    if (!LoadROM(filename))
+    if (!LoadROM(filename, program_index))
         return;
 
     // Create and start the emulation thread
     emu_thread = std::make_unique<EmuThread>();
     emit EmulationStarting(emu_thread.get());
     emu_thread->start();
+
+    // Register an ExecuteProgram callback such that Core can execute a sub-program
+    system.RegisterExecuteProgramCallback(
+        [this](std::size_t program_index) { render_window->ExecuteProgram(program_index); });
 
     connect(render_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
     // BlockingQueuedConnection is important here, it makes sure we've finished refreshing our views
@@ -1144,9 +1153,13 @@ void GMainWindow::BootGame(const QString& filename) {
 
     std::string title_name;
     std::string title_version;
-    const auto res = Core::System::GetInstance().GetGameName(title_name);
+    const auto res = system.GetGameName(title_name);
 
-    const auto metadata = FileSys::PatchManager(title_id).GetControlMetadata();
+    const auto metadata = [&system, title_id] {
+        const FileSys::PatchManager pm(title_id, system.GetFileSystemController(),
+                                       system.GetContentProvider());
+        return pm.GetControlMetadata();
+    }();
     if (metadata.first != nullptr) {
         title_version = metadata.first->GetVersionString();
         title_name = metadata.first->GetApplicationName();
@@ -1157,7 +1170,7 @@ void GMainWindow::BootGame(const QString& filename) {
     LOG_INFO(Frontend, "Booting game: {:016X} | {} | {}", title_id, title_name, title_version);
     UpdateWindowTitle(title_name, title_version);
 
-    loading_screen->Prepare(Core::System::GetInstance().GetAppLoader());
+    loading_screen->Prepare(system.GetAppLoader());
     loading_screen->show();
 
     emulation_running = true;
@@ -1276,16 +1289,18 @@ void GMainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target
                                        const std::string& game_path) {
     std::string path;
     QString open_target;
+    auto& system = Core::System::GetInstance();
 
-    const auto [user_save_size, device_save_size] = [this, &program_id, &game_path] {
-        FileSys::PatchManager pm{program_id};
+    const auto [user_save_size, device_save_size] = [this, &game_path, &program_id, &system] {
+        const FileSys::PatchManager pm{program_id, system.GetFileSystemController(),
+                                       system.GetContentProvider()};
         const auto control = pm.GetControlMetadata().first;
         if (control != nullptr) {
             return std::make_pair(control->GetDefaultNormalSaveSize(),
                                   control->GetDeviceSaveDataSize());
         } else {
             const auto file = Core::GetGameFileFromPath(vfs, game_path);
-            const auto loader = Loader::GetLoader(file);
+            const auto loader = Loader::GetLoader(system, file);
 
             FileSys::NACP nacp{};
             loader->ReadControlData(nacp);
@@ -1612,7 +1627,8 @@ void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pa
                                 "cancelled the operation."));
     };
 
-    const auto loader = Loader::GetLoader(vfs->OpenFile(game_path, FileSys::Mode::Read));
+    auto& system = Core::System::GetInstance();
+    const auto loader = Loader::GetLoader(system, vfs->OpenFile(game_path, FileSys::Mode::Read));
     if (loader == nullptr) {
         failed();
         return;
@@ -1624,7 +1640,7 @@ void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pa
         return;
     }
 
-    const auto& installed = Core::System::GetInstance().GetContentProvider();
+    const auto& installed = system.GetContentProvider();
     const auto romfs_title_id = SelectRomFSDumpTarget(installed, program_id);
 
     if (!romfs_title_id) {
@@ -1639,7 +1655,7 @@ void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pa
 
     if (*romfs_title_id == program_id) {
         const u64 ivfc_offset = loader->ReadRomFSIVFCOffset();
-        FileSys::PatchManager pm{program_id};
+        const FileSys::PatchManager pm{program_id, system.GetFileSystemController(), installed};
         romfs = pm.PatchRomFS(file, ivfc_offset, FileSys::ContentRecordType::Program);
     } else {
         romfs = installed.GetEntry(*romfs_title_id, FileSys::ContentRecordType::Data)->GetRomFS();
@@ -1756,7 +1772,8 @@ void GMainWindow::OnGameListShowList(bool show) {
 void GMainWindow::OnGameListOpenPerGameProperties(const std::string& file) {
     u64 title_id{};
     const auto v_file = Core::GetGameFileFromPath(vfs, file);
-    const auto loader = Loader::GetLoader(v_file);
+    const auto loader = Loader::GetLoader(Core::System::GetInstance(), v_file);
+
     if (loader == nullptr || loader->ReadProgramId(title_id) != Loader::ResultStatus::Success) {
         QMessageBox::information(this, tr("Properties"),
                                  tr("The game properties could not be loaded."));
@@ -2126,6 +2143,11 @@ void GMainWindow::OnStopGame() {
 
 void GMainWindow::OnLoadComplete() {
     loading_screen->OnLoadComplete();
+}
+
+void GMainWindow::OnExecuteProgram(std::size_t program_index) {
+    ShutdownGame();
+    BootGame(last_filename_booted, program_index);
 }
 
 void GMainWindow::ErrorDisplayDisplayError(QString body) {

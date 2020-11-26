@@ -400,10 +400,10 @@ public:
         return joystick->RumblePlay(0, 0);
     }
 
-    bool SetRumblePlay(f32 amp_low, f32 freq_low, f32 amp_high, f32 freq_high) const override {
+    bool SetRumblePlay(f32 amp_low, [[maybe_unused]] f32 freq_low, f32 amp_high,
+                       [[maybe_unused]] f32 freq_high) const override {
         const auto process_amplitude = [](f32 amplitude) {
-            return static_cast<u16>(std::pow(amplitude, 0.5f) *
-                                    (3.0f - 2.0f * std::pow(amplitude, 0.15f)) * 0xFFFF);
+            return static_cast<u16>((amplitude + std::pow(amplitude, 0.3f)) * 0.5f * 0xFFFF);
         };
 
         const auto processed_amp_low = process_amplitude(amp_low);
@@ -865,6 +865,8 @@ Common::ParamPackage SDLEventToMotionParamPackage(SDLState& state, const SDL_Eve
 Common::ParamPackage BuildParamPackageForBinding(int port, const std::string& guid,
                                                  const SDL_GameControllerButtonBind& binding) {
     switch (binding.bindType) {
+    case SDL_CONTROLLER_BINDTYPE_NONE:
+        break;
     case SDL_CONTROLLER_BINDTYPE_AXIS:
         return BuildAnalogParamPackageForButton(port, guid, binding.value.axis);
     case SDL_CONTROLLER_BINDTYPE_BUTTON:
@@ -985,7 +987,7 @@ class SDLPoller : public InputCommon::Polling::DevicePoller {
 public:
     explicit SDLPoller(SDLState& state_) : state(state_) {}
 
-    void Start(const std::string& device_id) override {
+    void Start([[maybe_unused]] const std::string& device_id) override {
         state.event_queue.Clear();
         state.polling = true;
     }

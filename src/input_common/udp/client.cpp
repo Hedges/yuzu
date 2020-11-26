@@ -63,7 +63,7 @@ public:
     }
 
 private:
-    void HandleReceive(const boost::system::error_code& error, std::size_t bytes_transferred) {
+    void HandleReceive(const boost::system::error_code&, std::size_t bytes_transferred) {
         if (auto type = Response::Validate(receive_buffer.data(), bytes_transferred)) {
             switch (*type) {
             case Type::Version: {
@@ -90,7 +90,7 @@ private:
         StartReceive();
     }
 
-    void HandleSend(const boost::system::error_code& error) {
+    void HandleSend(const boost::system::error_code&) {
         boost::system::error_code _ignored{};
         // Send a request for getting port info for the pad
         const Request::PortInfo port_info{1, {static_cast<u8>(pad_index), 0, 0, 0}};
@@ -189,11 +189,11 @@ void Client::ReloadSocket(const std::string& host, u16 port, std::size_t pad_ind
     StartCommunication(client, host, port, pad_index, client_id);
 }
 
-void Client::OnVersion(Response::Version data) {
+void Client::OnVersion([[maybe_unused]] Response::Version data) {
     LOG_TRACE(Input, "Version packet received: {}", data.version);
 }
 
-void Client::OnPortInfo(Response::PortInfo data) {
+void Client::OnPortInfo([[maybe_unused]] Response::PortInfo data) {
     LOG_TRACE(Input, "PortInfo packet received: {}", data.model);
 }
 
@@ -369,7 +369,7 @@ CalibrationConfigurationJob::CalibrationConfigurationJob(
         u16 max_y{};
 
         Status current_status{Status::Initialized};
-        SocketCallback callback{[](Response::Version version) {}, [](Response::PortInfo info) {},
+        SocketCallback callback{[](Response::Version) {}, [](Response::PortInfo) {},
                                 [&](Response::PadData data) {
                                     if (current_status == Status::Initialized) {
                                         // Receiving data means the communication is ready now

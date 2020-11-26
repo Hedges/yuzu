@@ -9,14 +9,15 @@
 #include "core/file_sys/vfs.h"
 #include "core/loader/loader.h"
 
-namespace Core {
-class System;
-}
-
 namespace FileSys {
+class ContentProvider;
 class NACP;
 class NSP;
 } // namespace FileSys
+
+namespace Service::FileSystem {
+class FileSystemController;
+}
 
 namespace Loader {
 
@@ -25,7 +26,10 @@ class AppLoader_NCA;
 /// Loads an XCI file
 class AppLoader_NSP final : public AppLoader {
 public:
-    explicit AppLoader_NSP(FileSys::VirtualFile file);
+    explicit AppLoader_NSP(FileSys::VirtualFile file,
+                           const Service::FileSystem::FileSystemController& fsc,
+                           const FileSys::ContentProvider& content_provider,
+                           std::size_t program_index);
     ~AppLoader_NSP() override;
 
     /**

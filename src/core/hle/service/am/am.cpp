@@ -246,9 +246,8 @@ IDebugFunctions::IDebugFunctions() : ServiceFramework{"IDebugFunctions"} {
 
 IDebugFunctions::~IDebugFunctions() = default;
 
-ISelfController::ISelfController(Core::System& system,
-                                 std::shared_ptr<NVFlinger::NVFlinger> nvflinger)
-    : ServiceFramework("ISelfController"), system(system), nvflinger(std::move(nvflinger)) {
+ISelfController::ISelfController(Core::System& system, NVFlinger::NVFlinger& nvflinger)
+    : ServiceFramework("ISelfController"), system(system), nvflinger(nvflinger) {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, &ISelfController::Exit, "Exit"},
@@ -458,8 +457,8 @@ void ISelfController::CreateManagedDisplayLayer(Kernel::HLERequestContext& ctx) 
 
     // TODO(Subv): Find out how AM determines the display to use, for now just
     // create the layer in the Default display.
-    const auto display_id = nvflinger->OpenDisplay("Default");
-    const auto layer_id = nvflinger->CreateLayer(*display_id);
+    const auto display_id = nvflinger.OpenDisplay("Default");
+    const auto layer_id = nvflinger.CreateLayer(*display_id);
 
     IPC::ResponseBuilder rb{ctx, 4};
     rb.Push(RESULT_SUCCESS);
@@ -476,8 +475,8 @@ void ISelfController::CreateManagedDisplaySeparableLayer(Kernel::HLERequestConte
     // Outputting 1 layer id instead of the expected 2 has not been observed to cause any adverse
     // side effects.
     // TODO: Support multiple layers
-    const auto display_id = nvflinger->OpenDisplay("Default");
-    const auto layer_id = nvflinger->CreateLayer(*display_id);
+    const auto display_id = nvflinger.OpenDisplay("Default");
+    const auto layer_id = nvflinger.CreateLayer(*display_id);
 
     IPC::ResponseBuilder rb{ctx, 4};
     rb.Push(RESULT_SUCCESS);
@@ -1189,9 +1188,9 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_)
         {102, &IApplicationFunctions::SetApplicationCopyrightVisibility, "SetApplicationCopyrightVisibility"},
         {110, &IApplicationFunctions::QueryApplicationPlayStatistics, "QueryApplicationPlayStatistics"},
         {111, &IApplicationFunctions::QueryApplicationPlayStatisticsByUid, "QueryApplicationPlayStatisticsByUid"},
-        {120, nullptr, "ExecuteProgram"},
-        {121, nullptr, "ClearUserChannel"},
-        {122, nullptr, "UnpopToUserChannel"},
+        {120, &IApplicationFunctions::ExecuteProgram, "ExecuteProgram"},
+        {121, &IApplicationFunctions::ClearUserChannel, "ClearUserChannel"},
+        {122, &IApplicationFunctions::UnpopToUserChannel, "UnpopToUserChannel"},
         {123, &IApplicationFunctions::GetPreviousProgramIndex, "GetPreviousProgramIndex"},
         {124, nullptr, "EnableApplicationAllThreadDumpOnCrash"},
         {130, &IApplicationFunctions::GetGpuErrorDetectedSystemEvent, "GetGpuErrorDetectedSystemEvent"},
@@ -1381,13 +1380,16 @@ void IApplicationFunctions::GetDisplayVersion(Kernel::HLERequestContext& ctx) {
     const auto res = [this] {
         const auto title_id = system.CurrentProcess()->GetTitleID();
 
-        FileSys::PatchManager pm{title_id};
+        const FileSys::PatchManager pm{title_id, system.GetFileSystemController(),
+                                       system.GetContentProvider()};
         auto res = pm.GetControlMetadata();
         if (res.first != nullptr) {
             return res;
         }
 
-        FileSys::PatchManager pm_update{FileSys::GetUpdateTitleID(title_id)};
+        const FileSys::PatchManager pm_update{FileSys::GetUpdateTitleID(title_id),
+                                              system.GetFileSystemController(),
+                                              system.GetContentProvider()};
         return pm_update.GetControlMetadata();
     }();
 
@@ -1415,13 +1417,16 @@ void IApplicationFunctions::GetDesiredLanguage(Kernel::HLERequestContext& ctx) {
     const auto res = [this] {
         const auto title_id = system.CurrentProcess()->GetTitleID();
 
-        FileSys::PatchManager pm{title_id};
+        const FileSys::PatchManager pm{title_id, system.GetFileSystemController(),
+                                       system.GetContentProvider()};
         auto res = pm.GetControlMetadata();
         if (res.first != nullptr) {
             return res;
         }
 
-        FileSys::PatchManager pm_update{FileSys::GetUpdateTitleID(title_id)};
+        const FileSys::PatchManager pm_update{FileSys::GetUpdateTitleID(title_id),
+                                              system.GetFileSystemController(),
+                                              system.GetContentProvider()};
         return pm_update.GetControlMetadata();
     }();
 
@@ -1556,6 +1561,34 @@ void IApplicationFunctions::QueryApplicationPlayStatisticsByUid(Kernel::HLEReque
     rb.Push<u32>(0);
 }
 
+void IApplicationFunctions::ExecuteProgram(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::RequestParser rp{ctx};
+    [[maybe_unused]] const auto unk_1 = rp.Pop<u32>();
+    [[maybe_unused]] const auto unk_2 = rp.Pop<u32>();
+    const auto program_index = rp.Pop<u64>();
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+
+    system.ExecuteProgram(program_index);
+}
+
+void IApplicationFunctions::ClearUserChannel(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+void IApplicationFunctions::UnpopToUserChannel(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
 void IApplicationFunctions::GetPreviousProgramIndex(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service_AM, "(STUBBED) called");
 
@@ -1580,8 +1613,8 @@ void IApplicationFunctions::GetFriendInvitationStorageChannelEvent(Kernel::HLERe
     rb.PushCopyObjects(friend_invitation_storage_channel_event.readable);
 }
 
-void InstallInterfaces(SM::ServiceManager& service_manager,
-                       std::shared_ptr<NVFlinger::NVFlinger> nvflinger, Core::System& system) {
+void InstallInterfaces(SM::ServiceManager& service_manager, NVFlinger::NVFlinger& nvflinger,
+                       Core::System& system) {
     auto message_queue = std::make_shared<AppletMessageQueue>(system.Kernel());
     // Needed on game boot
     message_queue->PushMessage(AppletMessageQueue::AppletMessage::FocusStateChanged);

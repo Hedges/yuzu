@@ -96,7 +96,6 @@ std::unique_ptr<Input::ButtonDevice> GCButtonFactory::Create(const Common::Param
                                               adapter.get());
     }
 
-    UNREACHABLE();
     return nullptr;
 }
 
@@ -300,10 +299,11 @@ public:
         return gcadapter->RumblePlay(port, 0);
     }
 
-    bool SetRumblePlay(f32 amp_low, f32 freq_low, f32 amp_high, f32 freq_high) const override {
+    bool SetRumblePlay(f32 amp_low, [[maybe_unused]] f32 freq_low, f32 amp_high,
+                       [[maybe_unused]] f32 freq_high) const override {
         const auto mean_amplitude = (amp_low + amp_high) * 0.5f;
-        const auto processed_amplitude = static_cast<u8>(
-            pow(mean_amplitude, 0.5f) * (3.0f - 2.0f * pow(mean_amplitude, 0.15f)) * 0x8);
+        const auto processed_amplitude =
+            static_cast<u8>((mean_amplitude + std::pow(mean_amplitude, 0.3f)) * 0.5f * 0x8);
 
         return gcadapter->RumblePlay(port, processed_amplitude);
     }
