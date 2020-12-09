@@ -52,7 +52,7 @@ VkImageType SurfaceTargetToImage(SurfaceTarget target) {
         UNREACHABLE();
         return {};
     }
-    UNREACHABLE_MSG("Unknown texture target={}", static_cast<u32>(target));
+    UNREACHABLE_MSG("Unknown texture target={}", target);
     return {};
 }
 
@@ -64,7 +64,7 @@ VkImageAspectFlags PixelFormatToImageAspect(PixelFormat pixel_format) {
     } else if (pixel_format < PixelFormat::MaxDepthStencilFormat) {
         return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     } else {
-        UNREACHABLE_MSG("Invalid pixel format={}", static_cast<int>(pixel_format));
+        UNREACHABLE_MSG("Invalid pixel format={}", pixel_format);
         return VK_IMAGE_ASPECT_COLOR_BIT;
     }
 }
@@ -489,12 +489,12 @@ VkImageView CachedSurfaceView::GetAttachment() {
     return *render_target;
 }
 
-VKTextureCache::VKTextureCache(VideoCore::RasterizerInterface& rasterizer,
-                               Tegra::Engines::Maxwell3D& maxwell3d,
-                               Tegra::MemoryManager& gpu_memory, const VKDevice& device_,
+VKTextureCache::VKTextureCache(VideoCore::RasterizerInterface& rasterizer_,
+                               Tegra::Engines::Maxwell3D& maxwell3d_,
+                               Tegra::MemoryManager& gpu_memory_, const VKDevice& device_,
                                VKMemoryManager& memory_manager_, VKScheduler& scheduler_,
                                VKStagingBufferPool& staging_pool_)
-    : TextureCache(rasterizer, maxwell3d, gpu_memory, device_.IsOptimalAstcSupported()),
+    : TextureCache(rasterizer_, maxwell3d_, gpu_memory_, device_.IsOptimalAstcSupported()),
       device{device_}, memory_manager{memory_manager_}, scheduler{scheduler_}, staging_pool{
                                                                                    staging_pool_} {}
 
