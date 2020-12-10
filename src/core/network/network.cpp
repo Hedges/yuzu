@@ -11,7 +11,7 @@
 #ifdef _WIN32
 #define _WINSOCK_DEPRECATED_NO_WARNINGS // gethostname
 #include <winsock2.h>
-#elif __unix__
+#elif YUZU_UNIX
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -54,7 +54,7 @@ constexpr IPv4Address TranslateIPv4(in_addr addr) {
 sockaddr TranslateFromSockAddrIn(SockAddrIn input) {
     sockaddr_in result;
 
-#ifdef __unix__
+#if YUZU_UNIX
     result.sin_len = sizeof(result);
 #endif
 
@@ -63,7 +63,7 @@ sockaddr TranslateFromSockAddrIn(SockAddrIn input) {
         result.sin_family = AF_INET;
         break;
     default:
-        UNIMPLEMENTED_MSG("Unhandled sockaddr family={}", static_cast<int>(input.family));
+        UNIMPLEMENTED_MSG("Unhandled sockaddr family={}", input.family);
         result.sin_family = AF_INET;
         break;
     }
@@ -99,7 +99,7 @@ bool EnableNonBlock(SOCKET fd, bool enable) {
     return ioctlsocket(fd, FIONBIO, &value) != SOCKET_ERROR;
 }
 
-#elif __unix__ // ^ _WIN32 v __unix__
+#elif YUZU_UNIX // ^ _WIN32 v YUZU_UNIX
 
 using SOCKET = int;
 using WSAPOLLFD = pollfd;
@@ -133,7 +133,7 @@ sockaddr TranslateFromSockAddrIn(SockAddrIn input) {
         result.sin_family = AF_INET;
         break;
     default:
-        UNIMPLEMENTED_MSG("Unhandled sockaddr family={}", static_cast<int>(input.family));
+        UNIMPLEMENTED_MSG("Unhandled sockaddr family={}", input.family);
         result.sin_family = AF_INET;
         break;
     }
@@ -186,7 +186,7 @@ int TranslateDomain(Domain domain) {
     case Domain::INET:
         return AF_INET;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented domain={}", static_cast<int>(domain));
+        UNIMPLEMENTED_MSG("Unimplemented domain={}", domain);
         return 0;
     }
 }
@@ -198,7 +198,7 @@ int TranslateType(Type type) {
     case Type::DGRAM:
         return SOCK_DGRAM;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented type={}", static_cast<int>(type));
+        UNIMPLEMENTED_MSG("Unimplemented type={}", type);
         return 0;
     }
 }
@@ -210,7 +210,7 @@ int TranslateProtocol(Protocol protocol) {
     case Protocol::UDP:
         return IPPROTO_UDP;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented protocol={}", static_cast<int>(protocol));
+        UNIMPLEMENTED_MSG("Unimplemented protocol={}", protocol);
         return 0;
     }
 }
@@ -238,49 +238,49 @@ SockAddrIn TranslateToSockAddrIn(sockaddr input_) {
     return result;
 }
 
-u16 TranslatePollEvents(u32 events) {
-    u32 result = 0;
+short TranslatePollEvents(PollEvents events) {
+    short result = 0;
 
-    if ((events & POLL_IN) != 0) {
-        events &= ~POLL_IN;
+    if (True(events & PollEvents::In)) {
+        events &= ~PollEvents::In;
         result |= POLLIN;
     }
-    if ((events & POLL_PRI) != 0) {
-        events &= ~POLL_PRI;
+    if (True(events & PollEvents::Pri)) {
+        events &= ~PollEvents::Pri;
 #ifdef _WIN32
         LOG_WARNING(Service, "Winsock doesn't support POLLPRI");
 #else
-        result |= POLL_PRI;
+        result |= POLLPRI;
 #endif
     }
-    if ((events & POLL_OUT) != 0) {
-        events &= ~POLL_OUT;
+    if (True(events & PollEvents::Out)) {
+        events &= ~PollEvents::Out;
         result |= POLLOUT;
     }
 
-    UNIMPLEMENTED_IF_MSG(events != 0, "Unhandled guest events=0x{:x}", events);
+    UNIMPLEMENTED_IF_MSG((u16)events != 0, "Unhandled guest events=0x{:x}", (u16)events);
 
-    return static_cast<u16>(result);
+    return result;
 }
 
-u16 TranslatePollRevents(u32 revents) {
-    u32 result = 0;
-    const auto translate = [&result, &revents](u32 host, u32 guest) {
+PollEvents TranslatePollRevents(short revents) {
+    PollEvents result{};
+    const auto translate = [&result, &revents](short host, PollEvents guest) {
         if ((revents & host) != 0) {
-            revents &= ~host;
+            revents &= static_cast<short>(~host);
             result |= guest;
         }
     };
 
-    translate(POLLIN, POLL_IN);
-    translate(POLLPRI, POLL_PRI);
-    translate(POLLOUT, POLL_OUT);
-    translate(POLLERR, POLL_ERR);
-    translate(POLLHUP, POLL_HUP);
+    translate(POLLIN, PollEvents::In);
+    translate(POLLPRI, PollEvents::Pri);
+    translate(POLLOUT, PollEvents::Out);
+    translate(POLLERR, PollEvents::Err);
+    translate(POLLHUP, PollEvents::Hup);
 
     UNIMPLEMENTED_IF_MSG(revents != 0, "Unhandled host revents=0x{:x}", revents);
 
-    return static_cast<u16>(result);
+    return result;
 }
 
 template <typename T>
@@ -350,7 +350,7 @@ std::pair<s32, Errno> Poll(std::vector<PollFD>& pollfds, s32 timeout) {
     }
 
     for (size_t i = 0; i < num; ++i) {
-        pollfds[i].revents = TranslatePollRevents(static_cast<u32>(host_pollfds[i].revents));
+        pollfds[i].revents = TranslatePollRevents(host_pollfds[i].revents);
     }
 
     if (result > 0) {
@@ -482,7 +482,7 @@ Errno Socket::Shutdown(ShutdownHow how) {
         host_how = SD_BOTH;
         break;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented flag how={}", static_cast<int>(how));
+        UNIMPLEMENTED_MSG("Unimplemented flag how={}", how);
         return Errno::SUCCESS;
     }
     if (shutdown(fd, host_how) != SOCKET_ERROR) {

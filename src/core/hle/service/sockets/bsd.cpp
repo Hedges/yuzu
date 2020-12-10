@@ -30,7 +30,7 @@ bool IsConnectionBased(Type type) {
     case Type::DGRAM:
         return false;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented type={}", static_cast<int>(type));
+        UNIMPLEMENTED_MSG("Unimplemented type={}", type);
         return false;
     }
 }
@@ -489,18 +489,18 @@ std::pair<s32, Errno> BSD::PollImpl(std::vector<u8>& write_buffer, std::vector<u
     }
 
     for (PollFD& pollfd : fds) {
-        ASSERT(pollfd.revents == 0);
+        ASSERT(False(pollfd.revents));
 
         if (pollfd.fd > static_cast<s32>(MAX_FD) || pollfd.fd < 0) {
             LOG_ERROR(Service, "File descriptor handle={} is invalid", pollfd.fd);
-            pollfd.revents = 0;
+            pollfd.revents = PollEvents{};
             return {0, Errno::SUCCESS};
         }
 
         const std::optional<FileDescriptor>& descriptor = file_descriptors[pollfd.fd];
         if (!descriptor) {
             LOG_ERROR(Service, "File descriptor handle={} is not allocated", pollfd.fd);
-            pollfd.revents = POLL_NVAL;
+            pollfd.revents = PollEvents::Nval;
             return {0, Errno::SUCCESS};
         }
     }
@@ -510,7 +510,7 @@ std::pair<s32, Errno> BSD::PollImpl(std::vector<u8>& write_buffer, std::vector<u
         Network::PollFD result;
         result.socket = file_descriptors[pollfd.fd]->socket.get();
         result.events = TranslatePollEventsToHost(pollfd.events);
-        result.revents = 0;
+        result.revents = Network::PollEvents{};
         return result;
     });
 
@@ -636,7 +636,7 @@ std::pair<s32, Errno> BSD::FcntlImpl(s32 fd, FcntlCmd cmd, s32 arg) {
         return {0, Errno::SUCCESS};
     }
     default:
-        UNIMPLEMENTED_MSG("Unimplemented cmd={}", static_cast<int>(cmd));
+        UNIMPLEMENTED_MSG("Unimplemented cmd={}", cmd);
         return {-1, Errno::SUCCESS};
     }
 }
@@ -679,7 +679,7 @@ Errno BSD::SetSockOptImpl(s32 fd, u32 level, OptName optname, size_t optlen, con
     case OptName::RCVTIMEO:
         return Translate(socket->SetRcvTimeo(value));
     default:
-        UNIMPLEMENTED_MSG("Unimplemented optname={}", static_cast<int>(optname));
+        UNIMPLEMENTED_MSG("Unimplemented optname={}", optname);
         return Errno::SUCCESS;
     }
 }
