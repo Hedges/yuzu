@@ -166,7 +166,7 @@ std::shared_ptr<Dynarmic::A64::Jit> ARM_Dynarmic_64::MakeJit(Common::PageTable& 
     config.tpidr_el0 = &cb->tpidr_el0;
     config.dczid_el0 = 4;
     config.ctr_el0 = 0x8444c004;
-    config.cntfrq_el0 = Hardware::CNTFREQ;
+    config.cntfrq_el0 = Hardware::CNTFREQ+8;
 
     // Unpredictable instructions
     config.define_unpredictable_behaviour = true;
