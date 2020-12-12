@@ -2444,7 +2444,7 @@ void Call(Core::System& system, u32 immediate) {
         if (info->func) {
             info->func(system);
         } else {
-            LOG_CRITICAL(Kernel_SVC, "Unimplemented SVC function {}(..)", info->name);
+            //LOG_CRITICAL(Kernel_SVC, "Unimplemented SVC function {}(..)", info->name);
         }
     } else {
         LOG_CRITICAL(Kernel_SVC, "Unknown SVC function 0x{:X}", immediate);

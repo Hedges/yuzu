@@ -44,7 +44,7 @@ static Controller_NPad::NPadControllerType MapSettingsTypeToNPad(Settings::Contr
     case Settings::ControllerType::RightJoycon:
         return Controller_NPad::NPadControllerType::JoyRight;
     default:
-        UNREACHABLE();
+        //UNREACHABLE();
         return Controller_NPad::NPadControllerType::JoyDual;
     }
 }
