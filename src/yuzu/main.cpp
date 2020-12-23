@@ -677,7 +677,7 @@ void GMainWindow::InitializeRecentFileMenuActions() {
     }
     ui.menu_recent_files->addSeparator();
     QAction* action_clear_recent_files = new QAction(this);
-    action_clear_recent_files->setText(tr("Clear Recent Files"));
+    action_clear_recent_files->setText(tr("&Clear Recent Files"));
     connect(action_clear_recent_files, &QAction::triggered, this, [this] {
         UISettings::values.recent_files.clear();
         UpdateRecentFiles();
@@ -939,7 +939,10 @@ void GMainWindow::ConnectMenuEvents() {
             &GMainWindow::OnDisplayTitleBars);
     connect(ui.action_Show_Filter_Bar, &QAction::triggered, this, &GMainWindow::OnToggleFilterBar);
     connect(ui.action_Show_Status_Bar, &QAction::triggered, statusBar(), &QStatusBar::setVisible);
-    connect(ui.action_Reset_Window_Size, &QAction::triggered, this, &GMainWindow::ResetWindowSize);
+    connect(ui.action_Reset_Window_Size_720, &QAction::triggered, this,
+            &GMainWindow::ResetWindowSize720);
+    connect(ui.action_Reset_Window_Size_1080, &QAction::triggered, this,
+            &GMainWindow::ResetWindowSize1080);
 
     // Fullscreen
     connect(ui.action_Fullscreen, &QAction::triggered, this, &GMainWindow::ToggleFullscreen);
@@ -2114,7 +2117,7 @@ void GMainWindow::OnStartGame() {
     connect(emu_thread.get(), &EmuThread::ErrorThrown, this, &GMainWindow::OnCoreError);
 
     ui.action_Start->setEnabled(false);
-    ui.action_Start->setText(tr("Continue"));
+    ui.action_Start->setText(tr("&Continue"));
 
     ui.action_Pause->setEnabled(true);
     ui.action_Stop->setEnabled(true);
@@ -2258,7 +2261,7 @@ void GMainWindow::ToggleWindowMode() {
     }
 }
 
-void GMainWindow::ResetWindowSize() {
+void GMainWindow::ResetWindowSize720() {
     const auto aspect_ratio = Layout::EmulationAspectRatio(
         static_cast<Layout::AspectRatio>(Settings::values.aspect_ratio.GetValue()),
         static_cast<float>(Layout::ScreenUndocked::Height) / Layout::ScreenUndocked::Width);
@@ -2268,6 +2271,20 @@ void GMainWindow::ResetWindowSize() {
     } else {
         resize(Layout::ScreenUndocked::Height / aspect_ratio,
                Layout::ScreenUndocked::Height + menuBar()->height() +
+                   (ui.action_Show_Status_Bar->isChecked() ? statusBar()->height() : 0));
+    }
+}
+
+void GMainWindow::ResetWindowSize1080() {
+    const auto aspect_ratio = Layout::EmulationAspectRatio(
+        static_cast<Layout::AspectRatio>(Settings::values.aspect_ratio.GetValue()),
+        static_cast<float>(Layout::ScreenDocked::Height) / Layout::ScreenDocked::Width);
+    if (!ui.action_Single_Window_Mode->isChecked()) {
+        render_window->resize(Layout::ScreenDocked::Height / aspect_ratio,
+                              Layout::ScreenDocked::Height);
+    } else {
+        resize(Layout::ScreenDocked::Height / aspect_ratio,
+               Layout::ScreenDocked::Height + menuBar()->height() +
                    (ui.action_Show_Status_Bar->isChecked() ? statusBar()->height() : 0));
     }
 }
@@ -2953,7 +2970,7 @@ void GMainWindow::OnLanguageChanged(const QString& locale) {
     UpdateWindowTitle();
 
     if (emulation_running)
-        ui.action_Start->setText(tr("Continue"));
+        ui.action_Start->setText(tr("&Continue"));
 }
 
 void GMainWindow::SetDiscordEnabled([[maybe_unused]] bool state) {
