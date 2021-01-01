@@ -964,7 +964,7 @@ Sampler::Sampler(TextureCacheRuntime& runtime, const TSCEntry& config) {
     const GLenum reduction_filter = MaxwellToGL::ReductionFilter(config.reduction_filter);
     const GLint seamless = config.cubemap_interface_filtering ? GL_TRUE : GL_FALSE;
 
-    UNIMPLEMENTED_IF(config.cubemap_anisotropy != 1);
+    //UNIMPLEMENTED_IF(config.cubemap_anisotropy != 1);
     UNIMPLEMENTED_IF(config.float_coord_normalization != 0);
 
     sampler.Create();
