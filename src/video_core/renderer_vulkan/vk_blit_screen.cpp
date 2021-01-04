@@ -27,9 +27,9 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
-#include "video_core/renderer_vulkan/wrapper.h"
 #include "video_core/surface.h"
 #include "video_core/textures/decoders.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
@@ -114,7 +114,7 @@ struct VKBlitScreen::BufferData {
 
 VKBlitScreen::VKBlitScreen(Core::Memory::Memory& cpu_memory_,
                            Core::Frontend::EmuWindow& render_window_,
-                           VideoCore::RasterizerInterface& rasterizer_, const VKDevice& device_,
+                           VideoCore::RasterizerInterface& rasterizer_, const Device& device_,
                            VKMemoryManager& memory_manager_, VKSwapchain& swapchain_,
                            VKScheduler& scheduler_, const VKScreenInfo& screen_info_)
     : cpu_memory{cpu_memory_}, render_window{render_window_}, rasterizer{rasterizer_},

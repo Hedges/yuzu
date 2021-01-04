@@ -11,11 +11,11 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_decompiler.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
-#include "video_core/renderer_vulkan/wrapper.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
-VKComputePipeline::VKComputePipeline(const VKDevice& device_, VKScheduler& scheduler_,
+VKComputePipeline::VKComputePipeline(const Device& device_, VKScheduler& scheduler_,
                                      VKDescriptorPool& descriptor_pool_,
                                      VKUpdateDescriptorQueue& update_descriptor_queue_,
                                      const SPIRVShader& shader_)

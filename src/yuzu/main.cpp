@@ -142,7 +142,7 @@ constexpr int default_mouse_timeout = 2500;
 /**
  * "Callouts" are one-time instructional messages shown to the user. In the config settings, there
  * is a bitfield "callout_flags" options, used to track if a message has already been shown to the
- * user. This is 32-bits - if we have more than 32 callouts, we should retire and recyle old ones.
+ * user. This is 32-bits - if we have more than 32 callouts, we should retire and recycle old ones.
  */
 enum class CalloutFlag : uint32_t {
     Telemetry = 0x1,
@@ -1045,20 +1045,24 @@ bool GMainWindow::LoadROM(const QString& filename, std::size_t program_index) {
             break;
 
         default:
-            if (static_cast<u32>(result) >
-                static_cast<u32>(Core::System::ResultStatus::ErrorLoader)) {
+            if (result > Core::System::ResultStatus::ErrorLoader) {
                 const u16 loader_id = static_cast<u16>(Core::System::ResultStatus::ErrorLoader);
                 const u16 error_id = static_cast<u16>(result) - loader_id;
                 const std::string error_code = fmt::format("({:04X}-{:04X})", loader_id, error_id);
                 LOG_CRITICAL(Frontend, "Failed to load ROM! {}", error_code);
-                QMessageBox::critical(
-                    this,
-                    tr("Error while loading ROM! ").append(QString::fromStdString(error_code)),
-                    QString::fromStdString(fmt::format(
-                        "{}<br>Please follow <a href='https://yuzu-emu.org/help/quickstart/'>the "
-                        "yuzu quickstart guide</a> to redump your files.<br>You can refer "
-                        "to the yuzu wiki</a> or the yuzu Discord</a> for help.",
-                        static_cast<Loader::ResultStatus>(error_id))));
+
+                const auto title =
+                    tr("Error while loading ROM! %1", "%1 signifies a numeric error code.")
+                        .arg(QString::fromStdString(error_code));
+                const auto description =
+                    tr("%1<br>Please follow <a href='https://yuzu-emu.org/help/quickstart/'>the "
+                       "yuzu quickstart guide</a> to redump your files.<br>You can refer "
+                       "to the yuzu wiki</a> or the yuzu Discord</a> for help.",
+                       "%1 signifies an error string.")
+                        .arg(QString::fromStdString(
+                            GetResultStatusString(static_cast<Loader::ResultStatus>(error_id))));
+
+                QMessageBox::critical(this, title, description);
             } else {
                 QMessageBox::critical(
                     this, tr("Error while loading ROM!"),

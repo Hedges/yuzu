@@ -14,7 +14,7 @@
 #include "video_core/renderer_vulkan/vk_device.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
-#include "video_core/renderer_vulkan/wrapper.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
@@ -56,7 +56,7 @@ VkExtent2D ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, u32 wi
 
 } // Anonymous namespace
 
-VKSwapchain::VKSwapchain(VkSurfaceKHR surface_, const VKDevice& device_, VKScheduler& scheduler_)
+VKSwapchain::VKSwapchain(VkSurfaceKHR surface_, const Device& device_, VKScheduler& scheduler_)
     : surface{surface_}, device{device_}, scheduler{scheduler_} {}
 
 VKSwapchain::~VKSwapchain() = default;

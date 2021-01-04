@@ -17,7 +17,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
-#include "video_core/renderer_vulkan/wrapper.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
@@ -94,7 +94,7 @@ VkSampleCountFlagBits ConvertMsaaMode(Tegra::Texture::MsaaMode msaa_mode) {
 
 } // Anonymous namespace
 
-VKGraphicsPipeline::VKGraphicsPipeline(const VKDevice& device_, VKScheduler& scheduler_,
+VKGraphicsPipeline::VKGraphicsPipeline(const Device& device_, VKScheduler& scheduler_,
                                        VKDescriptorPool& descriptor_pool_,
                                        VKUpdateDescriptorQueue& update_descriptor_queue_,
                                        const GraphicsPipelineCacheKey& key,

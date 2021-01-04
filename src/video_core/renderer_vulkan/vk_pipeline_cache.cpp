@@ -25,11 +25,11 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
-#include "video_core/renderer_vulkan/wrapper.h"
 #include "video_core/shader/compiler_settings.h"
 #include "video_core/shader/memory_util.h"
 #include "video_core/shader_cache.h"
 #include "video_core/shader_notify.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
@@ -149,7 +149,7 @@ Shader::~Shader() = default;
 VKPipelineCache::VKPipelineCache(RasterizerVulkan& rasterizer_, Tegra::GPU& gpu_,
                                  Tegra::Engines::Maxwell3D& maxwell3d_,
                                  Tegra::Engines::KeplerCompute& kepler_compute_,
-                                 Tegra::MemoryManager& gpu_memory_, const VKDevice& device_,
+                                 Tegra::MemoryManager& gpu_memory_, const Device& device_,
                                  VKScheduler& scheduler_, VKDescriptorPool& descriptor_pool_,
                                  VKUpdateDescriptorQueue& update_descriptor_queue_)
     : VideoCommon::ShaderCache<Shader>{rasterizer_}, gpu{gpu_}, maxwell3d{maxwell3d_},
