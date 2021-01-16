@@ -135,8 +135,6 @@ add_library(video_core STATIC
     renderer_vulkan/vk_graphics_pipeline.h
     renderer_vulkan/vk_master_semaphore.cpp
     renderer_vulkan/vk_master_semaphore.h
-    renderer_vulkan/vk_memory_manager.cpp
-    renderer_vulkan/vk_memory_manager.h
     renderer_vulkan/vk_pipeline_cache.cpp
     renderer_vulkan/vk_pipeline_cache.h
     renderer_vulkan/vk_query_cache.cpp
@@ -259,6 +257,8 @@ add_library(video_core STATIC
     vulkan_common/vulkan_instance.h
     vulkan_common/vulkan_library.cpp
     vulkan_common/vulkan_library.h
+    vulkan_common/vulkan_memory_allocator.cpp
+    vulkan_common/vulkan_memory_allocator.h
     vulkan_common/vulkan_surface.cpp
     vulkan_common/vulkan_surface.h
     vulkan_common/vulkan_wrapper.cpp
@@ -312,9 +312,7 @@ else()
         -Werror=pessimizing-move
         -Werror=redundant-move
         -Werror=shadow
-        -Werror=switch
         -Werror=type-limits
-        -Werror=unused-variable
 
         $<$<CXX_COMPILER_ID:GNU>:-Werror=class-memaccess>
         $<$<CXX_COMPILER_ID:GNU>:-Werror=unused-but-set-parameter>

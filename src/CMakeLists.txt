@@ -69,6 +69,7 @@ else()
         -Werror=reorder
         -Werror=switch
         -Werror=uninitialized
+        -Werror=unused-function
         -Werror=unused-result
         -Werror=unused-variable
         -Wextra
@@ -129,7 +130,6 @@ add_subdirectory(tests)
 
 if (ENABLE_SDL2)
     add_subdirectory(yuzu_cmd)
-    add_subdirectory(yuzu_tester)
 endif()
 
 if (ENABLE_QT)
