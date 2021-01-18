@@ -67,8 +67,11 @@ else()
         -Werror=implicit-fallthrough
         -Werror=missing-declarations
         -Werror=reorder
+        -Werror=switch
         -Werror=uninitialized
+        -Werror=unused-function
         -Werror=unused-result
+        -Werror=unused-variable
         -Wextra
         -Wmissing-declarations
         -Wno-attributes
@@ -127,7 +130,6 @@ add_subdirectory(tests)
 
 if (ENABLE_SDL2)
     add_subdirectory(yuzu_cmd)
-    add_subdirectory(yuzu_tester)
 endif()
 
 if (ENABLE_QT)
