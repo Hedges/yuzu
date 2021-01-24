@@ -141,7 +141,9 @@ bool Controller_NPad::IsDeviceHandleValid(const DeviceHandle& device_handle) {
            device_handle.device_index < DeviceIndex::MaxDeviceIndex;
 }
 
-Controller_NPad::Controller_NPad(Core::System& system) : ControllerBase(system), system(system) {}
+Controller_NPad::Controller_NPad(Core::System& system) : ControllerBase(system), system(system) {
+    latest_vibration_values.fill({DEFAULT_VIBRATION_VALUE, DEFAULT_VIBRATION_VALUE});
+}
 
 Controller_NPad::~Controller_NPad() {
     OnRelease();
@@ -732,7 +734,7 @@ bool Controller_NPad::VibrateControllerAtIndex(std::size_t npad_index, std::size
             // Send an empty vibration to stop any vibrations.
             vibrations[npad_index][device_index]->SetRumblePlay(0.0f, 160.0f, 0.0f, 320.0f);
             // Then reset the vibration value to its default value.
-            latest_vibration_values[npad_index][device_index] = {};
+            latest_vibration_values[npad_index][device_index] = DEFAULT_VIBRATION_VALUE;
         }
 
         return false;
@@ -890,7 +892,7 @@ void Controller_NPad::UpdateControllerAt(NPadControllerType controller, std::siz
         return;
     }
 
-    if (controller == NPadControllerType::Handheld) {
+    if (controller == NPadControllerType::Handheld && npad_index == HANDHELD_INDEX) {
         Settings::values.players.GetValue()[HANDHELD_INDEX].controller_type =
             MapNPadToSettingsType(controller);
         Settings::values.players.GetValue()[HANDHELD_INDEX].connected = true;
