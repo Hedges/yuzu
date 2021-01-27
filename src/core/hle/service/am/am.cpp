@@ -635,7 +635,7 @@ ICommonStateGetter::ICommonStateGetter(Core::System& system_,
         {50, &ICommonStateGetter::IsVrModeEnabled, "IsVrModeEnabled"},
         {51, &ICommonStateGetter::SetVrModeEnabled, "SetVrModeEnabled"},
         {52, &ICommonStateGetter::SetLcdBacklighOffEnabled, "SetLcdBacklighOffEnabled"},
-        {53, nullptr, "BeginVrModeEx"},
+        {53, &ICommonStateGetter::BeginVrModeEx, "BeginVrModeEx"},
         {54, &ICommonStateGetter::EndVrModeEx, "EndVrModeEx"},
         {55, nullptr, "IsInControllerFirmwareUpdateSection"},
         {60, &ICommonStateGetter::GetDefaultDisplayResolution, "GetDefaultDisplayResolution"},
@@ -727,6 +727,13 @@ void ICommonStateGetter::SetLcdBacklighOffEnabled(Kernel::HLERequestContext& ctx
 
     LOG_WARNING(Service_AM, "(STUBBED) called. is_lcd_backlight_off_enabled={}",
                 is_lcd_backlight_off_enabled);
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+void ICommonStateGetter::BeginVrModeEx(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(RESULT_SUCCESS);
@@ -856,7 +863,7 @@ public:
             {25, nullptr, "Terminate"},
             {30, &ILibraryAppletAccessor::GetResult, "GetResult"},
             {50, nullptr, "SetOutOfFocusApplicationSuspendingEnabled"},
-            {60, nullptr, "PresetLibraryAppletGpuTimeSliceZero"},
+            {60, &ILibraryAppletAccessor::PresetLibraryAppletGpuTimeSliceZero, "PresetLibraryAppletGpuTimeSliceZero"},
             {100, &ILibraryAppletAccessor::PushInData, "PushInData"},
             {101, &ILibraryAppletAccessor::PopOutData, "PopOutData"},
             {102, nullptr, "PushExtraStorage"},
@@ -898,6 +905,13 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(applet->GetStatus());
+    }
+
+    void PresetLibraryAppletGpuTimeSliceZero(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_AM, "(STUBBED) called");
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
     }
 
     void Start(Kernel::HLERequestContext& ctx) {
