@@ -19,12 +19,12 @@
 #include "core/hle/kernel/hle_ipc.h"
 #include "core/hle/kernel/k_scheduler.h"
 #include "core/hle/kernel/k_scoped_scheduler_lock_and_sleep.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/object.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/readable_event.h"
 #include "core/hle/kernel/server_session.h"
-#include "core/hle/kernel/thread.h"
 #include "core/hle/kernel/time_manager.h"
 #include "core/hle/kernel/writable_event.h"
 #include "core/memory.h"
@@ -48,7 +48,7 @@ void SessionRequestHandler::ClientDisconnected(
 
 HLERequestContext::HLERequestContext(KernelCore& kernel, Core::Memory::Memory& memory,
                                      std::shared_ptr<ServerSession> server_session,
-                                     std::shared_ptr<Thread> thread)
+                                     std::shared_ptr<KThread> thread)
     : server_session(std::move(server_session)),
       thread(std::move(thread)), kernel{kernel}, memory{memory} {
     cmd_buf[0] = 0;
@@ -182,7 +182,7 @@ ResultCode HLERequestContext::PopulateFromIncomingCommandBuffer(const HandleTabl
     return RESULT_SUCCESS;
 }
 
-ResultCode HLERequestContext::WriteToOutgoingCommandBuffer(Thread& thread) {
+ResultCode HLERequestContext::WriteToOutgoingCommandBuffer(KThread& thread) {
     auto& owner_process = *thread.GetOwnerProcess();
     auto& handle_table = owner_process.GetHandleTable();
 
@@ -336,6 +336,28 @@ std::size_t HLERequestContext::GetWriteBufferSize(std::size_t buffer_index) cons
         return BufferDescriptorC()[buffer_index].Size();
     }
     return 0;
+}
+
+bool HLERequestContext::CanReadBuffer(std::size_t buffer_index) const {
+    const bool is_buffer_a{BufferDescriptorA().size() > buffer_index &&
+                           BufferDescriptorA()[buffer_index].Size()};
+
+    if (is_buffer_a) {
+        return BufferDescriptorA().size() > buffer_index;
+    } else {
+        return BufferDescriptorX().size() > buffer_index;
+    }
+}
+
+bool HLERequestContext::CanWriteBuffer(std::size_t buffer_index) const {
+    const bool is_buffer_b{BufferDescriptorB().size() > buffer_index &&
+                           BufferDescriptorB()[buffer_index].Size()};
+
+    if (is_buffer_b) {
+        return BufferDescriptorB().size() > buffer_index;
+    } else {
+        return BufferDescriptorC().size() > buffer_index;
+    }
 }
 
 std::string HLERequestContext::Description() const {

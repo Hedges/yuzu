@@ -13,7 +13,7 @@
 #include "common/microprofile.h"
 #include "common/thread.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/thread.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/service/sockets/bsd.h"
 #include "core/hle/service/sockets/sockets_translate.h"
 #include "core/network/network.h"
@@ -253,6 +253,21 @@ void BSD::GetSockName(Kernel::HLERequestContext& ctx) {
     rb.Push<s32>(bsd_errno != Errno::SUCCESS ? -1 : 0);
     rb.PushEnum(bsd_errno);
     rb.Push<u32>(static_cast<u32>(write_buffer.size()));
+}
+
+void BSD::GetSockOpt(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const s32 fd = rp.Pop<s32>();
+    const u32 level = rp.Pop<u32>();
+    const auto optname = static_cast<OptName>(rp.Pop<u32>());
+
+    LOG_WARNING(Service, "(STUBBED) called. fd={} level={} optname=0x{:x}", fd, level, optname);
+
+    IPC::ResponseBuilder rb{ctx, 5};
+    rb.Push(RESULT_SUCCESS);
+    rb.Push<s32>(-1);
+    rb.PushEnum(Errno::NOTCONN);
+    rb.Push<u32>(0);
 }
 
 void BSD::Listen(Kernel::HLERequestContext& ctx) {
@@ -812,7 +827,7 @@ BSD::BSD(Core::System& system_, const char* name) : ServiceFramework{system_, na
         {14, &BSD::Connect, "Connect"},
         {15, &BSD::GetPeerName, "GetPeerName"},
         {16, &BSD::GetSockName, "GetSockName"},
-        {17, nullptr, "GetSockOpt"},
+        {17, &BSD::GetSockOpt, "GetSockOpt"},
         {18, &BSD::Listen, "Listen"},
         {19, nullptr, "Ioctl"},
         {20, &BSD::Fcntl, "Fcntl"},

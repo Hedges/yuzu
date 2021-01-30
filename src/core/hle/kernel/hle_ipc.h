@@ -40,7 +40,7 @@ class HLERequestContext;
 class KernelCore;
 class Process;
 class ServerSession;
-class Thread;
+class KThread;
 class ReadableEvent;
 class WritableEvent;
 
@@ -110,7 +110,7 @@ class HLERequestContext {
 public:
     explicit HLERequestContext(KernelCore& kernel, Core::Memory::Memory& memory,
                                std::shared_ptr<ServerSession> session,
-                               std::shared_ptr<Thread> thread);
+                               std::shared_ptr<KThread> thread);
     ~HLERequestContext();
 
     /// Returns a pointer to the IPC command buffer for this request.
@@ -126,15 +126,12 @@ public:
         return server_session;
     }
 
-    using WakeupCallback = std::function<void(
-        std::shared_ptr<Thread> thread, HLERequestContext& context, ThreadWakeupReason reason)>;
-
     /// Populates this context with data from the requesting process/thread.
     ResultCode PopulateFromIncomingCommandBuffer(const HandleTable& handle_table,
                                                  u32_le* src_cmdbuf);
 
     /// Writes data from this context back to the requesting process/thread.
-    ResultCode WriteToOutgoingCommandBuffer(Thread& thread);
+    ResultCode WriteToOutgoingCommandBuffer(KThread& thread);
 
     u32_le GetCommand() const {
         return command;
@@ -207,6 +204,12 @@ public:
     /// Helper function to get the size of the output buffer
     std::size_t GetWriteBufferSize(std::size_t buffer_index = 0) const;
 
+    /// Helper function to test whether the input buffer at buffer_index can be read
+    bool CanReadBuffer(std::size_t buffer_index = 0) const;
+
+    /// Helper function to test whether the output buffer at buffer_index can be written
+    bool CanWriteBuffer(std::size_t buffer_index = 0) const;
+
     template <typename T>
     std::shared_ptr<T> GetCopyObject(std::size_t index) {
         return DynamicObjectCast<T>(copy_objects.at(index));
@@ -261,11 +264,11 @@ public:
 
     std::string Description() const;
 
-    Thread& GetThread() {
+    KThread& GetThread() {
         return *thread;
     }
 
-    const Thread& GetThread() const {
+    const KThread& GetThread() const {
         return *thread;
     }
 
@@ -280,7 +283,7 @@ private:
 
     std::array<u32, IPC::COMMAND_BUFFER_LENGTH> cmd_buf;
     std::shared_ptr<Kernel::ServerSession> server_session;
-    std::shared_ptr<Thread> thread;
+    std::shared_ptr<KThread> thread;
     // TODO(yuriks): Check common usage of this and optimize size accordingly
     boost::container::small_vector<std::shared_ptr<Object>, 8> move_objects;
     boost::container::small_vector<std::shared_ptr<Object>, 8> copy_objects;
