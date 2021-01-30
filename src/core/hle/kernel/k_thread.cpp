@@ -89,10 +89,10 @@ ResultCode KThread::Initialize(KThreadFunction func, uintptr_t arg, VAddr user_s
     case ThreadType::HighPriority:
         [[fallthrough]];
     case ThreadType::User:
-        ASSERT(((owner == nullptr) ||
-                (owner->GetCoreMask() | (1ULL << virt_core)) == owner->GetCoreMask()));
-        ASSERT(((owner == nullptr) ||
-                (owner->GetPriorityMask() | (1ULL << prio)) == owner->GetPriorityMask()));
+        //ASSERT(((owner == nullptr) ||
+        //        (owner->GetCoreMask() | (1ULL << virt_core)) == owner->GetCoreMask()));
+        //ASSERT(((owner == nullptr) ||
+        //        (owner->GetPriorityMask() | (1ULL << prio)) == owner->GetPriorityMask()));
         break;
     case ThreadType::Kernel:
         UNIMPLEMENTED();
