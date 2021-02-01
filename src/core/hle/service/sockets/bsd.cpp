@@ -263,11 +263,15 @@ void BSD::GetSockOpt(Kernel::HLERequestContext& ctx) {
 
     LOG_WARNING(Service, "(STUBBED) called. fd={} level={} optname=0x{:x}", fd, level, optname);
 
+    std::vector<u8> optval(ctx.GetWriteBufferSize());
+
+    ctx.WriteBuffer(optval);
+
     IPC::ResponseBuilder rb{ctx, 5};
     rb.Push(RESULT_SUCCESS);
     rb.Push<s32>(-1);
     rb.PushEnum(Errno::NOTCONN);
-    rb.Push<u32>(0);
+    rb.Push<u32>(static_cast<u32>(optval.size()));
 }
 
 void BSD::Listen(Kernel::HLERequestContext& ctx) {
@@ -414,6 +418,16 @@ void BSD::Close(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service, "called. fd={}", fd);
 
     BuildErrnoResponse(ctx, CloseImpl(fd));
+}
+
+void BSD::EventFd(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const u64 initval = rp.Pop<u64>();
+    const u32 flags = rp.Pop<u32>();
+
+    LOG_WARNING(Service, "(STUBBED) called. initval={}, flags={}", initval, flags);
+
+    BuildErrnoResponse(ctx, Errno::SUCCESS);
 }
 
 template <typename Work>
@@ -841,7 +855,7 @@ BSD::BSD(Core::System& system_, const char* name) : ServiceFramework{system_, na
         {28, nullptr, "GetResourceStatistics"},
         {29, nullptr, "RecvMMsg"},
         {30, nullptr, "SendMMsg"},
-        {31, nullptr, "EventFd"},
+        {31, &BSD::EventFd, "EventFd"},
         {32, nullptr, "RegisterResourceStatisticsName"},
         {33, nullptr, "Initialize2"},
     };

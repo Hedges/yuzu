@@ -266,6 +266,7 @@ private:
     void SetTerminateResult(Kernel::HLERequestContext& ctx);
     void GetDisplayVersion(Kernel::HLERequestContext& ctx);
     void GetDesiredLanguage(Kernel::HLERequestContext& ctx);
+    void IsGamePlayRecordingSupported(Kernel::HLERequestContext& ctx);
     void InitializeGamePlayRecording(Kernel::HLERequestContext& ctx);
     void SetGamePlayRecordingState(Kernel::HLERequestContext& ctx);
     void NotifyRunning(Kernel::HLERequestContext& ctx);
@@ -288,6 +289,7 @@ private:
     void GetPreviousProgramIndex(Kernel::HLERequestContext& ctx);
     void GetGpuErrorDetectedSystemEvent(Kernel::HLERequestContext& ctx);
     void GetFriendInvitationStorageChannelEvent(Kernel::HLERequestContext& ctx);
+    void TryPopFromFriendInvitationStorageChannel(Kernel::HLERequestContext& ctx);
 
     bool launch_popped_application_specific = false;
     bool launch_popped_account_preselect = false;

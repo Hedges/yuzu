@@ -1192,7 +1192,7 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_)
         {40, &IApplicationFunctions::NotifyRunning, "NotifyRunning"},
         {50, &IApplicationFunctions::GetPseudoDeviceId, "GetPseudoDeviceId"},
         {60, nullptr, "SetMediaPlaybackStateForApplication"},
-        {65, nullptr, "IsGamePlayRecordingSupported"},
+        {65, &IApplicationFunctions::IsGamePlayRecordingSupported, "IsGamePlayRecordingSupported"},
         {66, &IApplicationFunctions::InitializeGamePlayRecording, "InitializeGamePlayRecording"},
         {67, &IApplicationFunctions::SetGamePlayRecordingState, "SetGamePlayRecordingState"},
         {68, nullptr, "RequestFlushGamePlayingMovieForDebug"},
@@ -1213,7 +1213,7 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_)
         {124, nullptr, "EnableApplicationAllThreadDumpOnCrash"},
         {130, &IApplicationFunctions::GetGpuErrorDetectedSystemEvent, "GetGpuErrorDetectedSystemEvent"},
         {140, &IApplicationFunctions::GetFriendInvitationStorageChannelEvent, "GetFriendInvitationStorageChannelEvent"},
-        {141, nullptr, "TryPopFromFriendInvitationStorageChannel"},
+        {141, &IApplicationFunctions::TryPopFromFriendInvitationStorageChannel, "TryPopFromFriendInvitationStorageChannel"},
         {150, nullptr, "GetNotificationStorageChannelEvent"},
         {151, nullptr, "TryPopFromNotificationStorageChannel"},
         {160, nullptr, "GetHealthWarningDisappearedSystemEvent"},
@@ -1480,6 +1480,16 @@ void IApplicationFunctions::GetDesiredLanguage(Kernel::HLERequestContext& ctx) {
     rb.Push(*res_code);
 }
 
+void IApplicationFunctions::IsGamePlayRecordingSupported(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    constexpr bool gameplay_recording_supported = false;
+
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(RESULT_SUCCESS);
+    rb.Push(gameplay_recording_supported);
+}
+
 void IApplicationFunctions::InitializeGamePlayRecording(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service_AM, "(STUBBED) called");
 
@@ -1629,6 +1639,14 @@ void IApplicationFunctions::GetFriendInvitationStorageChannelEvent(Kernel::HLERe
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
     rb.PushCopyObjects(friend_invitation_storage_channel_event.readable);
+}
+
+void IApplicationFunctions::TryPopFromFriendInvitationStorageChannel(
+    Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(ERR_NO_DATA_IN_CHANNEL);
 }
 
 void InstallInterfaces(SM::ServiceManager& service_manager, NVFlinger::NVFlinger& nvflinger,
