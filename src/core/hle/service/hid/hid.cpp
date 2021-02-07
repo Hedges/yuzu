@@ -14,10 +14,10 @@
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/client_session.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/readable_event.h"
 #include "core/hle/kernel/shared_memory.h"
-#include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/hid/errors.h"
 #include "core/hle/service/hid/hid.h"
 #include "core/hle/service/hid/irs.h"
@@ -59,20 +59,26 @@ IAppletResource::IAppletResource(Core::System& system_)
     MakeController<Controller_Mouse>(HidController::Mouse);
     MakeController<Controller_Keyboard>(HidController::Keyboard);
     MakeController<Controller_XPad>(HidController::XPad);
-    MakeController<Controller_Stubbed>(HidController::Unknown1);
-    MakeController<Controller_Stubbed>(HidController::Unknown2);
-    MakeController<Controller_Stubbed>(HidController::Unknown3);
-    MakeController<Controller_Stubbed>(HidController::SixAxisSensor);
+    MakeController<Controller_Stubbed>(HidController::HomeButton);
+    MakeController<Controller_Stubbed>(HidController::SleepButton);
+    MakeController<Controller_Stubbed>(HidController::CaptureButton);
+    MakeController<Controller_Stubbed>(HidController::InputDetector);
+    MakeController<Controller_Stubbed>(HidController::UniquePad);
     MakeController<Controller_NPad>(HidController::NPad);
     MakeController<Controller_Gesture>(HidController::Gesture);
+    MakeController<Controller_Stubbed>(HidController::ConsoleSixAxisSensor);
 
     // Homebrew doesn't try to activate some controllers, so we activate them by default
     GetController<Controller_NPad>(HidController::NPad).ActivateController();
     GetController<Controller_Touchscreen>(HidController::Touchscreen).ActivateController();
 
-    GetController<Controller_Stubbed>(HidController::Unknown1).SetCommonHeaderOffset(0x4c00);
-    GetController<Controller_Stubbed>(HidController::Unknown2).SetCommonHeaderOffset(0x4e00);
-    GetController<Controller_Stubbed>(HidController::Unknown3).SetCommonHeaderOffset(0x5000);
+    GetController<Controller_Stubbed>(HidController::HomeButton).SetCommonHeaderOffset(0x4C00);
+    GetController<Controller_Stubbed>(HidController::SleepButton).SetCommonHeaderOffset(0x4E00);
+    GetController<Controller_Stubbed>(HidController::CaptureButton).SetCommonHeaderOffset(0x5000);
+    GetController<Controller_Stubbed>(HidController::InputDetector).SetCommonHeaderOffset(0x5200);
+    GetController<Controller_Stubbed>(HidController::UniquePad).SetCommonHeaderOffset(0x5A00);
+    GetController<Controller_Stubbed>(HidController::ConsoleSixAxisSensor)
+        .SetCommonHeaderOffset(0x3C200);
 
     // Register update callbacks
     pad_update_event = Core::Timing::CreateEvent(
