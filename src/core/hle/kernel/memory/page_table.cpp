@@ -6,8 +6,7 @@
 #include "common/assert.h"
 #include "common/scope_exit.h"
 #include "core/core.h"
-#include "core/hle/kernel/errors.h"
-#include "core/hle/kernel/k_resource_limit.h"
+#include "core/hle/kernel/k_scoped_resource_reservation.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/memory/address_space_info.h"
 #include "core/hle/kernel/memory/memory_block.h"
@@ -16,6 +15,7 @@
 #include "core/hle/kernel/memory/page_table.h"
 #include "core/hle/kernel/memory/system_control.h"
 #include "core/hle/kernel/process.h"
+#include "core/hle/kernel/svc_results.h"
 #include "core/memory.h"
 
 namespace Kernel::Memory {
@@ -141,7 +141,7 @@ ResultCode PageTable::InitializeForProcess(FileSys::ProgramAddressSpaceType as_t
         (alias_region_size + heap_region_size + stack_region_size + kernel_map_region_size)};
     if (alloc_size < needed_size) {
         UNREACHABLE();
-        return ERR_OUT_OF_MEMORY;
+        return ResultOutOfMemory;
     }
 
     const std::size_t remaining_size{alloc_size - needed_size};
@@ -277,11 +277,11 @@ ResultCode PageTable::MapProcessCode(VAddr addr, std::size_t num_pages, MemorySt
     const u64 size{num_pages * PageSize};
 
     if (!CanContain(addr, size, state)) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidCurrentMemory;
     }
 
     if (IsRegionMapped(addr, size)) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidCurrentMemory;
     }
 
     PageLinkedList page_linked_list;
@@ -307,7 +307,7 @@ ResultCode PageTable::MapProcessCodeMemory(VAddr dst_addr, VAddr src_addr, std::
                                   MemoryAttribute::None, MemoryAttribute::IpcAndDeviceMapped));
 
     if (IsRegionMapped(dst_addr, size)) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidCurrentMemory;
     }
 
     PageLinkedList page_linked_list;
@@ -409,27 +409,25 @@ ResultCode PageTable::MapPhysicalMemory(VAddr addr, std::size_t size) {
         return RESULT_SUCCESS;
     }
 
-    auto process{system.Kernel().CurrentProcess()};
     const std::size_t remaining_size{size - mapped_size};
     const std::size_t remaining_pages{remaining_size / PageSize};
 
-    if (process->GetResourceLimit() &&
-        !process->GetResourceLimit()->Reserve(LimitableResource::PhysicalMemory, remaining_size)) {
-        return ERR_RESOURCE_LIMIT_EXCEEDED;
+    // Reserve the memory from the process resource limit.
+    KScopedResourceReservation memory_reservation(
+        system.Kernel().CurrentProcess()->GetResourceLimit(), LimitableResource::PhysicalMemory,
+        remaining_size);
+    if (!memory_reservation.Succeeded()) {
+        LOG_ERROR(Kernel, "Could not reserve remaining {:X} bytes", remaining_size);
+        return ResultResourceLimitedExceeded;
     }
 
     PageLinkedList page_linked_list;
-    {
-        auto block_guard = detail::ScopeExit([&] {
-            system.Kernel().MemoryManager().Free(page_linked_list, remaining_pages, memory_pool);
-            process->GetResourceLimit()->Release(LimitableResource::PhysicalMemory, remaining_size);
-        });
 
-        CASCADE_CODE(system.Kernel().MemoryManager().Allocate(page_linked_list, remaining_pages,
-                                                              memory_pool));
+    CASCADE_CODE(
+        system.Kernel().MemoryManager().Allocate(page_linked_list, remaining_pages, memory_pool));
 
-        block_guard.Cancel();
-    }
+    // We succeeded, so commit the memory reservation.
+    memory_reservation.Commit();
 
     MapPhysicalMemory(page_linked_list, addr, end_addr);
 
@@ -454,12 +452,12 @@ ResultCode PageTable::UnmapPhysicalMemory(VAddr addr, std::size_t size) {
     block_manager->IterateForRange(addr, end_addr, [&](const MemoryInfo& info) {
         if (info.state == MemoryState::Normal) {
             if (info.attribute != MemoryAttribute::None) {
-                result = ERR_INVALID_ADDRESS_STATE;
+                result = ResultInvalidCurrentMemory;
                 return;
             }
             mapped_size += GetSizeInRange(info, addr, end_addr);
         } else if (info.state != MemoryState::Free) {
-            result = ERR_INVALID_ADDRESS_STATE;
+            result = ResultInvalidCurrentMemory;
         }
     });
 
@@ -526,7 +524,7 @@ ResultCode PageTable::Map(VAddr dst_addr, VAddr src_addr, std::size_t size) {
         MemoryAttribute::Mask, MemoryAttribute::None, MemoryAttribute::IpcAndDeviceMapped));
 
     if (IsRegionMapped(dst_addr, size)) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidCurrentMemory;
     }
 
     PageLinkedList page_linked_list;
@@ -577,7 +575,7 @@ ResultCode PageTable::Unmap(VAddr dst_addr, VAddr src_addr, std::size_t size) {
     AddRegionToPages(dst_addr, num_pages, dst_pages);
 
     if (!dst_pages.IsEqual(src_pages)) {
-        return ERR_INVALID_MEMORY_RANGE;
+        return ResultInvalidMemoryRange;
     }
 
     {
@@ -626,11 +624,11 @@ ResultCode PageTable::MapPages(VAddr addr, PageLinkedList& page_linked_list, Mem
     const std::size_t size{num_pages * PageSize};
 
     if (!CanContain(addr, size, state)) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidCurrentMemory;
     }
 
     if (IsRegionMapped(addr, num_pages * PageSize)) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidCurrentMemory;
     }
 
     CASCADE_CODE(MapPages(addr, page_linked_list, perm));
@@ -768,7 +766,7 @@ ResultCode PageTable::SetHeapCapacity(std::size_t new_heap_capacity) {
 ResultVal<VAddr> PageTable::SetHeapSize(std::size_t size) {
 
     if (size > heap_region_end - heap_region_start) {
-        return ERR_OUT_OF_MEMORY;
+        return ResultOutOfMemory;
     }
 
     const u64 previous_heap_size{GetHeapSize()};
@@ -781,10 +779,14 @@ ResultVal<VAddr> PageTable::SetHeapSize(std::size_t size) {
 
         const u64 delta{size - previous_heap_size};
 
-        auto process{system.Kernel().CurrentProcess()};
-        if (process->GetResourceLimit() && delta != 0 &&
-            !process->GetResourceLimit()->Reserve(LimitableResource::PhysicalMemory, delta)) {
-            return ERR_RESOURCE_LIMIT_EXCEEDED;
+        // Reserve memory for the heap extension.
+        KScopedResourceReservation memory_reservation(
+            system.Kernel().CurrentProcess()->GetResourceLimit(), LimitableResource::PhysicalMemory,
+            delta);
+
+        if (!memory_reservation.Succeeded()) {
+            LOG_ERROR(Kernel, "Could not reserve heap extension of size {:X} bytes", delta);
+            return ResultResourceLimitedExceeded;
         }
 
         PageLinkedList page_linked_list;
@@ -794,11 +796,14 @@ ResultVal<VAddr> PageTable::SetHeapSize(std::size_t size) {
             system.Kernel().MemoryManager().Allocate(page_linked_list, num_pages, memory_pool));
 
         if (IsRegionMapped(current_heap_addr, delta)) {
-            return ERR_INVALID_ADDRESS_STATE;
+            return ResultInvalidCurrentMemory;
         }
 
         CASCADE_CODE(
             Operate(current_heap_addr, num_pages, page_linked_list, OperationType::MapGroup));
+
+        // Succeeded in allocation, commit the resource reservation
+        memory_reservation.Commit();
 
         block_manager->Update(current_heap_addr, num_pages, MemoryState::Normal,
                               MemoryPermission::ReadAndWrite);
@@ -816,17 +821,17 @@ ResultVal<VAddr> PageTable::AllocateAndMapMemory(std::size_t needed_num_pages, s
     std::lock_guard lock{page_table_lock};
 
     if (!CanContain(region_start, region_num_pages * PageSize, state)) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidCurrentMemory;
     }
 
     if (region_num_pages <= needed_num_pages) {
-        return ERR_OUT_OF_MEMORY;
+        return ResultOutOfMemory;
     }
 
     const VAddr addr{
         AllocateVirtualMemory(region_start, region_num_pages, needed_num_pages, align)};
     if (!addr) {
-        return ERR_OUT_OF_MEMORY;
+        return ResultOutOfMemory;
     }
 
     if (is_map_only) {
@@ -1105,13 +1110,13 @@ constexpr ResultCode PageTable::CheckMemoryState(const MemoryInfo& info, MemoryS
                                                  MemoryAttribute attr) const {
     // Validate the states match expectation
     if ((info.state & state_mask) != state) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidCurrentMemory;
     }
     if ((info.perm & perm_mask) != perm) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidCurrentMemory;
     }
     if ((info.attribute & attr_mask) != attr) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidCurrentMemory;
     }
 
     return RESULT_SUCCESS;
@@ -1138,14 +1143,14 @@ ResultCode PageTable::CheckMemoryState(MemoryState* out_state, MemoryPermission*
     while (true) {
         // Validate the current block
         if (!(info.state == first_state)) {
-            return ERR_INVALID_ADDRESS_STATE;
+            return ResultInvalidCurrentMemory;
         }
         if (!(info.perm == first_perm)) {
-            return ERR_INVALID_ADDRESS_STATE;
+            return ResultInvalidCurrentMemory;
         }
         if (!((info.attribute | static_cast<MemoryAttribute>(ignore_attr)) ==
               (first_attr | static_cast<MemoryAttribute>(ignore_attr)))) {
-            return ERR_INVALID_ADDRESS_STATE;
+            return ResultInvalidCurrentMemory;
         }
 
         // Validate against the provided masks

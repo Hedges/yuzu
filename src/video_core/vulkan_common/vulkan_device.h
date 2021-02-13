@@ -23,7 +23,7 @@ enum class FormatType { Linear, Optimal, Buffer };
 const u32 GuestWarpSize = 32;
 
 /// Handles data specific to a physical device.
-class Device final {
+class Device {
 public:
     explicit Device(VkInstance instance, vk::PhysicalDevice physical, VkSurfaceKHR surface,
                     const vk::InstanceDispatch& dld);
@@ -227,10 +227,10 @@ public:
 
 private:
     /// Checks if the physical device is suitable.
-    void CheckSuitability() const;
+    void CheckSuitability(bool requires_swapchain) const;
 
     /// Loads extensions into a vector and stores available ones in this object.
-    std::vector<const char*> LoadExtensions();
+    std::vector<const char*> LoadExtensions(bool requires_surface);
 
     /// Sets up queue families.
     void SetupFamilies(VkSurfaceKHR surface);
@@ -285,7 +285,6 @@ private:
     bool ext_transform_feedback{};              ///< Support for VK_EXT_transform_feedback.
     bool ext_custom_border_color{};             ///< Support for VK_EXT_custom_border_color.
     bool ext_extended_dynamic_state{};          ///< Support for VK_EXT_extended_dynamic_state.
-    bool ext_robustness2{};                     ///< Support for VK_EXT_robustness2.
     bool ext_shader_stencil_export{};           ///< Support for VK_EXT_shader_stencil_export.
     bool nv_device_diagnostics_config{};        ///< Support for VK_NV_device_diagnostics_config.
     bool has_renderdoc{};                       ///< Has RenderDoc attached
