@@ -266,6 +266,7 @@ add_library(core STATIC
     hle/service/am/applets/software_keyboard.h
     hle/service/am/applets/web_browser.cpp
     hle/service/am/applets/web_browser.h
+    hle/service/am/applets/web_types.h
     hle/service/am/idle.cpp
     hle/service/am/idle.h
     hle/service/am/omm.cpp
@@ -400,6 +401,7 @@ add_library(core STATIC
     hle/service/hid/controllers/xpad.h
     hle/service/lbl/lbl.cpp
     hle/service/lbl/lbl.h
+    hle/service/ldn/errors.h
     hle/service/ldn/ldn.cpp
     hle/service/ldn/ldn.h
     hle/service/ldr/ldr.cpp
