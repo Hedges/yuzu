@@ -68,6 +68,7 @@ void ProgramMetadata::LoadManual(bool is_64_bit, ProgramAddressSpaceType address
                                  u32 main_thread_stack_size, u64 title_id,
                                  u64 filesystem_permissions,
                                  KernelCapabilityDescriptors capabilities) {
+    memset(&npdm_header, 0, sizeof(npdm_header));
     npdm_header.has_64_bit_instructions.Assign(is_64_bit);
     npdm_header.address_space_type.Assign(address_space);
     npdm_header.main_thread_priority = static_cast<u8>(main_thread_prio);
