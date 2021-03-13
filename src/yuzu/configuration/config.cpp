@@ -235,7 +235,7 @@ const std::array<UISettings::Shortcut, 17> Config::default_hotkeys{{
     {QStringLiteral("Restart Emulation"),        QStringLiteral("Main Window"), {QStringLiteral("F6"), Qt::WindowShortcut}},
     {QStringLiteral("Stop Emulation"),           QStringLiteral("Main Window"), {QStringLiteral("F5"), Qt::WindowShortcut}},
     {QStringLiteral("Toggle Filter Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+F"), Qt::WindowShortcut}},
-    {QStringLiteral("Toggle Mouse Panning"),     QStringLiteral("Main Window"), {QStringLiteral("F9"), Qt::ApplicationShortcut}},
+    {QStringLiteral("Toggle Mouse Panning"),     QStringLiteral("Main Window"), {QStringLiteral("Ctrl+F9"), Qt::ApplicationShortcut}},
     {QStringLiteral("Toggle Speed Limit"),       QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Z"), Qt::ApplicationShortcut}},
     {QStringLiteral("Toggle Status Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+S"), Qt::WindowShortcut}},
 }};
@@ -508,7 +508,7 @@ void Config::ReadControlValues() {
 
     Settings::values.emulate_analog_keyboard =
         ReadSetting(QStringLiteral("emulate_analog_keyboard"), false).toBool();
-    Settings::values.mouse_panning = ReadSetting(QStringLiteral("mouse_panning"), false).toBool();
+    Settings::values.mouse_panning = false;
     Settings::values.mouse_panning_sensitivity =
         ReadSetting(QStringLiteral("mouse_panning_sensitivity"), 1).toFloat();
 
@@ -648,7 +648,7 @@ void Config::ReadDebuggingValues() {
 void Config::ReadServiceValues() {
     qt_config->beginGroup(QStringLiteral("Services"));
     Settings::values.bcat_backend =
-        ReadSetting(QStringLiteral("bcat_backend"), QStringLiteral("null"))
+        ReadSetting(QStringLiteral("bcat_backend"), QStringLiteral("none"))
             .toString()
             .toStdString();
     Settings::values.bcat_boxcat_local =
@@ -1182,7 +1182,6 @@ void Config::SaveControlValues() {
     WriteSetting(QStringLiteral("keyboard_enabled"), Settings::values.keyboard_enabled, false);
     WriteSetting(QStringLiteral("emulate_analog_keyboard"),
                  Settings::values.emulate_analog_keyboard, false);
-    WriteSetting(QStringLiteral("mouse_panning"), Settings::values.mouse_panning, false);
     WriteSetting(QStringLiteral("mouse_panning_sensitivity"),
                  Settings::values.mouse_panning_sensitivity, 1.0f);
     qt_config->endGroup();
@@ -1239,7 +1238,7 @@ void Config::SaveDebuggingValues() {
 void Config::SaveServiceValues() {
     qt_config->beginGroup(QStringLiteral("Services"));
     WriteSetting(QStringLiteral("bcat_backend"),
-                 QString::fromStdString(Settings::values.bcat_backend), QStringLiteral("null"));
+                 QString::fromStdString(Settings::values.bcat_backend), QStringLiteral("none"));
     WriteSetting(QStringLiteral("bcat_boxcat_local"), Settings::values.bcat_boxcat_local, false);
     qt_config->endGroup();
 }

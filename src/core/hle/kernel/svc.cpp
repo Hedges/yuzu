@@ -31,21 +31,21 @@
 #include "core/hle/kernel/k_address_arbiter.h"
 #include "core/hle/kernel/k_condition_variable.h"
 #include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_memory_block.h"
+#include "core/hle/kernel/k_memory_layout.h"
+#include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/kernel/k_resource_limit.h"
 #include "core/hle/kernel/k_scheduler.h"
 #include "core/hle/kernel/k_scoped_resource_reservation.h"
 #include "core/hle/kernel/k_scoped_scheduler_lock_and_sleep.h"
+#include "core/hle/kernel/k_shared_memory.h"
 #include "core/hle/kernel/k_synchronization_object.h"
 #include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/memory/memory_block.h"
-#include "core/hle/kernel/memory/memory_layout.h"
-#include "core/hle/kernel/memory/page_table.h"
 #include "core/hle/kernel/physical_core.h"
 #include "core/hle/kernel/process.h"
-#include "core/hle/kernel/shared_memory.h"
 #include "core/hle/kernel/svc.h"
 #include "core/hle/kernel/svc_results.h"
 #include "core/hle/kernel/svc_types.h"
@@ -71,8 +71,8 @@ constexpr bool IsValidAddressRange(VAddr address, u64 size) {
 // Helper function that performs the common sanity checks for svcMapMemory
 // and svcUnmapMemory. This is doable, as both functions perform their sanitizing
 // in the same order.
-ResultCode MapUnmapMemorySanityChecks(const Memory::PageTable& manager, VAddr dst_addr,
-                                      VAddr src_addr, u64 size) {
+ResultCode MapUnmapMemorySanityChecks(const KPageTable& manager, VAddr dst_addr, VAddr src_addr,
+                                      u64 size) {
     if (!Common::Is4KBAligned(dst_addr)) {
         LOG_ERROR(Kernel_SVC, "Destination address is not aligned to 4KB, 0x{:016X}", dst_addr);
         return ResultInvalidAddress;
@@ -234,9 +234,9 @@ static ResultCode SetMemoryAttribute(Core::System& system, VAddr address, u64 si
         return ResultInvalidCurrentMemory;
     }
 
-    const auto attributes{static_cast<Memory::MemoryAttribute>(mask | attribute)};
-    if (attributes != static_cast<Memory::MemoryAttribute>(mask) ||
-        (attributes | Memory::MemoryAttribute::Uncached) != Memory::MemoryAttribute::Uncached) {
+    const auto attributes{static_cast<MemoryAttribute>(mask | attribute)};
+    if (attributes != static_cast<MemoryAttribute>(mask) ||
+        (attributes | MemoryAttribute::Uncached) != MemoryAttribute::Uncached) {
         LOG_ERROR(Kernel_SVC,
                   "Memory attribute doesn't match the given mask (Attribute: 0x{:X}, Mask: {:X}",
                   attribute, mask);
@@ -245,8 +245,8 @@ static ResultCode SetMemoryAttribute(Core::System& system, VAddr address, u64 si
 
     auto& page_table{system.Kernel().CurrentProcess()->PageTable()};
 
-    return page_table.SetMemoryAttribute(address, size, static_cast<Memory::MemoryAttribute>(mask),
-                                         static_cast<Memory::MemoryAttribute>(attribute));
+    return page_table.SetMemoryAttribute(address, size, static_cast<KMemoryAttribute>(mask),
+                                         static_cast<KMemoryAttribute>(attribute));
 }
 
 static ResultCode SetMemoryAttribute32(Core::System& system, u32 address, u32 size, u32 mask,
@@ -512,7 +512,7 @@ static ResultCode ArbitrateLock(Core::System& system, Handle thread_handle, VAdd
               thread_handle, address, tag);
 
     // Validate the input address.
-    if (Memory::IsKernelAddress(address)) {
+    if (IsKernelAddress(address)) {
         LOG_ERROR(Kernel_SVC, "Attempting to arbitrate a lock on a kernel address (address={:08X})",
                   address);
         return ResultInvalidCurrentMemory;
@@ -535,8 +535,7 @@ static ResultCode ArbitrateUnlock(Core::System& system, VAddr address) {
     LOG_TRACE(Kernel_SVC, "called address=0x{:X}", address);
 
     // Validate the input address.
-
-    if (Memory::IsKernelAddress(address)) {
+    if (IsKernelAddress(address)) {
         LOG_ERROR(Kernel_SVC,
                   "Attempting to arbitrate an unlock on a kernel address (address={:08X})",
                   address);
@@ -1239,9 +1238,8 @@ static ResultCode MapSharedMemory(Core::System& system, Handle shared_memory_han
         return ResultInvalidCurrentMemory;
     }
 
-    const auto permission_type = static_cast<Memory::MemoryPermission>(permissions);
-    if ((permission_type | Memory::MemoryPermission::Write) !=
-        Memory::MemoryPermission::ReadAndWrite) {
+    const auto permission_type = static_cast<MemoryPermission>(permissions);
+    if ((permission_type | MemoryPermission::Write) != MemoryPermission::ReadWrite) {
         LOG_ERROR(Kernel_SVC, "Expected Read or ReadWrite permission but got permissions=0x{:08X}",
                   permissions);
         return ResultInvalidMemoryPermissions;
@@ -1274,14 +1272,15 @@ static ResultCode MapSharedMemory(Core::System& system, Handle shared_memory_han
         return ResultInvalidMemoryRange;
     }
 
-    auto shared_memory{current_process->GetHandleTable().Get<SharedMemory>(shared_memory_handle)};
+    auto shared_memory{current_process->GetHandleTable().Get<KSharedMemory>(shared_memory_handle)};
     if (!shared_memory) {
         LOG_ERROR(Kernel_SVC, "Shared memory does not exist, shared_memory_handle=0x{:08X}",
                   shared_memory_handle);
         return ResultInvalidHandle;
     }
 
-    return shared_memory->Map(*current_process, addr, size, permission_type);
+    return shared_memory->Map(*current_process, addr, size,
+                              static_cast<KMemoryPermission>(permission_type));
 }
 
 static ResultCode MapSharedMemory32(Core::System& system, Handle shared_memory_handle, u32 addr,
@@ -1540,8 +1539,9 @@ static ResultCode CreateThread(Core::System& system, Handle* out_handle, VAddr e
     std::shared_ptr<KThread> thread;
     {
         KScopedLightLock lk{process.GetStateLock()};
-        CASCADE_RESULT(thread, KThread::Create(system, ThreadType::User, "", entry_point, priority,
-                                               arg, core_id, stack_bottom, &process));
+        CASCADE_RESULT(thread,
+                       KThread::CreateUserThread(system, ThreadType::User, "", entry_point,
+                                                 priority, arg, core_id, stack_bottom, &process));
     }
 
     const auto new_thread_handle = process.GetHandleTable().Create(thread);
@@ -1645,7 +1645,7 @@ static ResultCode WaitProcessWideKeyAtomic(Core::System& system, VAddr address, 
               cv_key, tag, timeout_ns);
 
     // Validate input.
-    if (Memory::IsKernelAddress(address)) {
+    if (IsKernelAddress(address)) {
         LOG_ERROR(Kernel_SVC, "Attempted to wait on kernel address (address={:08X})", address);
         return ResultInvalidCurrentMemory;
     }
@@ -1727,7 +1727,7 @@ static ResultCode WaitForAddress(Core::System& system, VAddr address, Svc::Arbit
               address, arb_type, value, timeout_ns);
 
     // Validate input.
-    if (Memory::IsKernelAddress(address)) {
+    if (IsKernelAddress(address)) {
         LOG_ERROR(Kernel_SVC, "Attempting to wait on kernel address (address={:08X})", address);
         return ResultInvalidCurrentMemory;
     }
@@ -1772,7 +1772,7 @@ static ResultCode SignalToAddress(Core::System& system, VAddr address, Svc::Sign
               address, signal_type, value, count);
 
     // Validate input.
-    if (Memory::IsKernelAddress(address)) {
+    if (IsKernelAddress(address)) {
         LOG_ERROR(Kernel_SVC, "Attempting to signal to a kernel address (address={:08X})", address);
         return ResultInvalidCurrentMemory;
     }
@@ -1894,9 +1894,8 @@ static ResultCode CreateTransferMemory(Core::System& system, Handle* handle, VAd
         return ResultInvalidCurrentMemory;
     }
 
-    const auto perms{static_cast<Memory::MemoryPermission>(permissions)};
-    if (perms > Memory::MemoryPermission::ReadAndWrite ||
-        perms == Memory::MemoryPermission::Write) {
+    const auto perms{static_cast<MemoryPermission>(permissions)};
+    if (perms > MemoryPermission::ReadWrite || perms == MemoryPermission::Write) {
         LOG_ERROR(Kernel_SVC, "Invalid memory permissions for transfer memory! (perms={:08X})",
                   permissions);
         return ResultInvalidMemoryPermissions;
@@ -1910,7 +1909,8 @@ static ResultCode CreateTransferMemory(Core::System& system, Handle* handle, VAd
         LOG_ERROR(Kernel_SVC, "Could not reserve a new transfer memory");
         return ResultResourceLimitedExceeded;
     }
-    auto transfer_mem_handle = TransferMemory::Create(kernel, system.Memory(), addr, size, perms);
+    auto transfer_mem_handle = TransferMemory::Create(kernel, system.Memory(), addr, size,
+                                                      static_cast<KMemoryPermission>(perms));
 
     if (const auto reserve_result{transfer_mem_handle->Reserve()}; reserve_result.IsError()) {
         return reserve_result;

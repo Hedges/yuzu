@@ -376,11 +376,34 @@ void GRenderWindow::closeEvent(QCloseEvent* event) {
 }
 
 void GRenderWindow::keyPressEvent(QKeyEvent* event) {
-    input_subsystem->GetKeyboard()->PressKey(event->key());
+    if (!event->isAutoRepeat()) {
+        input_subsystem->GetKeyboard()->PressKey(event->key());
+    }
 }
 
 void GRenderWindow::keyReleaseEvent(QKeyEvent* event) {
-    input_subsystem->GetKeyboard()->ReleaseKey(event->key());
+    if (!event->isAutoRepeat()) {
+        input_subsystem->GetKeyboard()->ReleaseKey(event->key());
+    }
+}
+
+MouseInput::MouseButton GRenderWindow::QtButtonToMouseButton(Qt::MouseButton button) {
+    switch (button) {
+    case Qt::LeftButton:
+        return MouseInput::MouseButton::Left;
+    case Qt::RightButton:
+        return MouseInput::MouseButton::Right;
+    case Qt::MiddleButton:
+        return MouseInput::MouseButton::Wheel;
+    case Qt::BackButton:
+        return MouseInput::MouseButton::Backward;
+    case Qt::ForwardButton:
+        return MouseInput::MouseButton::Forward;
+    case Qt::TaskButton:
+        return MouseInput::MouseButton::Task;
+    default:
+        return MouseInput::MouseButton::Extra;
+    }
 }
 
 void GRenderWindow::mousePressEvent(QMouseEvent* event) {
@@ -391,7 +414,8 @@ void GRenderWindow::mousePressEvent(QMouseEvent* event) {
 
     auto pos = event->pos();
     const auto [x, y] = ScaleTouch(pos);
-    input_subsystem->GetMouse()->PressButton(x, y, event->button());
+    const auto button = QtButtonToMouseButton(event->button());
+    input_subsystem->GetMouse()->PressButton(x, y, button);
 
     if (event->button() == Qt::LeftButton) {
         this->TouchPressed(x, y, 0);
@@ -425,7 +449,8 @@ void GRenderWindow::mouseReleaseEvent(QMouseEvent* event) {
         return;
     }
 
-    input_subsystem->GetMouse()->ReleaseButton(event->button());
+    const auto button = QtButtonToMouseButton(event->button());
+    input_subsystem->GetMouse()->ReleaseButton(button);
 
     if (event->button() == Qt::LeftButton) {
         this->TouchReleased(0);

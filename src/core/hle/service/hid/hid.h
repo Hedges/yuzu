@@ -14,7 +14,7 @@ struct EventType;
 }
 
 namespace Kernel {
-class SharedMemory;
+class KSharedMemory;
 }
 
 namespace Service::SM {
@@ -69,7 +69,7 @@ private:
     void UpdateControllers(std::uintptr_t user_data, std::chrono::nanoseconds ns_late);
     void UpdateMotion(std::uintptr_t user_data, std::chrono::nanoseconds ns_late);
 
-    std::shared_ptr<Kernel::SharedMemory> shared_mem;
+    std::shared_ptr<Kernel::KSharedMemory> shared_mem;
 
     std::shared_ptr<Core::Timing::EventType> pad_update_event;
     std::shared_ptr<Core::Timing::EventType> motion_update_event;
@@ -136,6 +136,8 @@ private:
     void PermitVibration(Kernel::HLERequestContext& ctx);
     void IsVibrationPermitted(Kernel::HLERequestContext& ctx);
     void SendVibrationValues(Kernel::HLERequestContext& ctx);
+    void SendVibrationGcErmCommand(Kernel::HLERequestContext& ctx);
+    void GetActualVibrationGcErmCommand(Kernel::HLERequestContext& ctx);
     void BeginPermitVibrationSession(Kernel::HLERequestContext& ctx);
     void EndPermitVibrationSession(Kernel::HLERequestContext& ctx);
     void IsVibrationDeviceMounted(Kernel::HLERequestContext& ctx);
@@ -154,13 +156,21 @@ private:
     void GetNpadCommunicationMode(Kernel::HLERequestContext& ctx);
 
     enum class VibrationDeviceType : u32 {
+        Unknown = 0,
         LinearResonantActuator = 1,
+        GcErm = 2,
     };
 
     enum class VibrationDevicePosition : u32 {
         None = 0,
         Left = 1,
         Right = 2,
+    };
+
+    enum class VibrationGcErmCommand : u64 {
+        Stop = 0,
+        Start = 1,
+        StopHard = 2,
     };
 
     struct VibrationDeviceInfo {

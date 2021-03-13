@@ -20,13 +20,13 @@
 #include "core/hardware_properties.h"
 #include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/k_condition_variable.h"
+#include "core/hle/kernel/k_memory_layout.h"
 #include "core/hle/kernel/k_resource_limit.h"
 #include "core/hle/kernel/k_scheduler.h"
 #include "core/hle/kernel/k_scoped_scheduler_lock_and_sleep.h"
 #include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/k_thread_queue.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/memory/memory_layout.h"
 #include "core/hle/kernel/object.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/svc_results.h"
@@ -782,7 +782,7 @@ void KThread::AddWaiterImpl(KThread* thread) {
     }
 
     // Keep track of how many kernel waiters we have.
-    if (Memory::IsKernelAddressKey(thread->GetAddressKey())) {
+    if (IsKernelAddressKey(thread->GetAddressKey())) {
         ASSERT((num_kernel_waiters++) >= 0);
     }
 
@@ -795,7 +795,7 @@ void KThread::RemoveWaiterImpl(KThread* thread) {
     ASSERT(kernel.GlobalSchedulerContext().IsLocked());
 
     // Keep track of how many kernel waiters we have.
-    if (Memory::IsKernelAddressKey(thread->GetAddressKey())) {
+    if (IsKernelAddressKey(thread->GetAddressKey())) {
         ASSERT((num_kernel_waiters--) > 0);
     }
 
@@ -870,7 +870,7 @@ KThread* KThread::RemoveWaiterByKey(s32* out_num_waiters, VAddr key) {
             KThread* thread = std::addressof(*it);
 
             // Keep track of how many kernel waiters we have.
-            if (Memory::IsKernelAddressKey(thread->GetAddressKey())) {
+            if (IsKernelAddressKey(thread->GetAddressKey())) {
                 ASSERT((num_kernel_waiters--) > 0);
             }
             it = waiter_list.erase(it);
@@ -995,22 +995,11 @@ std::shared_ptr<Common::Fiber>& KThread::GetHostContext() {
     return host_context;
 }
 
-ResultVal<std::shared_ptr<KThread>> KThread::Create(Core::System& system, ThreadType type_flags,
-                                                    std::string name, VAddr entry_point,
-                                                    u32 priority, u64 arg, s32 processor_id,
-                                                    VAddr stack_top, Process* owner_process) {
-    std::function<void(void*)> init_func = Core::CpuManager::GetGuestThreadStartFunc();
-    void* init_func_parameter = system.GetCpuManager().GetStartFuncParamater();
-    return Create(system, type_flags, name, entry_point, priority, arg, processor_id, stack_top,
-                  owner_process, std::move(init_func), init_func_parameter);
-}
-
-ResultVal<std::shared_ptr<KThread>> KThread::Create(Core::System& system, ThreadType type_flags,
-                                                    std::string name, VAddr entry_point,
-                                                    u32 priority, u64 arg, s32 processor_id,
-                                                    VAddr stack_top, Process* owner_process,
-                                                    std::function<void(void*)>&& thread_start_func,
-                                                    void* thread_start_parameter) {
+ResultVal<std::shared_ptr<KThread>> KThread::CreateThread(Core::System& system,
+                                                          ThreadType type_flags, std::string name,
+                                                          VAddr entry_point, u32 priority, u64 arg,
+                                                          s32 processor_id, VAddr stack_top,
+                                                          Process* owner_process) {
     auto& kernel = system.Kernel();
 
     std::shared_ptr<KThread> thread = std::make_shared<KThread>(kernel);
@@ -1027,10 +1016,33 @@ ResultVal<std::shared_ptr<KThread>> KThread::Create(Core::System& system, Thread
     auto& scheduler = kernel.GlobalSchedulerContext();
     scheduler.AddThread(thread);
 
-    thread->host_context =
-        std::make_shared<Common::Fiber>(std::move(thread_start_func), thread_start_parameter);
-
     return MakeResult<std::shared_ptr<KThread>>(std::move(thread));
+}
+
+ResultVal<std::shared_ptr<KThread>> KThread::CreateThread(
+    Core::System& system, ThreadType type_flags, std::string name, VAddr entry_point, u32 priority,
+    u64 arg, s32 processor_id, VAddr stack_top, Process* owner_process,
+    std::function<void(void*)>&& thread_start_func, void* thread_start_parameter) {
+    auto thread_result = CreateThread(system, type_flags, name, entry_point, priority, arg,
+                                      processor_id, stack_top, owner_process);
+
+    if (thread_result.Succeeded()) {
+        (*thread_result)->host_context =
+            std::make_shared<Common::Fiber>(std::move(thread_start_func), thread_start_parameter);
+    }
+
+    return thread_result;
+}
+
+ResultVal<std::shared_ptr<KThread>> KThread::CreateUserThread(
+    Core::System& system, ThreadType type_flags, std::string name, VAddr entry_point, u32 priority,
+    u64 arg, s32 processor_id, VAddr stack_top, Process* owner_process) {
+    std::function<void(void*)> init_func = Core::CpuManager::GetGuestThreadStartFunc();
+
+    void* init_func_parameter = system.GetCpuManager().GetStartFuncParamater();
+
+    return CreateThread(system, type_flags, name, entry_point, priority, arg, processor_id,
+                        stack_top, owner_process, std::move(init_func), init_func_parameter);
 }
 
 KThread* GetCurrentThreadPointer(KernelCore& kernel) {
