@@ -79,6 +79,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #ifdef ARCHITECTURE_x86_64
 #include "common/x64/cpu_detect.h"
 #endif
+#include "common/settings.h"
 #include "common/telemetry.h"
 #include "core/core.h"
 #include "core/crypto/key_manager.h"
@@ -98,7 +99,6 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "core/hle/service/sm/sm.h"
 #include "core/loader/loader.h"
 #include "core/perf_stats.h"
-#include "core/settings.h"
 #include "core/telemetry_session.h"
 #include "input_common/main.h"
 #include "video_core/gpu.h"
@@ -164,19 +164,21 @@ void GMainWindow::ShowTelemetryCallout() {
            "<br/><br/>Would you like to share your usage data with us?");
     if (QMessageBox::question(this, tr("Telemetry"), telemetry_message) != QMessageBox::Yes) {
         Settings::values.enable_telemetry = false;
-        Settings::Apply(Core::System::GetInstance());
+        Core::System::GetInstance().ApplySettings();
     }
 }
 
 const int GMainWindow::max_recent_files_item;
 
 static void InitializeLogging() {
+    using namespace Common;
+
     Log::Filter log_filter;
     log_filter.ParseFilterString(Settings::values.log_filter);
     Log::SetGlobalFilter(log_filter);
 
-    const std::string& log_dir = Common::FS::GetUserPath(Common::FS::UserPath::LogDir);
-    Common::FS::CreateFullPath(log_dir);
+    const std::string& log_dir = FS::GetUserPath(FS::UserPath::LogDir);
+    FS::CreateFullPath(log_dir);
     Log::AddBackend(std::make_unique<Log::FileBackend>(log_dir + LOG_FILE));
 #ifdef _WIN32
     Log::AddBackend(std::make_unique<Log::DebuggerBackend>());
@@ -385,7 +387,7 @@ void GMainWindow::ControllerSelectorReconfigureControllers(
     emit ControllerSelectorReconfigureFinished();
 
     // Don't forget to apply settings.
-    Settings::Apply(Core::System::GetInstance());
+    Core::System::GetInstance().ApplySettings();
     config->Save();
 
     UpdateStatusButtons();
@@ -650,7 +652,7 @@ void GMainWindow::InitializeWidgets() {
         Settings::values.use_asynchronous_gpu_emulation.SetValue(
             !Settings::values.use_asynchronous_gpu_emulation.GetValue());
         async_status_button->setChecked(Settings::values.use_asynchronous_gpu_emulation.GetValue());
-        Settings::Apply(Core::System::GetInstance());
+        Core::System::GetInstance().ApplySettings();
     });
     async_status_button->setText(tr("ASYNC"));
     async_status_button->setCheckable(true);
@@ -666,7 +668,7 @@ void GMainWindow::InitializeWidgets() {
         }
         Settings::values.use_multi_core.SetValue(!Settings::values.use_multi_core.GetValue());
         multicore_status_button->setChecked(Settings::values.use_multi_core.GetValue());
-        Settings::Apply(Core::System::GetInstance());
+        Core::System::GetInstance().ApplySettings();
     });
     multicore_status_button->setText(tr("MULTICORE"));
     multicore_status_button->setCheckable(true);
@@ -697,7 +699,7 @@ void GMainWindow::InitializeWidgets() {
             Settings::values.renderer_backend.SetValue(Settings::RendererBackend::OpenGL);
         }
 
-        Settings::Apply(Core::System::GetInstance());
+        Core::System::GetInstance().ApplySettings();
     });
     statusBar()->insertPermanentWidget(0, renderer_status_button);
 
@@ -2295,24 +2297,66 @@ void GMainWindow::ToggleFullscreen() {
 void GMainWindow::ShowFullscreen() {
     if (ui.action_Single_Window_Mode->isChecked()) {
         UISettings::values.geometry = saveGeometry();
+
         ui.menubar->hide();
         statusBar()->hide();
-        showFullScreen();
+
+        if (Settings::values.fullscreen_mode.GetValue() == 1) {
+            showFullScreen();
+            return;
+        }
+
+        hide();
+        setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
+        const auto screen_geometry = QApplication::desktop()->screenGeometry(this);
+        setGeometry(screen_geometry.x(), screen_geometry.y(), screen_geometry.width(),
+                    screen_geometry.height() + 1);
+        raise();
+        showNormal();
     } else {
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
-        render_window->showFullScreen();
+
+        if (Settings::values.fullscreen_mode.GetValue() == 1) {
+            render_window->showFullScreen();
+            return;
+        }
+
+        render_window->hide();
+        render_window->setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
+        const auto screen_geometry = QApplication::desktop()->screenGeometry(this);
+        render_window->setGeometry(screen_geometry.x(), screen_geometry.y(),
+                                   screen_geometry.width(), screen_geometry.height() + 1);
+        render_window->raise();
+        render_window->showNormal();
     }
 }
 
 void GMainWindow::HideFullscreen() {
     if (ui.action_Single_Window_Mode->isChecked()) {
+        if (Settings::values.fullscreen_mode.GetValue() == 1) {
+            showNormal();
+            restoreGeometry(UISettings::values.geometry);
+        } else {
+            hide();
+            setWindowFlags(windowFlags() & ~Qt::FramelessWindowHint);
+            restoreGeometry(UISettings::values.geometry);
+            raise();
+            show();
+        }
+
         statusBar()->setVisible(ui.action_Show_Status_Bar->isChecked());
         ui.menubar->show();
-        showNormal();
-        restoreGeometry(UISettings::values.geometry);
     } else {
-        render_window->showNormal();
-        render_window->restoreGeometry(UISettings::values.renderwindow_geometry);
+        if (Settings::values.fullscreen_mode.GetValue() == 1) {
+            render_window->showNormal();
+            render_window->restoreGeometry(UISettings::values.renderwindow_geometry);
+        } else {
+            render_window->hide();
+            render_window->setWindowFlags(windowFlags() & ~Qt::FramelessWindowHint);
+            render_window->restoreGeometry(UISettings::values.renderwindow_geometry);
+            render_window->raise();
+            render_window->show();
+        }
     }
 }
 

@@ -6,13 +6,13 @@
 
 #include "common/assert.h"
 #include "common/microprofile.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/core_timing_util.h"
 #include "core/frontend/emu_window.h"
 #include "core/hardware_interrupt_manager.h"
 #include "core/memory.h"
-#include "core/settings.h"
 #include "video_core/engines/fermi_2d.h"
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/kepler_memory.h"
@@ -517,8 +517,8 @@ void GPU::TriggerCpuInterrupt(const u32 syncpoint_id, const u32 value) const {
     interrupt_manager.GPUInterruptSyncpt(syncpoint_id, value);
 }
 
-void GPU::WaitIdle() const {
-    gpu_thread.WaitIdle();
+void GPU::ShutDown() {
+    gpu_thread.ShutDown();
 }
 
 void GPU::OnCommandListEnd() {

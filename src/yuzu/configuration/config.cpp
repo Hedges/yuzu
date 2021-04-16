@@ -641,6 +641,9 @@ void Config::ReadDebuggingValues() {
         ReadSetting(QStringLiteral("disable_macro_jit"), false).toBool();
     Settings::values.extended_logging =
         ReadSetting(QStringLiteral("extended_logging"), false).toBool();
+    Settings::values.use_debug_asserts =
+        ReadSetting(QStringLiteral("use_debug_asserts"), false).toBool();
+    Settings::values.use_auto_stub = ReadSetting(QStringLiteral("use_auto_stub"), false).toBool();
 
     qt_config->endGroup();
 }
@@ -770,6 +773,13 @@ void Config::ReadRendererValues() {
     ReadSettingGlobal(Settings::values.renderer_backend, QStringLiteral("backend"), 0);
     ReadSettingGlobal(Settings::values.renderer_debug, QStringLiteral("debug"), false);
     ReadSettingGlobal(Settings::values.vulkan_device, QStringLiteral("vulkan_device"), 0);
+#ifdef _WIN32
+    ReadSettingGlobal(Settings::values.fullscreen_mode, QStringLiteral("fullscreen_mode"), 0);
+#else
+    // *nix platforms may have issues with the borderless windowed fullscreen mode.
+    // Default to exclusive fullscreen on these platforms for now.
+    ReadSettingGlobal(Settings::values.fullscreen_mode, QStringLiteral("fullscreen_mode"), 1);
+#endif
     ReadSettingGlobal(Settings::values.aspect_ratio, QStringLiteral("aspect_ratio"), 0);
     ReadSettingGlobal(Settings::values.max_anisotropy, QStringLiteral("max_anisotropy"), 0);
     ReadSettingGlobal(Settings::values.use_frame_limit, QStringLiteral("use_frame_limit"), true);
@@ -1230,6 +1240,7 @@ void Config::SaveDebuggingValues() {
     WriteSetting(QStringLiteral("dump_exefs"), Settings::values.dump_exefs, false);
     WriteSetting(QStringLiteral("dump_nso"), Settings::values.dump_nso, false);
     WriteSetting(QStringLiteral("quest_flag"), Settings::values.quest_flag, false);
+    WriteSetting(QStringLiteral("use_debug_asserts"), Settings::values.use_debug_asserts, false);
     WriteSetting(QStringLiteral("disable_macro_jit"), Settings::values.disable_macro_jit, false);
 
     qt_config->endGroup();
@@ -1333,6 +1344,13 @@ void Config::SaveRendererValues() {
                        Settings::values.renderer_backend.UsingGlobal(), 0);
     WriteSetting(QStringLiteral("debug"), Settings::values.renderer_debug, false);
     WriteSettingGlobal(QStringLiteral("vulkan_device"), Settings::values.vulkan_device, 0);
+#ifdef _WIN32
+    WriteSettingGlobal(QStringLiteral("fullscreen_mode"), Settings::values.fullscreen_mode, 0);
+#else
+    // *nix platforms may have issues with the borderless windowed fullscreen mode.
+    // Default to exclusive fullscreen on these platforms for now.
+    WriteSettingGlobal(QStringLiteral("fullscreen_mode"), Settings::values.fullscreen_mode, 1);
+#endif
     WriteSettingGlobal(QStringLiteral("aspect_ratio"), Settings::values.aspect_ratio, 0);
     WriteSettingGlobal(QStringLiteral("max_anisotropy"), Settings::values.max_anisotropy, 0);
     WriteSettingGlobal(QStringLiteral("use_frame_limit"), Settings::values.use_frame_limit, true);
@@ -1584,7 +1602,7 @@ void Config::Reload() {
     ReadValues();
     // To apply default value changes
     SaveValues();
-    Settings::Apply(Core::System::GetInstance());
+    Core::System::GetInstance().ApplySettings();
 }
 
 void Config::Save() {

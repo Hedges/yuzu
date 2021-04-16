@@ -217,7 +217,7 @@ Shader::Shader(std::shared_ptr<Registry> registry_, ShaderEntries entries_,
 Shader::~Shader() = default;
 
 GLuint Shader::GetHandle() const {
-    DEBUG_ASSERT(registry->IsConsistent());
+    //DEBUG_ASSERT(registry->IsConsistent());
     return handle;
 }
 

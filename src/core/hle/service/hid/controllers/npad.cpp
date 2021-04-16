@@ -9,6 +9,7 @@
 #include "common/bit_field.h"
 #include "common/common_types.h"
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/frontend/input.h"
@@ -17,7 +18,6 @@
 #include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/service/hid/controllers/npad.h"
-#include "core/settings.h"
 
 namespace Service::HID {
 constexpr s32 HID_JOYSTICK_MAX = 0x7fff;
@@ -1136,6 +1136,10 @@ bool Controller_NPad::IsUnintendedHomeButtonInputProtectionEnabled(u32 npad_id) 
 void Controller_NPad::SetUnintendedHomeButtonInputProtectionEnabled(bool is_protection_enabled,
                                                                     u32 npad_id) {
     unintended_home_button_input_protection[NPadIdToIndex(npad_id)] = is_protection_enabled;
+}
+
+void Controller_NPad::SetAnalogStickUseCenterClamp(bool use_center_clamp) {
+    analog_stick_use_center_clamp = use_center_clamp;
 }
 
 void Controller_NPad::ClearAllConnectedControllers() {
