@@ -61,8 +61,9 @@ public:
     void PushMessage(AppletMessage msg);
     AppletMessage PopMessage();
     std::size_t GetMessageCount() const;
-    void OperationModeChanged();
     void RequestExit();
+    void FocusStateChanged();
+    void OperationModeChanged();
 
 private:
     std::queue<AppletMessage> messages;
@@ -254,6 +255,7 @@ private:
     void CreateLibraryApplet(Kernel::HLERequestContext& ctx);
     void CreateStorage(Kernel::HLERequestContext& ctx);
     void CreateTransferMemoryStorage(Kernel::HLERequestContext& ctx);
+    void CreateHandleStorage(Kernel::HLERequestContext& ctx);
 };
 
 class IApplicationFunctions final : public ServiceFramework<IApplicationFunctions> {
