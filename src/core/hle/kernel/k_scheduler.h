@@ -24,7 +24,7 @@ class System;
 namespace Kernel {
 
 class KernelCore;
-class Process;
+class KProcess;
 class SchedulerLock;
 class KThread;
 
@@ -141,7 +141,7 @@ private:
 
     [[nodiscard]] static KSchedulerPriorityQueue& GetPriorityQueue(KernelCore& kernel);
 
-    void RotateScheduledQueue(s32 core_id, s32 priority);
+    void RotateScheduledQueue(s32 cpu_core_id, s32 priority);
 
     void Schedule() {
         ASSERT(GetCurrentThread()->GetDisableDispatchCount() == 1);
@@ -165,7 +165,7 @@ private:
      * most recent tick count retrieved. No special arithmetic is
      * applied to it.
      */
-    void UpdateLastContextSwitchTime(KThread* thread, Process* process);
+    void UpdateLastContextSwitchTime(KThread* thread, KProcess* process);
 
     static void OnSwitch(void* this_scheduler);
     void SwitchToCurrent();
@@ -173,12 +173,12 @@ private:
     KThread* prev_thread{};
     std::atomic<KThread*> current_thread{};
 
-    KThread* idle_thread;
+    KThread* idle_thread{};
 
     std::shared_ptr<Common::Fiber> switch_fiber{};
 
     struct SchedulingState {
-        std::atomic<bool> needs_scheduling;
+        std::atomic<bool> needs_scheduling{};
         bool interrupt_task_thread_runnable{};
         bool should_count_idle{};
         u64 idle_count{};

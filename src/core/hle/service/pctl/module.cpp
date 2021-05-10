@@ -7,7 +7,7 @@
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/service/pctl/module.h"
 #include "core/hle/service/pctl/pctl.h"
 
@@ -24,9 +24,8 @@ constexpr ResultCode ResultNoRestrictionEnabled{ErrorModule::PCTL, 181};
 
 class IParentalControlService final : public ServiceFramework<IParentalControlService> {
 public:
-    explicit IParentalControlService(Core::System& system_, Capability capability)
-        : ServiceFramework{system_, "IParentalControlService"}, system(system_),
-          capability(capability) {
+    explicit IParentalControlService(Core::System& system_, Capability capability_)
+        : ServiceFramework{system_, "IParentalControlService"}, capability{capability_} {
         // clang-format off
         static const FunctionInfo functions[] = {
             {1, &IParentalControlService::Initialize, "Initialize"},
@@ -362,8 +361,6 @@ private:
     States states{};
     ParentalControlSettings settings{};
     std::array<char, 8> pin_code{};
-    bool can_use_stereo_vision = true;
-    Core::System& system;
     Capability capability{};
 };
 
@@ -386,8 +383,8 @@ void Module::Interface::CreateServiceWithoutInitialize(Kernel::HLERequestContext
 }
 
 Module::Interface::Interface(Core::System& system_, std::shared_ptr<Module> module_,
-                             const char* name, Capability capability)
-    : ServiceFramework{system_, name}, module{std::move(module_)}, capability(capability) {}
+                             const char* name_, Capability capability_)
+    : ServiceFramework{system_, name_}, module{std::move(module_)}, capability{capability_} {}
 
 Module::Interface::~Interface() = default;
 

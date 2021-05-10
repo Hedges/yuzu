@@ -15,7 +15,7 @@
 namespace Service::HID {
 constexpr std::size_t SHARED_MEMORY_OFFSET = 0x400;
 
-Controller_Touchscreen::Controller_Touchscreen(Core::System& system) : ControllerBase(system) {}
+Controller_Touchscreen::Controller_Touchscreen(Core::System& system_) : ControllerBase{system_} {}
 Controller_Touchscreen::~Controller_Touchscreen() = default;
 
 void Controller_Touchscreen::OnInit() {
@@ -105,6 +105,10 @@ void Controller_Touchscreen::OnLoadInputDevices() {
 }
 
 std::optional<std::size_t> Controller_Touchscreen::GetUnusedFingerID() const {
+    // Dont assign any touch input to a finger if disabled
+    if (!Settings::values.touchscreen.enabled) {
+        return std::nullopt;
+    }
     std::size_t first_free_id = 0;
     while (first_free_id < MAX_FINGERS) {
         if (!fingers[first_free_id].pressed) {

@@ -147,7 +147,7 @@ bool Controller_NPad::IsDeviceHandleValid(const DeviceHandle& device_handle) {
            device_handle.device_index < DeviceIndex::MaxDeviceIndex;
 }
 
-Controller_NPad::Controller_NPad(Core::System& system) : ControllerBase(system) {
+Controller_NPad::Controller_NPad(Core::System& system_) : ControllerBase{system_} {
     latest_vibration_values.fill({DEFAULT_VIBRATION_VALUE, DEFAULT_VIBRATION_VALUE});
 }
 
@@ -159,7 +159,7 @@ void Controller_NPad::InitNewlyAddedController(std::size_t controller_idx) {
     const auto controller_type = connected_controllers[controller_idx].type;
     auto& controller = shared_memory_entries[controller_idx];
     if (controller_type == NPadControllerType::None) {
-        styleset_changed_events[controller_idx]->GetWritableEvent()->Signal();
+        styleset_changed_events[controller_idx]->GetWritableEvent().Signal();
         return;
     }
     controller.style_set.raw = 0; // Zero out
@@ -253,9 +253,8 @@ void Controller_NPad::InitNewlyAddedController(std::size_t controller_idx) {
 void Controller_NPad::OnInit() {
     auto& kernel = system.Kernel();
     for (std::size_t i = 0; i < styleset_changed_events.size(); ++i) {
-        styleset_changed_events[i] =
-            Kernel::KEvent::Create(kernel, fmt::format("npad:NpadStyleSetChanged_{}", i));
-        styleset_changed_events[i]->Initialize();
+        styleset_changed_events[i] = Kernel::KEvent::Create(kernel);
+        styleset_changed_events[i]->Initialize(fmt::format("npad:NpadStyleSetChanged_{}", i));
     }
 
     if (!IsControllerActivated()) {
@@ -340,6 +339,11 @@ void Controller_NPad::OnRelease() {
         for (std::size_t device_idx = 0; device_idx < vibrations[npad_idx].size(); ++device_idx) {
             VibrateControllerAtIndex(npad_idx, device_idx, {});
         }
+    }
+
+    for (std::size_t i = 0; i < styleset_changed_events.size(); ++i) {
+        styleset_changed_events[i]->Close();
+        styleset_changed_events[i] = nullptr;
     }
 }
 
@@ -654,8 +658,8 @@ void Controller_NPad::OnMotionUpdate(const Core::Timing::CoreTiming& core_timing
                 const auto& device = motions[i][e];
                 if (device) {
                     std::tie(motion_devices[e].accel, motion_devices[e].gyro,
-                             motion_devices[e].rotation, motion_devices[e].orientation) =
-                        device->GetStatus();
+                             motion_devices[e].rotation, motion_devices[e].orientation,
+                             motion_devices[e].quaternion) = device->GetStatus();
                     sixaxis_at_rest = sixaxis_at_rest && motion_devices[e].gyro.Length2() < 0.0001f;
                 }
             }
@@ -955,14 +959,12 @@ bool Controller_NPad::IsVibrationDeviceMounted(const DeviceHandle& vibration_dev
     return vibration_devices_mounted[npad_index][device_index];
 }
 
-std::shared_ptr<Kernel::KReadableEvent> Controller_NPad::GetStyleSetChangedEvent(
-    u32 npad_id) const {
-    const auto& styleset_event = styleset_changed_events[NPadIdToIndex(npad_id)];
-    return styleset_event->GetReadableEvent();
+Kernel::KReadableEvent& Controller_NPad::GetStyleSetChangedEvent(u32 npad_id) {
+    return styleset_changed_events[NPadIdToIndex(npad_id)]->GetReadableEvent();
 }
 
 void Controller_NPad::SignalStyleSetChangedEvent(u32 npad_id) const {
-    styleset_changed_events[NPadIdToIndex(npad_id)]->GetWritableEvent()->Signal();
+    styleset_changed_events[NPadIdToIndex(npad_id)]->GetWritableEvent().Signal();
 }
 
 void Controller_NPad::AddNewControllerAt(NPadControllerType controller, std::size_t npad_index) {

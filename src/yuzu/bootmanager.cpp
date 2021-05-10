@@ -32,7 +32,7 @@
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/frontend/framebuffer_layout.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_process.h"
 #include "input_common/keyboard.h"
 #include "input_common/main.h"
 #include "input_common/mouse/mouse_input.h"
@@ -539,6 +539,8 @@ bool GRenderWindow::event(QEvent* event) {
 void GRenderWindow::focusOutEvent(QFocusEvent* event) {
     QWidget::focusOutEvent(event);
     input_subsystem->GetKeyboard()->ReleaseAllKeys();
+    input_subsystem->GetMouse()->ReleaseAllButtons();
+    this->TouchReleased(0);
 }
 
 void GRenderWindow::resizeEvent(QResizeEvent* event) {

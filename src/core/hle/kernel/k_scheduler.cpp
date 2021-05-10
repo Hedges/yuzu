@@ -15,12 +15,12 @@
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/cpu_manager.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_scheduler.h"
 #include "core/hle/kernel/k_scoped_scheduler_lock_and_sleep.h"
 #include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/physical_core.h"
-#include "core/hle/kernel/process.h"
 #include "core/hle/kernel/time_manager.h"
 
 namespace Kernel {
@@ -71,7 +71,7 @@ u64 KScheduler::UpdateHighestPriorityThread(KThread* highest_thread) {
         }
         if (state.should_count_idle) {
             if (highest_thread != nullptr) {
-                if (Process* process = highest_thread->GetOwnerProcess(); process != nullptr) {
+                if (KProcess* process = highest_thread->GetOwnerProcess(); process != nullptr) {
                     process->SetRunningThread(core_id, highest_thread, state.idle_count);
                 }
             } else {
@@ -104,7 +104,7 @@ u64 KScheduler::UpdateHighestPriorityThreadsImpl(KernelCore& kernel) {
         if (top_thread != nullptr) {
             // If the thread has no waiters, we need to check if the process has a thread pinned.
             if (top_thread->GetNumKernelWaiters() == 0) {
-                if (Process* parent = top_thread->GetOwnerProcess(); parent != nullptr) {
+                if (KProcess* parent = top_thread->GetOwnerProcess(); parent != nullptr) {
                     if (KThread* pinned = parent->GetPinnedThread(static_cast<s32>(core_id));
                         pinned != nullptr && pinned != top_thread) {
                         // We prefer our parent's pinned thread if possible. However, we also don't
@@ -259,7 +259,7 @@ void KScheduler::OnThreadAffinityMaskChanged(KernelCore& kernel, KThread* thread
     }
 }
 
-void KScheduler::RotateScheduledQueue(s32 core_id, s32 priority) {
+void KScheduler::RotateScheduledQueue(s32 cpu_core_id, s32 priority) {
     ASSERT(system.GlobalSchedulerContext().IsLocked());
 
     // Get a reference to the priority queue.
@@ -267,7 +267,7 @@ void KScheduler::RotateScheduledQueue(s32 core_id, s32 priority) {
     auto& priority_queue = GetPriorityQueue(kernel);
 
     // Rotate the front of the queue to the end.
-    KThread* top_thread = priority_queue.GetScheduledFront(core_id, priority);
+    KThread* top_thread = priority_queue.GetScheduledFront(cpu_core_id, priority);
     KThread* next_thread = nullptr;
     if (top_thread != nullptr) {
         next_thread = priority_queue.MoveToScheduledBack(top_thread);
@@ -279,7 +279,7 @@ void KScheduler::RotateScheduledQueue(s32 core_id, s32 priority) {
 
     // While we have a suggested thread, try to migrate it!
     {
-        KThread* suggested = priority_queue.GetSuggestedFront(core_id, priority);
+        KThread* suggested = priority_queue.GetSuggestedFront(cpu_core_id, priority);
         while (suggested != nullptr) {
             // Check if the suggested thread is the top thread on its core.
             const s32 suggested_core = suggested->GetActiveCore();
@@ -300,7 +300,7 @@ void KScheduler::RotateScheduledQueue(s32 core_id, s32 priority) {
                 // to the front of the queue.
                 if (top_on_suggested_core == nullptr ||
                     top_on_suggested_core->GetPriority() >= HighestCoreMigrationAllowedPriority) {
-                    suggested->SetActiveCore(core_id);
+                    suggested->SetActiveCore(cpu_core_id);
                     priority_queue.ChangeCore(suggested_core, suggested, true);
                     IncrementScheduledCount(suggested);
                     break;
@@ -308,22 +308,22 @@ void KScheduler::RotateScheduledQueue(s32 core_id, s32 priority) {
             }
 
             // Get the next suggestion.
-            suggested = priority_queue.GetSamePriorityNext(core_id, suggested);
+            suggested = priority_queue.GetSamePriorityNext(cpu_core_id, suggested);
         }
     }
 
     // Now that we might have migrated a thread with the same priority, check if we can do better.
 
     {
-        KThread* best_thread = priority_queue.GetScheduledFront(core_id);
+        KThread* best_thread = priority_queue.GetScheduledFront(cpu_core_id);
         if (best_thread == GetCurrentThread()) {
-            best_thread = priority_queue.GetScheduledNext(core_id, best_thread);
+            best_thread = priority_queue.GetScheduledNext(cpu_core_id, best_thread);
         }
 
         // If the best thread we can choose has a priority the same or worse than ours, try to
         // migrate a higher priority thread.
         if (best_thread != nullptr && best_thread->GetPriority() >= priority) {
-            KThread* suggested = priority_queue.GetSuggestedFront(core_id);
+            KThread* suggested = priority_queue.GetSuggestedFront(cpu_core_id);
             while (suggested != nullptr) {
                 // If the suggestion's priority is the same as ours, don't bother.
                 if (suggested->GetPriority() >= best_thread->GetPriority()) {
@@ -342,7 +342,7 @@ void KScheduler::RotateScheduledQueue(s32 core_id, s32 priority) {
                     if (top_on_suggested_core == nullptr ||
                         top_on_suggested_core->GetPriority() >=
                             HighestCoreMigrationAllowedPriority) {
-                        suggested->SetActiveCore(core_id);
+                        suggested->SetActiveCore(cpu_core_id);
                         priority_queue.ChangeCore(suggested_core, suggested, true);
                         IncrementScheduledCount(suggested);
                         break;
@@ -350,7 +350,7 @@ void KScheduler::RotateScheduledQueue(s32 core_id, s32 priority) {
                 }
 
                 // Get the next suggestion.
-                suggested = priority_queue.GetSuggestedNext(core_id, suggested);
+                suggested = priority_queue.GetSuggestedNext(cpu_core_id, suggested);
             }
         }
     }
@@ -411,7 +411,7 @@ void KScheduler::YieldWithoutCoreMigration(KernelCore& kernel) {
 
     // Get the current thread and process.
     KThread& cur_thread = Kernel::GetCurrentThread(kernel);
-    Process& cur_process = *kernel.CurrentProcess();
+    KProcess& cur_process = *kernel.CurrentProcess();
 
     // If the thread's yield count matches, there's nothing for us to do.
     if (cur_thread.GetYieldScheduleCount() == cur_process.GetScheduledCount()) {
@@ -450,7 +450,7 @@ void KScheduler::YieldWithCoreMigration(KernelCore& kernel) {
 
     // Get the current thread and process.
     KThread& cur_thread = Kernel::GetCurrentThread(kernel);
-    Process& cur_process = *kernel.CurrentProcess();
+    KProcess& cur_process = *kernel.CurrentProcess();
 
     // If the thread's yield count matches, there's nothing for us to do.
     if (cur_thread.GetYieldScheduleCount() == cur_process.GetScheduledCount()) {
@@ -538,7 +538,7 @@ void KScheduler::YieldToAnyThread(KernelCore& kernel) {
 
     // Get the current thread and process.
     KThread& cur_thread = Kernel::GetCurrentThread(kernel);
-    Process& cur_process = *kernel.CurrentProcess();
+    KProcess& cur_process = *kernel.CurrentProcess();
 
     // If the thread's yield count matches, there's nothing for us to do.
     if (cur_thread.GetYieldScheduleCount() == cur_process.GetScheduledCount()) {
@@ -617,7 +617,12 @@ KScheduler::KScheduler(Core::System& system, s32 core_id) : system(system), core
     state.highest_priority_thread = nullptr;
 }
 
-KScheduler::~KScheduler() = default;
+KScheduler::~KScheduler() {
+    if (idle_thread) {
+        idle_thread->Close();
+        idle_thread = nullptr;
+    }
+}
 
 KThread* KScheduler::GetCurrentThread() const {
     if (auto result = current_thread.load(); result) {
@@ -719,7 +724,7 @@ void KScheduler::ScheduleImpl() {
 
     current_thread.store(next_thread);
 
-    Process* const previous_process = system.Kernel().CurrentProcess();
+    KProcess* const previous_process = system.Kernel().CurrentProcess();
 
     UpdateLastContextSwitchTime(previous_thread, previous_process);
 
@@ -775,7 +780,7 @@ void KScheduler::SwitchToCurrent() {
     }
 }
 
-void KScheduler::UpdateLastContextSwitchTime(KThread* thread, Process* process) {
+void KScheduler::UpdateLastContextSwitchTime(KThread* thread, KProcess* process) {
     const u64 prev_switch_ticks = last_context_switch_time;
     const u64 most_recent_switch_ticks = system.CoreTiming().GetCPUTicks();
     const u64 update_ticks = most_recent_switch_ticks - prev_switch_ticks;
@@ -792,13 +797,9 @@ void KScheduler::UpdateLastContextSwitchTime(KThread* thread, Process* process) 
 }
 
 void KScheduler::Initialize() {
-    std::string name = "Idle Thread Id:" + std::to_string(core_id);
-    std::function<void(void*)> init_func = Core::CpuManager::GetIdleThreadStartFunc();
-    void* init_func_parameter = system.GetCpuManager().GetStartFuncParamater();
-    auto thread_res = KThread::CreateThread(
-        system, ThreadType::Main, name, 0, KThread::IdleThreadPriority, 0,
-        static_cast<u32>(core_id), 0, nullptr, std::move(init_func), init_func_parameter);
-    idle_thread = thread_res.Unwrap().get();
+    idle_thread = KThread::Create(system.Kernel());
+    ASSERT(KThread::InitializeIdleThread(system, idle_thread, core_id).IsSuccess());
+    idle_thread->SetName(fmt::format("IdleThread:{}", core_id));
 }
 
 KScopedSchedulerLock::KScopedSchedulerLock(KernelCore& kernel)

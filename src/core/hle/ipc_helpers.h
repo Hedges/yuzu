@@ -13,12 +13,9 @@
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "core/hle/ipc.h"
-#include "core/hle/kernel/client_port.h"
-#include "core/hle/kernel/client_session.h"
 #include "core/hle/kernel/hle_ipc.h"
-#include "core/hle/kernel/object.h"
-#include "core/hle/kernel/server_session.h"
-#include "core/hle/kernel/session.h"
+#include "core/hle/kernel/k_client_port.h"
+#include "core/hle/kernel/k_session.h"
 #include "core/hle/result.h"
 
 namespace IPC {
@@ -72,16 +69,16 @@ public:
         AlwaysMoveHandles = 1,
     };
 
-    explicit ResponseBuilder(Kernel::HLERequestContext& context, u32 normal_params_size,
+    explicit ResponseBuilder(Kernel::HLERequestContext& ctx, u32 normal_params_size,
                              u32 num_handles_to_copy = 0, u32 num_objects_to_move = 0,
                              Flags flags = Flags::None)
-        : RequestHelperBase(context), normal_params_size(normal_params_size),
+        : RequestHelperBase(ctx), normal_params_size(normal_params_size),
           num_handles_to_copy(num_handles_to_copy),
-          num_objects_to_move(num_objects_to_move), kernel{context.kernel} {
+          num_objects_to_move(num_objects_to_move), kernel{ctx.kernel} {
 
         memset(cmdbuf, 0, sizeof(u32) * IPC::COMMAND_BUFFER_LENGTH);
 
-        context.ClearIncomingObjects();
+        ctx.ClearIncomingObjects();
 
         IPC::CommandHeader header{};
 
@@ -93,13 +90,13 @@ public:
         u32 num_domain_objects{};
         const bool always_move_handles{
             (static_cast<u32>(flags) & static_cast<u32>(Flags::AlwaysMoveHandles)) != 0};
-        if (!context.Session()->IsDomain() || always_move_handles) {
+        if (!ctx.Session()->IsDomain() || always_move_handles) {
             num_handles_to_move = num_objects_to_move;
         } else {
             num_domain_objects = num_objects_to_move;
         }
 
-        if (context.Session()->IsDomain()) {
+        if (ctx.Session()->IsDomain()) {
             raw_data_size += sizeof(DomainMessageHeader) / 4 + num_domain_objects;
         }
 
@@ -119,7 +116,7 @@ public:
 
         AlignWithPadding();
 
-        if (context.Session()->IsDomain() && context.HasDomainMessageHeader()) {
+        if (ctx.Session()->IsDomain() && ctx.HasDomainMessageHeader()) {
             IPC::DomainMessageHeader domain_header{};
             domain_header.num_objects = num_domain_objects;
             PushRaw(domain_header);
@@ -137,9 +134,11 @@ public:
         if (context->Session()->IsDomain()) {
             context->AddDomainObject(std::move(iface));
         } else {
-            auto [client, server] = Kernel::Session::Create(kernel, iface->GetServiceName());
-            context->AddMoveObject(std::move(client));
-            iface->ClientConnected(std::move(server));
+            auto* session = Kernel::KSession::Create(kernel);
+            session->Initialize(nullptr, iface->GetServiceName());
+
+            context->AddMoveObject(&session->GetClientSession());
+            iface->ClientConnected(&session->GetServerSession());
         }
     }
 
@@ -215,10 +214,16 @@ public:
     void PushRaw(const T& value);
 
     template <typename... O>
-    void PushMoveObjects(std::shared_ptr<O>... pointers);
+    void PushMoveObjects(O*... pointers);
 
     template <typename... O>
-    void PushCopyObjects(std::shared_ptr<O>... pointers);
+    void PushMoveObjects(O&... pointers);
+
+    template <typename... O>
+    void PushCopyObjects(O*... pointers);
+
+    template <typename... O>
+    void PushCopyObjects(O&... pointers);
 
 private:
     u32 normal_params_size{};
@@ -301,18 +306,34 @@ void ResponseBuilder::Push(const First& first_value, const Other&... other_value
 }
 
 template <typename... O>
-inline void ResponseBuilder::PushCopyObjects(std::shared_ptr<O>... pointers) {
+inline void ResponseBuilder::PushCopyObjects(O*... pointers) {
     auto objects = {pointers...};
     for (auto& object : objects) {
-        context->AddCopyObject(std::move(object));
+        context->AddCopyObject(object);
     }
 }
 
 template <typename... O>
-inline void ResponseBuilder::PushMoveObjects(std::shared_ptr<O>... pointers) {
+inline void ResponseBuilder::PushCopyObjects(O&... pointers) {
+    auto objects = {&pointers...};
+    for (auto& object : objects) {
+        context->AddCopyObject(object);
+    }
+}
+
+template <typename... O>
+inline void ResponseBuilder::PushMoveObjects(O*... pointers) {
     auto objects = {pointers...};
     for (auto& object : objects) {
-        context->AddMoveObject(std::move(object));
+        context->AddMoveObject(object);
+    }
+}
+
+template <typename... O>
+inline void ResponseBuilder::PushMoveObjects(O&... pointers) {
+    auto objects = {&pointers...};
+    for (auto& object : objects) {
+        context->AddMoveObject(object);
     }
 }
 
@@ -320,9 +341,9 @@ class RequestParser : public RequestHelperBase {
 public:
     explicit RequestParser(u32* command_buffer) : RequestHelperBase(command_buffer) {}
 
-    explicit RequestParser(Kernel::HLERequestContext& context) : RequestHelperBase(context) {
-        ASSERT_MSG(context.GetDataPayloadOffset(), "context is incomplete");
-        Skip(context.GetDataPayloadOffset(), false);
+    explicit RequestParser(Kernel::HLERequestContext& ctx) : RequestHelperBase(ctx) {
+        ASSERT_MSG(ctx.GetDataPayloadOffset(), "context is incomplete");
+        Skip(ctx.GetDataPayloadOffset(), false);
         // Skip the u64 command id, it's already stored in the context
         static constexpr u32 CommandIdSize = 2;
         Skip(CommandIdSize, false);
@@ -358,12 +379,6 @@ public:
      */
     template <typename T>
     T PopRaw();
-
-    template <typename T>
-    std::shared_ptr<T> GetMoveObject(std::size_t index);
-
-    template <typename T>
-    std::shared_ptr<T> GetCopyObject(std::size_t index);
 
     template <class T>
     std::shared_ptr<T> PopIpcInterface() {
@@ -467,16 +482,6 @@ template <typename First, typename... Other>
 void RequestParser::Pop(First& first_value, Other&... other_values) {
     first_value = Pop<First>();
     Pop(other_values...);
-}
-
-template <typename T>
-std::shared_ptr<T> RequestParser::GetMoveObject(std::size_t index) {
-    return context->GetMoveObject<T>(index);
-}
-
-template <typename T>
-std::shared_ptr<T> RequestParser::GetCopyObject(std::size_t index) {
-    return context->GetCopyObject<T>(index);
 }
 
 } // namespace IPC

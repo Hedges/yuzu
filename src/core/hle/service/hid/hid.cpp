@@ -13,19 +13,20 @@
 #include "core/frontend/input.h"
 #include "core/hardware_properties.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/client_port.h"
-#include "core/hle/kernel/client_session.h"
+#include "core/hle/kernel/k_client_port.h"
 #include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/kernel/k_shared_memory.h"
+#include "core/hle/kernel/k_transfer_memory.h"
 #include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/transfer_memory.h"
 #include "core/hle/service/hid/errors.h"
 #include "core/hle/service/hid/hid.h"
 #include "core/hle/service/hid/irs.h"
 #include "core/hle/service/hid/xcd.h"
 #include "core/hle/service/service.h"
+#include "core/memory.h"
 
+#include "core/hle/service/hid/controllers/console_sixaxis.h"
 #include "core/hle/service/hid/controllers/controller_base.h"
 #include "core/hle/service/hid/controllers/debug_pad.h"
 #include "core/hle/service/hid/controllers/gesture.h"
@@ -52,9 +53,6 @@ IAppletResource::IAppletResource(Core::System& system_)
     };
     RegisterHandlers(functions);
 
-    auto& kernel = system.Kernel();
-    shared_mem = SharedFrom(&kernel.GetHidSharedMem());
-
     MakeController<Controller_DebugPad>(HidController::DebugPad);
     MakeController<Controller_Touchscreen>(HidController::Touchscreen);
     MakeController<Controller_Mouse>(HidController::Mouse);
@@ -67,7 +65,7 @@ IAppletResource::IAppletResource(Core::System& system_)
     MakeController<Controller_Stubbed>(HidController::UniquePad);
     MakeController<Controller_NPad>(HidController::NPad);
     MakeController<Controller_Gesture>(HidController::Gesture);
-    MakeController<Controller_Stubbed>(HidController::ConsoleSixAxisSensor);
+    MakeController<Controller_ConsoleSixAxis>(HidController::ConsoleSixAxisSensor);
 
     // Homebrew doesn't try to activate some controllers, so we activate them by default
     GetController<Controller_NPad>(HidController::NPad).ActivateController();
@@ -78,8 +76,6 @@ IAppletResource::IAppletResource(Core::System& system_)
     GetController<Controller_Stubbed>(HidController::CaptureButton).SetCommonHeaderOffset(0x5000);
     GetController<Controller_Stubbed>(HidController::InputDetector).SetCommonHeaderOffset(0x5200);
     GetController<Controller_Stubbed>(HidController::UniquePad).SetCommonHeaderOffset(0x5A00);
-    GetController<Controller_Stubbed>(HidController::ConsoleSixAxisSensor)
-        .SetCommonHeaderOffset(0x3C200);
 
     // Register update callbacks
     pad_update_event = Core::Timing::CreateEvent(
@@ -119,7 +115,7 @@ void IAppletResource::GetSharedMemoryHandle(Kernel::HLERequestContext& ctx) {
 
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(shared_mem);
+    rb.PushCopyObjects(&system.Kernel().GetHidSharedMem());
 }
 
 void IAppletResource::UpdateControllers(std::uintptr_t user_data,
@@ -131,7 +127,8 @@ void IAppletResource::UpdateControllers(std::uintptr_t user_data,
         if (should_reload) {
             controller->OnLoadInputDevices();
         }
-        controller->OnUpdate(core_timing, shared_mem->GetPointer(), SHARED_MEMORY_SIZE);
+        controller->OnUpdate(core_timing, system.Kernel().GetHidSharedMem().GetPointer(),
+                             SHARED_MEMORY_SIZE);
     }
 
     // If ns_late is higher than the update rate ignore the delay
@@ -146,7 +143,7 @@ void IAppletResource::UpdateMotion(std::uintptr_t user_data, std::chrono::nanose
     auto& core_timing = system.CoreTiming();
 
     controllers[static_cast<size_t>(HidController::NPad)]->OnMotionUpdate(
-        core_timing, shared_mem->GetPointer(), SHARED_MEMORY_SIZE);
+        core_timing, system.Kernel().GetHidSharedMem().GetPointer(), SHARED_MEMORY_SIZE);
 
     // If ns_late is higher than the update rate ignore the delay
     if (ns_late > motion_update_ns) {
@@ -1404,8 +1401,9 @@ void Hid::ActivateConsoleSixAxisSensor(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const auto applet_resource_user_id{rp.Pop<u64>()};
 
-    LOG_WARNING(Service_HID, "(STUBBED) called, applet_resource_user_id={}",
-                applet_resource_user_id);
+    applet_resource->ActivateController(HidController::ConsoleSixAxisSensor);
+
+    LOG_WARNING(Service_HID, "called, applet_resource_user_id={}", applet_resource_user_id);
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(RESULT_SUCCESS);
@@ -1455,8 +1453,9 @@ void Hid::ActivateSevenSixAxisSensor(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const auto applet_resource_user_id{rp.Pop<u64>()};
 
-    LOG_WARNING(Service_HID, "(STUBBED) called, applet_resource_user_id={}",
-                applet_resource_user_id);
+    applet_resource->ActivateController(HidController::ConsoleSixAxisSensor);
+
+    LOG_WARNING(Service_HID, "called, applet_resource_user_id={}", applet_resource_user_id);
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(RESULT_SUCCESS);
@@ -1495,20 +1494,20 @@ void Hid::InitializeSevenSixAxisSensor(Kernel::HLERequestContext& ctx) {
     ASSERT_MSG(t_mem_1_size == 0x1000, "t_mem_1_size is not 0x1000 bytes");
     ASSERT_MSG(t_mem_2_size == 0x7F000, "t_mem_2_size is not 0x7F000 bytes");
 
-    auto t_mem_1 =
-        system.CurrentProcess()->GetHandleTable().Get<Kernel::TransferMemory>(t_mem_1_handle);
+    auto t_mem_1 = system.CurrentProcess()->GetHandleTable().GetObject<Kernel::KTransferMemory>(
+        t_mem_1_handle);
 
-    if (t_mem_1 == nullptr) {
+    if (t_mem_1.IsNull()) {
         LOG_ERROR(Service_HID, "t_mem_1 is a nullptr for handle=0x{:08X}", t_mem_1_handle);
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_UNKNOWN);
         return;
     }
 
-    auto t_mem_2 =
-        system.CurrentProcess()->GetHandleTable().Get<Kernel::TransferMemory>(t_mem_2_handle);
+    auto t_mem_2 = system.CurrentProcess()->GetHandleTable().GetObject<Kernel::KTransferMemory>(
+        t_mem_2_handle);
 
-    if (t_mem_2 == nullptr) {
+    if (t_mem_2.IsNull()) {
         LOG_ERROR(Service_HID, "t_mem_2 is a nullptr for handle=0x{:08X}", t_mem_2_handle);
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_UNKNOWN);
@@ -1518,8 +1517,15 @@ void Hid::InitializeSevenSixAxisSensor(Kernel::HLERequestContext& ctx) {
     ASSERT_MSG(t_mem_1->GetSize() == 0x1000, "t_mem_1 has incorrect size");
     ASSERT_MSG(t_mem_2->GetSize() == 0x7F000, "t_mem_2 has incorrect size");
 
+    // Activate console six axis controller
+    applet_resource->GetController<Controller_ConsoleSixAxis>(HidController::ConsoleSixAxisSensor)
+        .ActivateController();
+
+    applet_resource->GetController<Controller_ConsoleSixAxis>(HidController::ConsoleSixAxisSensor)
+        .SetTransferMemoryPointer(system.Memory().GetPointer(t_mem_1->GetSourceAddress()));
+
     LOG_WARNING(Service_HID,
-                "(STUBBED) called, t_mem_1_handle=0x{:08X}, t_mem_2_handle=0x{:08X}, "
+                "called, t_mem_1_handle=0x{:08X}, t_mem_2_handle=0x{:08X}, "
                 "applet_resource_user_id={}",
                 t_mem_1_handle, t_mem_2_handle, applet_resource_user_id);
 
@@ -1542,8 +1548,10 @@ void Hid::ResetSevenSixAxisSensorTimestamp(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const auto applet_resource_user_id{rp.Pop<u64>()};
 
-    LOG_WARNING(Service_HID, "(STUBBED) called, applet_resource_user_id={}",
-                applet_resource_user_id);
+    applet_resource->GetController<Controller_ConsoleSixAxis>(HidController::ConsoleSixAxisSensor)
+        .ResetTimestamp();
+
+    LOG_WARNING(Service_HID, "called, applet_resource_user_id={}", applet_resource_user_id);
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(RESULT_SUCCESS);

@@ -15,9 +15,10 @@
 
 namespace Service::Nvidia::Devices {
 
-nvhost_ctrl::nvhost_ctrl(Core::System& system, EventInterface& events_interface,
-                         SyncpointManager& syncpoint_manager)
-    : nvdevice(system), events_interface{events_interface}, syncpoint_manager{syncpoint_manager} {}
+nvhost_ctrl::nvhost_ctrl(Core::System& system_, EventInterface& events_interface_,
+                         SyncpointManager& syncpoint_manager_)
+    : nvdevice{system_}, events_interface{events_interface_}, syncpoint_manager{
+                                                                  syncpoint_manager_} {}
 nvhost_ctrl::~nvhost_ctrl() = default;
 
 NvResult nvhost_ctrl::Ioctl1(DeviceFD fd, Ioctl command, const std::vector<u8>& input,
@@ -101,20 +102,20 @@ NvResult nvhost_ctrl::IocCtrlEventWait(const std::vector<u8>& input, std::vector
         return NvResult::Success;
     }
 
-    auto event = events_interface.events[event_id];
+    auto& event = events_interface.events[event_id];
     auto& gpu = system.GPU();
 
     // This is mostly to take into account unimplemented features. As synced
     // gpu is always synced.
     if (!gpu.IsAsync()) {
-        event.event->GetWritableEvent()->Signal();
+        event.event->GetWritableEvent().Signal();
         return NvResult::Success;
     }
     auto lock = gpu.LockSync();
     const u32 current_syncpoint_value = event.fence.value;
     const s32 diff = current_syncpoint_value - params.threshold;
     if (diff >= 0) {
-        event.event->GetWritableEvent()->Signal();
+        event.event->GetWritableEvent().Signal();
         params.value = current_syncpoint_value;
         std::memcpy(output.data(), &params, sizeof(params));
         return NvResult::Success;
@@ -141,7 +142,7 @@ NvResult nvhost_ctrl::IocCtrlEventWait(const std::vector<u8>& input, std::vector
             params.value = ((params.syncpt_id & 0xfff) << 16) | 0x10000000;
         }
         params.value |= event_id;
-        event.event->GetWritableEvent()->Clear();
+        event.event->GetWritableEvent().Clear();
         gpu.RegisterSyncptInterrupt(params.syncpt_id, target_value);
         std::memcpy(output.data(), &params, sizeof(params));
         return NvResult::Timeout;

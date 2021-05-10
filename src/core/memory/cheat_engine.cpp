@@ -11,7 +11,7 @@
 #include "core/core_timing_util.h"
 #include "core/hardware_properties.h"
 #include "core/hle/kernel/k_page_table.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/service/hid/controllers/npad.h"
 #include "core/hle/service/hid/hid.h"
 #include "core/hle/service/sm/sm.h"
@@ -222,8 +222,8 @@ void CheatEngine::SetMainMemoryParameters(VAddr main_region_begin, u64 main_regi
     };
 }
 
-void CheatEngine::Reload(std::vector<CheatEntry> cheats) {
-    this->cheats = std::move(cheats);
+void CheatEngine::Reload(std::vector<CheatEntry> reload_cheats) {
+    cheats = std::move(reload_cheats);
     is_pending_reload.exchange(true);
 }
 

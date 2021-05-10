@@ -8,9 +8,9 @@
 #include <atomic>
 #include "common/bit_field.h"
 #include "common/common_types.h"
+#include "common/quaternion.h"
 #include "common/settings.h"
 #include "core/frontend/input.h"
-#include "core/hle/kernel/object.h"
 #include "core/hle/service/hid/controllers/controller_base.h"
 
 namespace Kernel {
@@ -25,7 +25,7 @@ constexpr u32 NPAD_UNKNOWN = 16; // TODO(ogniK): What is this?
 
 class Controller_NPad final : public ControllerBase {
 public:
-    explicit Controller_NPad(Core::System& system);
+    explicit Controller_NPad(Core::System& system_);
     ~Controller_NPad() override;
 
     // Called when the controller is initialized
@@ -198,7 +198,7 @@ public:
 
     bool IsVibrationDeviceMounted(const DeviceHandle& vibration_device_handle) const;
 
-    std::shared_ptr<Kernel::KReadableEvent> GetStyleSetChangedEvent(u32 npad_id) const;
+    Kernel::KReadableEvent& GetStyleSetChangedEvent(u32 npad_id);
     void SignalStyleSetChangedEvent(u32 npad_id) const;
 
     // Adds a new controller at an index.
@@ -467,6 +467,7 @@ private:
         Common::Vec3f gyro;
         Common::Vec3f rotation;
         std::array<Common::Vec3f, 3> orientation;
+        Common::Quaternion<f32> quaternion;
     };
 
     struct NfcXcdHandle {
@@ -571,8 +572,9 @@ private:
     NpadHandheldActivationMode handheld_activation_mode{NpadHandheldActivationMode::Dual};
     NpadCommunicationMode communication_mode{NpadCommunicationMode::Default};
     // Each controller should have their own styleset changed event
-    std::array<std::shared_ptr<Kernel::KEvent>, 10> styleset_changed_events;
-    std::array<std::array<std::chrono::steady_clock::time_point, 2>, 10> last_vibration_timepoints;
+    std::array<Kernel::KEvent*, 10> styleset_changed_events{};
+    std::array<std::array<std::chrono::steady_clock::time_point, 2>, 10>
+        last_vibration_timepoints{};
     std::array<std::array<VibrationValue, 2>, 10> latest_vibration_values{};
     bool permit_vibration_session_enabled{false};
     std::array<std::array<bool, 2>, 10> vibration_devices_mounted{};
