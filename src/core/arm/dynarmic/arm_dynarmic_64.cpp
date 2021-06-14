@@ -27,7 +27,7 @@ using Vector = Dynarmic::A64::Vector;
 
 class DynarmicCallbacks64 : public Dynarmic::A64::UserCallbacks {
 public:
-    explicit DynarmicCallbacks64(ARM_Dynarmic_64& parent) : parent(parent) {}
+    explicit DynarmicCallbacks64(ARM_Dynarmic_64& parent_) : parent{parent_} {}
 
     u8 MemoryRead8(u64 vaddr) override {
         return parent.system.Memory().Read8(vaddr);
@@ -178,8 +178,8 @@ std::shared_ptr<Dynarmic::A64::Jit> ARM_Dynarmic_64::MakeJit(Common::PageTable* 
     config.wall_clock_cntpct = uses_wall_clock;
 
     // Code cache size
-    config.code_cache_size = 512 * 1024 * 1024;
-    config.far_code_offset = 256 * 1024 * 1024;
+    //config.code_cache_size = 512 * 1024 * 1024;
+    //config.far_code_offset = 256 * 1024 * 1024;
 
     // Safe optimizations
     if (Settings::values.cpu_accuracy == Settings::CPUAccuracy::DebugMode) {

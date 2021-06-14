@@ -24,7 +24,7 @@ namespace Core {
 
 class DynarmicCallbacks32 : public Dynarmic::A32::UserCallbacks {
 public:
-    explicit DynarmicCallbacks32(ARM_Dynarmic_32& parent) : parent(parent) {}
+    explicit DynarmicCallbacks32(ARM_Dynarmic_32& parent_) : parent{parent_} {}
 
     u8 MemoryRead8(u32 vaddr) override {
         return parent.system.Memory().Read8(vaddr);
@@ -138,8 +138,8 @@ std::shared_ptr<Dynarmic::A32::Jit> ARM_Dynarmic_32::MakeJit(Common::PageTable* 
     config.wall_clock_cntpct = uses_wall_clock;
 
     // Code cache size
-    config.code_cache_size = 512 * 1024 * 1024;
-    config.far_code_offset = 256 * 1024 * 1024;
+    //config.code_cache_size = 512 * 1024 * 1024;
+    //config.far_code_offset = 256 * 1024 * 1024;
 
     // Safe optimizations
     if (Settings::values.cpu_accuracy == Settings::CPUAccuracy::DebugMode) {
