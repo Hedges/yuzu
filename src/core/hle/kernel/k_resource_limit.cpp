@@ -80,7 +80,7 @@ ResultCode KResourceLimit::SetLimitValue(LimitableResource which, s64 value) {
 
     limit_values[index] = value;
 
-    return RESULT_SUCCESS;
+    return ResultSuccess;
 }
 
 bool KResourceLimit::Reserve(LimitableResource which, s64 value) {
@@ -117,7 +117,7 @@ bool KResourceLimit::Reserve(LimitableResource which, s64 value, s64 timeout) {
         if (current_hints[index] + value <= limit_values[index] &&
             (timeout < 0 || core_timing->GetGlobalTimeNs().count() < timeout)) {
             waiter_count++;
-            cond_var.Wait(&lock, timeout);
+            cond_var.Wait(&lock, timeout, false);
             waiter_count--;
         } else {
             break;

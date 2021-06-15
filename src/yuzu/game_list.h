@@ -28,6 +28,7 @@ class GameListWorker;
 class GameListSearchField;
 class GameListDir;
 class GMainWindow;
+enum class StartGameType;
 
 namespace FileSys {
 class ManualContentProvider;
@@ -82,13 +83,15 @@ public:
     static const QStringList supported_file_extensions;
 
 signals:
+    void BootGame(const QString& game_path, std::size_t program_index, StartGameType type);
     void GameChosen(const QString& game_path);
     void ShouldCancelWorker();
     void OpenFolderRequested(u64 program_id, GameListOpenTarget target,
                              const std::string& game_path);
     void OpenTransferableShaderCacheRequested(u64 program_id);
     void RemoveInstalledEntryRequested(u64 program_id, InstalledEntryType type);
-    void RemoveFileRequested(u64 program_id, GameListRemoveTarget target);
+    void RemoveFileRequested(u64 program_id, GameListRemoveTarget target,
+                             const std::string& game_path);
     void DumpRomFSRequested(u64 program_id, const std::string& game_path);
     void CopyTIDRequested(u64 program_id);
     void NavigateToGamedbEntryRequested(u64 program_id,

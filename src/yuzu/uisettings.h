@@ -95,6 +95,9 @@ struct Values {
     uint8_t row_2_text_id;
     std::atomic_bool is_game_list_reload_pending{false};
     bool cache_game_list;
+
+    bool configuration_applied;
+    bool reset_to_defaults;
 };
 
 extern Values values;

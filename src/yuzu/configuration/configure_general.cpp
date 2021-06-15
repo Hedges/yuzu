@@ -2,11 +2,15 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <functional>
+#include <utility>
 #include <QCheckBox>
+#include <QMessageBox>
 #include <QSpinBox>
 #include "common/settings.h"
 #include "core/core.h"
 #include "ui_configure_general.h"
+#include "yuzu/configuration/config.h"
 #include "yuzu/configuration/configuration_shared.h"
 #include "yuzu/configuration/configure_general.h"
 #include "yuzu/uisettings.h"
@@ -23,6 +27,9 @@ ConfigureGeneral::ConfigureGeneral(QWidget* parent)
         connect(ui->toggle_frame_limit, &QCheckBox::clicked, ui->frame_limit,
                 [this]() { ui->frame_limit->setEnabled(ui->toggle_frame_limit->isChecked()); });
     }
+
+    connect(ui->button_reset_defaults, &QPushButton::clicked, this,
+            &ConfigureGeneral::ResetDefaults);
 }
 
 ConfigureGeneral::~ConfigureGeneral() = default;
@@ -41,6 +48,8 @@ void ConfigureGeneral::SetConfiguration() {
     ui->toggle_frame_limit->setChecked(Settings::values.use_frame_limit.GetValue());
     ui->frame_limit->setValue(Settings::values.frame_limit.GetValue());
 
+    ui->button_reset_defaults->setEnabled(runtime_lock);
+
     if (Settings::IsConfiguringGlobal()) {
         ui->frame_limit->setEnabled(Settings::values.use_frame_limit.GetValue());
     } else {
@@ -49,7 +58,29 @@ void ConfigureGeneral::SetConfiguration() {
     }
 }
 
+// Called to set the callback when resetting settings to defaults
+void ConfigureGeneral::SetResetCallback(std::function<void()> callback) {
+    reset_callback = std::move(callback);
+}
+
+void ConfigureGeneral::ResetDefaults() {
+    QMessageBox::StandardButton answer = QMessageBox::question(
+        this, tr("yuzu"),
+        tr("This reset all settings and remove all per-game configurations. This will not delete "
+           "game directories, profiles, or input profiles. Proceed?"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer == QMessageBox::No) {
+        return;
+    }
+    UISettings::values.reset_to_defaults = true;
+    UISettings::values.is_game_list_reload_pending.exchange(true);
+    reset_callback();
+}
+
 void ConfigureGeneral::ApplyConfiguration() {
+    ConfigurationShared::ApplyPerGameSetting(&Settings::values.use_multi_core, ui->use_multi_core,
+                                             use_multi_core);
+
     if (Settings::IsConfiguringGlobal()) {
         UISettings::values.confirm_before_closing = ui->toggle_check_exit->isChecked();
         UISettings::values.select_user_on_boot = ui->toggle_user_on_boot->isChecked();
@@ -62,13 +93,7 @@ void ConfigureGeneral::ApplyConfiguration() {
                                                       Qt::Checked);
             Settings::values.frame_limit.SetValue(ui->frame_limit->value());
         }
-        if (Settings::values.use_multi_core.UsingGlobal()) {
-            Settings::values.use_multi_core.SetValue(ui->use_multi_core->isChecked());
-        }
     } else {
-        ConfigurationShared::ApplyPerGameSetting(&Settings::values.use_multi_core,
-                                                 ui->use_multi_core, use_multi_core);
-
         bool global_frame_limit = use_frame_limit == ConfigurationShared::CheckState::Global;
         Settings::values.use_frame_limit.SetGlobal(global_frame_limit);
         Settings::values.frame_limit.SetGlobal(global_frame_limit);
@@ -94,6 +119,9 @@ void ConfigureGeneral::RetranslateUI() {
 
 void ConfigureGeneral::SetupPerGameUI() {
     if (Settings::IsConfiguringGlobal()) {
+        // Disables each setting if:
+        //  - A game is running (thus settings in use), and
+        //  - A non-global setting is applied.
         ui->toggle_frame_limit->setEnabled(Settings::values.use_frame_limit.UsingGlobal());
         ui->frame_limit->setEnabled(Settings::values.frame_limit.UsingGlobal());
 
@@ -104,6 +132,8 @@ void ConfigureGeneral::SetupPerGameUI() {
     ui->toggle_user_on_boot->setVisible(false);
     ui->toggle_background_pause->setVisible(false);
     ui->toggle_hide_mouse->setVisible(false);
+
+    ui->button_reset_defaults->setVisible(false);
 
     ConfigurationShared::SetColoredTristate(ui->toggle_frame_limit,
                                             Settings::values.use_frame_limit, use_frame_limit);

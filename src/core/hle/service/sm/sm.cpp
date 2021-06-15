@@ -36,7 +36,7 @@ static ResultCode ValidateServiceName(const std::string& name) {
         LOG_ERROR(Service_SM, "Invalid service name! service={}", name);
         return ERR_INVALID_NAME;
     }
-    return RESULT_SUCCESS;
+    return ResultSuccess;
 }
 
 Kernel::KClientPort& ServiceManager::InterfaceFactory(ServiceManager& self, Core::System& system) {
@@ -46,7 +46,7 @@ Kernel::KClientPort& ServiceManager::InterfaceFactory(ServiceManager& self, Core
     self.sm_interface = sm;
     self.controller_interface = std::make_unique<Controller>(system);
 
-    return sm->CreatePort(system.Kernel());
+    return sm->CreatePort();
 }
 
 ResultVal<Kernel::KServerPort*> ServiceManager::RegisterService(std::string name,
@@ -79,7 +79,7 @@ ResultCode ServiceManager::UnregisterService(const std::string& name) {
     iter->second->Close();
 
     registered_services.erase(iter);
-    return RESULT_SUCCESS;
+    return ResultSuccess;
 }
 
 ResultVal<Kernel::KPort*> ServiceManager::GetServicePort(const std::string& name) {
@@ -109,7 +109,7 @@ void SM::Initialize(Kernel::HLERequestContext& ctx) {
     is_initialized = true;
 
     IPC::ResponseBuilder rb{ctx, 2};
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
 }
 
 void SM::GetService(Kernel::HLERequestContext& ctx) {
@@ -150,32 +150,24 @@ ResultVal<Kernel::KClientSession*> SM::GetServiceImpl(Kernel::HLERequestContext&
     IPC::RequestParser rp{ctx};
     std::string name(PopServiceName(rp));
 
-    auto result = service_manager.GetServicePort(name);
-    if (result.Failed()) {
-        LOG_ERROR(Service_SM, "called service={} -> error 0x{:08X}", name, result.Code().raw);
-        return result.Code();
+    // Find the named port.
+    auto port_result = service_manager.GetServicePort(name);
+    if (port_result.Failed()) {
+        LOG_ERROR(Service_SM, "called service={} -> error 0x{:08X}", name, port_result.Code().raw);
+        return port_result.Code();
     }
+    auto& port = port_result.Unwrap()->GetClientPort();
 
-    auto* port = result.Unwrap();
-
-    // Kernel::KScopedResourceReservation session_reservation(
-    //    kernel.CurrentProcess()->GetResourceLimit(), Kernel::LimitableResource::Sessions);
-    // R_UNLESS(session_reservation.Succeeded(), Kernel::ResultLimitReached);
-
-    auto* session = Kernel::KSession::Create(kernel);
-    session->Initialize(&port->GetClientPort(), std::move(name));
-
-    // Commit the session reservation.
-    // session_reservation.Commit();
-
-    if (port->GetServerPort().GetHLEHandler()) {
-        port->GetServerPort().GetHLEHandler()->ClientConnected(&session->GetServerSession());
-    } else {
-        port->EnqueueSession(&session->GetServerSession());
+    // Create a new session.
+    Kernel::KClientSession* session{};
+    if (const auto result = port.CreateSession(std::addressof(session)); result.IsError()) {
+        LOG_ERROR(Service_SM, "called service={} -> error 0x{:08X}", name, result.raw);
+        return result;
     }
 
     LOG_DEBUG(Service_SM, "called service={} -> session={}", name, session->GetId());
-    return MakeResult(&session->GetClientSession());
+
+    return MakeResult(session);
 }
 
 void SM::RegisterService(Kernel::HLERequestContext& ctx) {

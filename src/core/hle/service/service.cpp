@@ -93,8 +93,8 @@ namespace Service {
 
 ServiceFrameworkBase::ServiceFrameworkBase(Core::System& system_, const char* service_name_,
                                            u32 max_sessions_, InvokerFn* handler_invoker_)
-    : system{system_}, service_name{service_name_}, max_sessions{max_sessions_},
-      handler_invoker{handler_invoker_} {}
+    : SessionRequestHandler(system_.Kernel(), service_name_), system{system_},
+      service_name{service_name_}, max_sessions{max_sessions_}, handler_invoker{handler_invoker_} {}
 
 ServiceFrameworkBase::~ServiceFrameworkBase() {
     // Wait for other threads to release access before destroying
@@ -107,18 +107,18 @@ void ServiceFrameworkBase::InstallAsService(SM::ServiceManager& service_manager)
     ASSERT(!port_installed);
 
     auto port = service_manager.RegisterService(service_name, max_sessions).Unwrap();
-    port->SetHleHandler(shared_from_this());
+    port->SetSessionHandler(shared_from_this());
     port_installed = true;
 }
 
-Kernel::KClientPort& ServiceFrameworkBase::CreatePort(Kernel::KernelCore& kernel) {
+Kernel::KClientPort& ServiceFrameworkBase::CreatePort() {
     const auto guard = LockService();
 
     ASSERT(!port_installed);
 
     auto* port = Kernel::KPort::Create(kernel);
     port->Initialize(max_sessions, false, service_name);
-    port->GetServerPort().SetHleHandler(shared_from_this());
+    port->GetServerPort().SetSessionHandler(shared_from_this());
 
     port_installed = true;
 
@@ -162,7 +162,7 @@ void ServiceFrameworkBase::ReportUnimplementedFunction(Kernel::HLERequestContext
     if (Settings::values.use_auto_stub) {
         LOG_WARNING(Service, "Using auto stub fallback!");
         IPC::ResponseBuilder rb{ctx, 2};
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ResultSuccess);
     }
 }
 
@@ -200,7 +200,7 @@ ResultCode ServiceFrameworkBase::HandleSyncRequest(Kernel::KServerSession& sessi
     case IPC::CommandType::TIPC_Close: {
         session.Close();
         IPC::ResponseBuilder rb{ctx, 2};
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ResultSuccess);
         return IPC::ERR_REMOTE_PROCESS_DEAD;
     }
     case IPC::CommandType::ControlWithContext:
@@ -228,7 +228,7 @@ ResultCode ServiceFrameworkBase::HandleSyncRequest(Kernel::KServerSession& sessi
         ctx.WriteToOutgoingCommandBuffer(ctx.GetThread());
     }
 
-    return RESULT_SUCCESS;
+    return ResultSuccess;
 }
 
 /// Initialize Services

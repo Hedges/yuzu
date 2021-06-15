@@ -4,8 +4,13 @@
 
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "core/core.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/k_client_port.h"
 #include "core/hle/kernel/k_client_session.h"
+#include "core/hle/kernel/k_port.h"
+#include "core/hle/kernel/k_scoped_resource_reservation.h"
+#include "core/hle/kernel/k_server_port.h"
 #include "core/hle/kernel/k_server_session.h"
 #include "core/hle/kernel/k_session.h"
 #include "core/hle/service/sm/controller.h"
@@ -13,32 +18,35 @@
 namespace Service::SM {
 
 void Controller::ConvertCurrentObjectToDomain(Kernel::HLERequestContext& ctx) {
-    ASSERT_MSG(ctx.Session()->IsSession(), "Session is already a domain");
+    ASSERT_MSG(!ctx.Session()->IsDomain(), "Session is already a domain");
     LOG_DEBUG(Service, "called, server_session={}", ctx.Session()->GetId());
     ctx.Session()->ConvertToDomain();
 
     IPC::ResponseBuilder rb{ctx, 3};
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.Push<u32>(1); // Converted sessions start with 1 request handler
 }
 
 void Controller::CloneCurrentObject(Kernel::HLERequestContext& ctx) {
-    // TODO(bunnei): This is just creating a new handle to the same Session. I assume this is wrong
-    // and that we probably want to actually make an entirely new Session, but we still need to
-    // verify this on hardware.
-
     LOG_DEBUG(Service, "called");
 
-    auto session = ctx.Session()->GetParent();
+    auto& parent_session = *ctx.Session()->GetParent();
+    auto& parent_port = parent_session.GetParent()->GetParent()->GetClientPort();
+    auto& session_manager = parent_session.GetServerSession().GetSessionRequestManager();
 
-    // Open a reference to the session to simulate a new one being created.
-    session->Open();
-    session->GetClientSession().Open();
-    session->GetServerSession().Open();
+    // Create a session.
+    Kernel::KClientSession* session{};
+    const ResultCode result = parent_port.CreateSession(std::addressof(session), session_manager);
+    if (result.IsError()) {
+        LOG_CRITICAL(Service, "CreateSession failed with error 0x{:08X}", result.raw);
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(result);
+    }
 
+    // We succeeded.
     IPC::ResponseBuilder rb{ctx, 2, 0, 1, IPC::ResponseBuilder::Flags::AlwaysMoveHandles};
-    rb.Push(RESULT_SUCCESS);
-    rb.PushMoveObjects(session->GetClientSession());
+    rb.Push(ResultSuccess);
+    rb.PushMoveObjects(session);
 }
 
 void Controller::CloneCurrentObjectEx(Kernel::HLERequestContext& ctx) {
@@ -51,7 +59,7 @@ void Controller::QueryPointerBufferSize(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service, "(STUBBED) called");
 
     IPC::ResponseBuilder rb{ctx, 3};
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.Push<u16>(0x8000);
 }
 

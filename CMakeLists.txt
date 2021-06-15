@@ -13,15 +13,17 @@ project(yuzu)
 option(ENABLE_SDL2 "Enable the SDL2 frontend" ON)
 CMAKE_DEPENDENT_OPTION(YUZU_USE_BUNDLED_SDL2 "Download bundled SDL2 binaries" ON "ENABLE_SDL2;MSVC" OFF)
 # On Linux system SDL2 is likely to be lacking HIDAPI support which have drawbacks but is needed for SDL motion
-CMAKE_DEPENDENT_OPTION(YUZU_ALLOW_SYSTEM_SDL2 "Try using system SDL2 before fallling back to one from externals" NOT UNIX "ENABLE_SDL2" OFF)
+option(YUZU_ALLOW_SYSTEM_SDL2 "Try using system SDL2 before fallling back to one from externals" OFF)
 
 option(ENABLE_QT "Enable the Qt frontend" ON)
 option(ENABLE_QT_TRANSLATION "Enable translations for the Qt frontend" OFF)
-CMAKE_DEPENDENT_OPTION(YUZU_USE_BUNDLED_QT "Download bundled Qt binaries" ON "ENABLE_QT;MSVC" OFF)
+CMAKE_DEPENDENT_OPTION(YUZU_USE_BUNDLED_QT "Download bundled Qt binaries" "${MSVC}" "ENABLE_QT" OFF)
 
 option(ENABLE_WEB_SERVICE "Enable web services (telemetry, etc.)" ON)
 
 option(YUZU_USE_BUNDLED_BOOST "Download bundled Boost" OFF)
+
+option(YUZU_USE_BUNDLED_LIBUSB "Compile bundled libusb" OFF)
 
 CMAKE_DEPENDENT_OPTION(YUZU_USE_BUNDLED_FFMPEG "Download/Build bundled FFmpeg" ON "WIN32" OFF)
 
@@ -174,7 +176,7 @@ macro(yuzu_find_packages)
         "lz4               1.8         lz4/1.9.2"
         "nlohmann_json     3.8         nlohmann_json/3.8.0"
         "ZLIB              1.2         zlib/1.2.11"
-        "zstd              1.4         zstd/1.4.8"
+        "zstd              1.5         zstd/1.5.0"
     # can't use opus until AVX check is fixed: https://github.com/yuzu-emu/yuzu/pull/4068
         #"opus              1.3         opus/1.3.1"
     )
@@ -240,6 +242,7 @@ yuzu_find_packages()
 
 # Qt5 requires that we find components, so it doesn't fit our pretty little find package function
 if(ENABLE_QT)
+    set(QT_VERSION 5.12)
     # We want to load the generated conan qt config so that we get the QT_ROOT var so that we can use the official
     # Qt5Config inside the root folder instead of the conan generated one.
     if(EXISTS ${CMAKE_BINARY_DIR}/qtConfig.cmake)
@@ -247,22 +250,40 @@ if(ENABLE_QT)
         list(APPEND CMAKE_MODULE_PATH "${CONAN_QT_ROOT_RELEASE}")
         list(APPEND CMAKE_PREFIX_PATH "${CONAN_QT_ROOT_RELEASE}")
     endif()
+
+    # Check for system Qt on Linux, fallback to bundled Qt
+    if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+        if (NOT YUZU_USE_BUNDLED_QT)
+            find_package(Qt5 ${QT_VERSION} COMPONENTS Widgets QUIET)
+            if (NOT Qt5_FOUND)
+                set(YUZU_USE_BUNDLED_QT ON CACHE BOOL "Download bundled Qt" FORCE)
+            endif()
+        endif()
+        if (YUZU_USE_BUNDLED_QT)
+            # Binary package currently does not support Qt webengine, so make sure it's disabled
+            set(YUZU_USE_QT_WEB_ENGINE OFF CACHE BOOL "Use Qt Webengine" FORCE)
+        endif()
+    endif()
+
     # Workaround for an issue where conan tries to build Qt from scratch instead of download prebuilt binaries
     set(QT_PREFIX_HINT)
+
     if(YUZU_USE_BUNDLED_QT)
         if ((MSVC_VERSION GREATER_EQUAL 1910 AND MSVC_VERSION LESS 1930) AND ARCHITECTURE_x86_64)
-            set(QT_VER qt-5.12.8-msvc2017_64)
+            set(QT_BUILD qt-5.12.8-msvc2017_64)
+        elseif ((${CMAKE_SYSTEM_NAME} STREQUAL "Linux") AND NOT MINGW AND ARCHITECTURE_x86_64)
+            set(QT_BUILD qt5_5_15_2)
         else()
             message(FATAL_ERROR "No bundled Qt binaries for your toolchain. Disable YUZU_USE_BUNDLED_QT and provide your own.")
         endif()
 
-        if (DEFINED QT_VER)
-            download_bundled_external("qt/" ${QT_VER} QT_PREFIX)
+        if (DEFINED QT_BUILD)
+            download_bundled_external("qt/" ${QT_BUILD} QT_PREFIX)
         endif()
 
         set(QT_PREFIX_HINT HINTS "${QT_PREFIX}")
     endif()
-    find_package(Qt5 5.9 COMPONENTS Widgets ${QT_PREFIX_HINT})
+    find_package(Qt5 ${QT_VERSION} REQUIRED COMPONENTS Widgets ${QT_PREFIX_HINT} NO_CMAKE_SYSTEM_PATH)
     if (YUZU_USE_QT_WEB_ENGINE)
         find_package(Qt5 COMPONENTS WebEngineCore WebEngineWidgets)
     endif()
@@ -271,6 +292,7 @@ if(ENABLE_QT)
         find_package(Qt5 REQUIRED COMPONENTS LinguistTools ${QT_PREFIX_HINT})
     endif()
 endif()
+
 # find SDL2 exports a bunch of variables that are needed, so its easier to do this outside of the yuzu_find_package
 if (ENABLE_SDL2)
     if (YUZU_USE_BUNDLED_SDL2)
@@ -379,7 +401,7 @@ if (CONAN_REQUIRED_LIBS)
     if(ENABLE_QT)
         list(APPEND CMAKE_MODULE_PATH "${CONAN_QT_ROOT_RELEASE}")
         list(APPEND CMAKE_PREFIX_PATH "${CONAN_QT_ROOT_RELEASE}")
-        find_package(Qt5 5.9 REQUIRED COMPONENTS Widgets)
+        find_package(Qt5 5.12 REQUIRED COMPONENTS Widgets)
         if (YUZU_USE_QT_WEB_ENGINE)
             find_package(Qt5 REQUIRED COMPONENTS WebEngineCore WebEngineWidgets)
         endif()
@@ -400,14 +422,22 @@ elseif (TARGET Boost::boost)
 endif()
 
 # Ensure libusb is properly configured (based on dolphin libusb include)
-if(NOT APPLE)
+if(NOT APPLE AND NOT YUZU_USE_BUNDLED_LIBUSB)
     include(FindPkgConfig)
-    find_package(LibUSB)
-endif()
-if (NOT LIBUSB_FOUND)
-    add_subdirectory(externals/libusb)
-    set(LIBUSB_INCLUDE_DIR "")
-    set(LIBUSB_LIBRARIES usb)
+    if (PKG_CONFIG_FOUND)
+        pkg_check_modules(LIBUSB QUIET libusb-1.0>=1.0.24)
+    else()
+        find_package(LibUSB)
+    endif()
+
+    if (LIBUSB_FOUND)
+        add_library(usb INTERFACE)
+        target_include_directories(usb INTERFACE "${LIBUSB_INCLUDE_DIRS}")
+        target_link_libraries(usb INTERFACE "${LIBUSB_LIBRARIES}")
+    else()
+        message(WARNING "libusb not found, falling back to externals")
+        set(YUZU_USE_BUNDLED_LIBUSB ON)
+    endif()
 endif()
 
 # List of all FFmpeg components required

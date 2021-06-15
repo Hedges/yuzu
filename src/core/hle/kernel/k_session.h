@@ -13,22 +13,25 @@
 
 namespace Kernel {
 
+class SessionRequestManager;
+
 class KSession final : public KAutoObjectWithSlabHeapAndContainer<KSession, KAutoObjectWithList> {
     KERNEL_AUTOOBJECT_TRAITS(KSession, KAutoObject);
 
 public:
     explicit KSession(KernelCore& kernel_);
-    virtual ~KSession() override;
+    ~KSession() override;
 
-    void Initialize(KClientPort* port_, const std::string& name_);
+    void Initialize(KClientPort* port_, const std::string& name_,
+                    std::shared_ptr<SessionRequestManager> manager_ = nullptr);
 
-    virtual void Finalize() override;
+    void Finalize() override;
 
-    virtual bool IsInitialized() const override {
+    bool IsInitialized() const override {
         return initialized;
     }
 
-    virtual uintptr_t GetPostDestroyArgument() const override {
+    uintptr_t GetPostDestroyArgument() const override {
         return reinterpret_cast<uintptr_t>(process);
     }
 
@@ -66,6 +69,10 @@ public:
         return port;
     }
 
+    KClientPort* GetParent() {
+        return port;
+    }
+
 private:
     enum class State : u8 {
         Invalid = 0,
@@ -74,7 +81,6 @@ private:
         ServerClosed = 3,
     };
 
-private:
     void SetState(State state) {
         atomic_state = static_cast<u8>(state);
     }
@@ -83,7 +89,6 @@ private:
         return static_cast<State>(atomic_state.load(std::memory_order_relaxed));
     }
 
-private:
     KServerSession server;
     KClientSession client;
     std::atomic<std::underlying_type_t<State>> atomic_state{

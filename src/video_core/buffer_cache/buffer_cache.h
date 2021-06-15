@@ -110,6 +110,8 @@ public:
 
     void BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr gpu_addr, u32 size);
 
+    void DisableGraphicsUniformBuffer(size_t stage, u32 index);
+
     void UpdateGraphicsBuffers(bool is_indexed);
 
     void UpdateComputeBuffers();
@@ -419,16 +421,17 @@ template <class P>
 void BufferCache<P>::BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr gpu_addr,
                                                u32 size) {
     const std::optional<VAddr> cpu_addr = gpu_memory.GpuToCpuAddress(gpu_addr);
-    if (!cpu_addr) {
-        uniform_buffers[stage][index] = NULL_BINDING;
-        return;
-    }
     const Binding binding{
         .cpu_addr = *cpu_addr,
         .size = size,
         .buffer_id = BufferId{},
     };
     uniform_buffers[stage][index] = binding;
+}
+
+template <class P>
+void BufferCache<P>::DisableGraphicsUniformBuffer(size_t stage, u32 index) {
+    uniform_buffers[stage][index] = NULL_BINDING;
 }
 
 template <class P>
@@ -596,7 +599,7 @@ void BufferCache<P>::PopAsyncFlushes() {
             runtime.CopyBuffer(download_staging.buffer, slot_buffers[buffer_id], copies);
         }
         runtime.Finish();
-        for (const auto [copy, buffer_id] : downloads) {
+        for (const auto& [copy, buffer_id] : downloads) {
             const Buffer& buffer = slot_buffers[buffer_id];
             const VAddr cpu_addr = buffer.CpuAddr() + copy.src_offset;
             // Undo the modified offset
@@ -606,7 +609,7 @@ void BufferCache<P>::PopAsyncFlushes() {
         }
     } else {
         const std::span<u8> immediate_buffer = ImmediateBuffer(largest_copy);
-        for (const auto [copy, buffer_id] : downloads) {
+        for (const auto& [copy, buffer_id] : downloads) {
             Buffer& buffer = slot_buffers[buffer_id];
             buffer.ImmediateDownload(copy.src_offset, immediate_buffer.subspan(0, copy.size));
             const VAddr cpu_addr = buffer.CpuAddr() + copy.src_offset;
