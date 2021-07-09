@@ -207,6 +207,7 @@ void ARM_Dynarmic_64::UnmapMemory(u64 address, std::size_t size) {
 
 void ARM_Dynarmic_64::SetPC(u64 pc) {
     jit->SetPC(pc);
+    inner_unicorn.SetPC(pc);
 }
 
 u64 ARM_Dynarmic_64::GetPC() const {
@@ -219,6 +220,7 @@ u64 ARM_Dynarmic_64::GetReg(int index) const {
 
 void ARM_Dynarmic_64::SetReg(int index, u64 value) {
     jit->SetRegister(index, value);
+    inner_unicorn.SetReg(index, value);
 }
 
 u128 ARM_Dynarmic_64::GetVectorReg(int index) const {
@@ -227,6 +229,7 @@ u128 ARM_Dynarmic_64::GetVectorReg(int index) const {
 
 void ARM_Dynarmic_64::SetVectorReg(int index, u128 value) {
     jit->SetVector(index, value);
+    inner_unicorn.SetVectorReg(index, value);
 }
 
 u32 ARM_Dynarmic_64::GetPSTATE() const {
@@ -235,6 +238,7 @@ u32 ARM_Dynarmic_64::GetPSTATE() const {
 
 void ARM_Dynarmic_64::SetPSTATE(u32 pstate) {
     jit->SetPstate(pstate);
+    inner_unicorn.SetPSTATE(pstate);
 }
 
 u64 ARM_Dynarmic_64::GetTlsAddress() const {
@@ -243,6 +247,7 @@ u64 ARM_Dynarmic_64::GetTlsAddress() const {
 
 void ARM_Dynarmic_64::SetTlsAddress(VAddr address) {
     cb->tpidrro_el0 = address;
+    inner_unicorn.SetTlsAddress(address);
 }
 
 u64 ARM_Dynarmic_64::GetTPIDR_EL0() const {
@@ -251,6 +256,7 @@ u64 ARM_Dynarmic_64::GetTPIDR_EL0() const {
 
 void ARM_Dynarmic_64::SetTPIDR_EL0(u64 value) {
     cb->tpidr_el0 = value;
+    inner_unicorn.SetTPIDR_EL0(value);
 }
 
 void ARM_Dynarmic_64::SaveContext(ThreadContext64& ctx) {
