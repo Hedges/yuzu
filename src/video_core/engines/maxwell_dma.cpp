@@ -59,7 +59,7 @@ void MaxwellDMA::HandleCopy() {
 
     if (!regs.exec.is_dst_linear && !regs.exec.is_src_linear) {
         // If both the source and the destination are in block layout, assert.
-        UNREACHABLE_MSG("Tiled->Tiled DMA transfers are not yet implemented");
+        //UNREACHABLE_MSG("Tiled->Tiled DMA transfers are not yet implemented");
         return;
     }
 
