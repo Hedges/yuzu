@@ -142,6 +142,7 @@ constexpr char target_xml[] =
 )";
 
 int gdbserver_socket = -1;
+bool shutting_down = false;
 bool defer_start = false;
 
 u8 command_buffer[GDB_BUFFER_SIZE];
@@ -621,7 +622,10 @@ static void SendReply(const char* reply) {
         int sent_size = send(gdbserver_socket, reinterpret_cast<char*>(ptr), left, 0);
         if (sent_size < 0) {
             LOG_ERROR(Debug_GDBStub, "gdb: send failed");
-            return Shutdown(128 + 6 /*SIGABRT*/);
+            if(!shutting_down) {
+                Shutdown(128 + 6 /*SIGABRT*/);
+            }
+            return;
         }
 
         left -= sent_size;
@@ -1360,6 +1364,9 @@ void Shutdown(int status) {
     if (!server_enabled) {
         return;
     }
+
+    shutting_down = true;
+
     defer_start = false;
 
     std::string buffer;
