@@ -5,6 +5,10 @@
 #include <sstream>
 #include <string>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "common/logging/log.h"
 #include "common/scope_exit.h"
 #include "core/hle/ipc_helpers.h"
@@ -56,6 +60,15 @@ private:
 
             std::vector<u8> data(length);
             memory.ReadBlock(addr, data.data(), length);
+
+#ifdef _WIN32
+            if(data.size()) {
+                std::string str(data.size() + 1, '\0');
+                memcpy(str.data(), data.data(), data.size());
+                ::OutputDebugStringA(str.c_str());
+            }
+#endif
+
             fields.emplace(field, std::move(data));
         }
 
