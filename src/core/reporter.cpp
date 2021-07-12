@@ -6,6 +6,10 @@
 #include <fstream>
 #include <iomanip>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <fmt/chrono.h>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
@@ -197,7 +201,7 @@ Reporter::Reporter(System& system) : system(system) {}
 Reporter::~Reporter() = default;
 
 void Reporter::SaveCrashReport(u64 title_id, ResultCode result, u64 set_flags, u64 entry_point,
-                               u64 sp, u64 pc, u64 pstate, u64 afsr0, u64 afsr1, u64 esr, u64 far,
+                               u64 sp, u64 pc, u64 pstate, u64 afsr0, u64 afsr1, u64 esr, u64 farr,
                                const std::array<u64, 31>& registers,
                                const std::array<u64, 32>& backtrace, u32 backtrace_size,
                                const std::string& arch, u32 unk10) const {
@@ -216,7 +220,7 @@ void Reporter::SaveCrashReport(u64 title_id, ResultCode result, u64 set_flags, u
     proc_out["afsr0"] = fmt::format("{:016X}", afsr0);
     proc_out["afsr1"] = fmt::format("{:016X}", afsr1);
     proc_out["esr"] = fmt::format("{:016X}", esr);
-    proc_out["far"] = fmt::format("{:016X}", far);
+    proc_out["far"] = fmt::format("{:016X}", farr);
     proc_out["backtrace_size"] = fmt::format("{:08X}", backtrace_size);
     proc_out["unknown_10"] = fmt::format("{:08X}", unk10);
 
@@ -360,9 +364,9 @@ void Reporter::SaveErrorReport(u64 title_id, ResultCode result,
 }
 
 void Reporter::SaveLogReport(u32 destination, std::vector<Service::LM::LogMessage> messages) const {
-    if (!IsReportingEnabled()) {
-        return;
-    }
+    //if (!IsReportingEnabled()) {
+    //    return;
+    //}
 
     const auto timestamp = GetTimestamp();
     json out;
@@ -395,6 +399,14 @@ void Reporter::SaveLogReport(u32 destination, std::vector<Service::LM::LogMessag
                                           out["type"] = fmt::format("{}", kv.first);
                                           out["data"] =
                                               Service::LM::FormatField(kv.first, kv.second);
+#ifdef _WIN32
+                                          if (out["type"] == "Message") {
+                                              std::string s = out["data"];
+                                              ::OutputDebugStringA(s.c_str());
+                                                  //Service::LM::FormatField(kv.first, kv.second)
+                                                  //    .c_str());
+                                          }
+#endif
                                           return out;
                                       });
 
@@ -404,8 +416,10 @@ void Reporter::SaveLogReport(u32 destination, std::vector<Service::LM::LogMessag
 
     out["log_messages"] = std::move(json_messages);
 
-    SaveToFile(std::move(out),
-               GetPath("log_report", system.CurrentProcess()->GetTitleID(), timestamp));
+    if (IsReportingEnabled()) {
+        SaveToFile(std::move(out),
+                   GetPath("log_report", system.CurrentProcess()->GetTitleID(), timestamp));
+    }
 }
 
 void Reporter::SaveFilesystemAccessReport(Service::FileSystem::LogMode log_mode,

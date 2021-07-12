@@ -86,7 +86,7 @@ std::string FormatField(Field type, const std::vector<u8>& data) {
         return Common::StringFromFixedZeroTerminatedBuffer(
             reinterpret_cast<const char*>(data.data()), data.size());
     default:
-        UNIMPLEMENTED_MSG("Unimplemented field type={}", type);
+        //UNIMPLEMENTED_MSG("Unimplemented field type={}", type);
         return "";
     }
 }
